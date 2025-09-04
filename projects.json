@@ -1,4 +1,6 @@
 {
-    "projects": {},
-    "last_project": ""
+    "projects": {
+        "ccnp": "/Users/luochongjing/Projects/easyqc_ccnp"
+    },
+    "last_project": "ccnp"
 }

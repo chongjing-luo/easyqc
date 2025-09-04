@@ -1,6 +1,36 @@
-numpy==2.0.1
-pandas==2.2.2
-python-dateutil==2.9.0.post0
-pytz==2024.1
-six==1.16.0
-tzdata==2024.1
+# EasyQC 项目依赖
+# 基础依赖
+# tkinter  # GUI框架（Python标准库，无需安装）
+
+# 数据处理依赖
+numpy>=1.21.0
+pandas>=1.3.0
+scipy>=1.7.0
+
+# 图像处理依赖
+nibabel>=3.2.0  # NIfTI文件处理
+pydicom>=2.2.0  # DICOM文件处理
+Pillow>=8.3.0   # 图像处理
+
+# 可视化依赖
+matplotlib>=3.4.0
+seaborn>=0.11.0
+
+# 科学计算依赖
+scikit-learn>=1.0.0
+
+# 数据库查询依赖
+pandasql>=0.7.3
+
+# 文件处理依赖
+# pathlib  # 路径处理（Python标准库）
+# json     # JSON处理（Python标准库）
+# pickle   # 序列化（Python标准库）
+
+# 多线程处理
+# threading  # 多线程（Python标准库）
+
+# 可选依赖（用于高级功能）
+# nipype>=1.7.0     # 神经影像处理流水线
+# nilearn>=0.8.0    # 机器学习在神经影像中的应用
+# SimpleITK>=2.1.0  # 医学图像处理
