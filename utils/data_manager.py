@@ -73,7 +73,7 @@ class DataManager:
         words = [word for word in words if word]
         return pd.DataFrame(words, columns=['0'])
 
-    def set_varname_batch(self, df:pd.DataFrame, varname:str, batch:str):
+    def set_varname_batch(self, df:pd.DataFrame, varname:str=None, batch:str=None):
         """
         设置变量名和批次
         :param df: 数据框
@@ -83,10 +83,10 @@ class DataManager:
         df = df.copy()
 
         # 如果ezqcid列不存在，则添加
-        if 'ezqcid' not in df.columns:
+        if varname and 'ezqcid' not in df.columns:
             df['ezqcid'] = df[varname]
         # 如果ezqcbatch列不存在，或者当前的ezqcbatch和batch不同，则添加
-        if 'ezqcbatch' not in df.columns or df['ezqcbatch'].iloc[0] != batch:
+        if batch and ('ezqcbatch' not in df.columns or df['ezqcbatch'].iloc[0] != batch):
             df['ezqcbatch'] = batch
 
         return df

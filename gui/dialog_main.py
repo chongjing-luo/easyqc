@@ -451,15 +451,25 @@ class DialogMain:
         def set_var():
             raw_df = df.copy()
             # 检查变量名是否为空
-            if not column_combo.get():
+            
+            if not column_combo:
+                varname = None
+            elif column_combo and not column_combo.get():
                 messagebox.showerror("错误", "变量名不能为空")
                 return None
+            else:
+                varname = column_combo.get()
+
             # 检查批次是否为空
-            if not batch_entry.get():
+            if not batch_entry:
+                batch = None
+            elif batch_entry and not batch_entry.get():
                 messagebox.showerror("错误", "批次不能为空")
                 return None
+            else:
+                batch = batch_entry.get()
 
-            result_df = self.DataM.set_varname_batch(raw_df, column_combo.get(), batch_entry.get())
+            result_df = self.DataM.set_varname_batch(raw_df, varname, batch)
             return result_df
 
         def show_tmp_df():

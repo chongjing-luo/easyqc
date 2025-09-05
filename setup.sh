@@ -4,7 +4,8 @@
 # 创建Python虚拟环境并安装项目依赖
 # 
 # 使用方法：
-#   ./setup.sh          # 安装虚拟环境
+#   ./setup.sh          # 安装虚拟环境（如果不存在）
+#   ./setup.sh -force   # 强制重新安装环境
 # 
 # Author: chongjing.luo@mail.bnu.edu.cn
 # Date: 2024.09-04
@@ -18,9 +19,60 @@ cd "$PROJECT_ROOT"
 # 设置环境目录
 ENV_DIR=".venv"
 
+# 解析命令行参数
+FORCE_INSTALL=false
+if [[ "$1" == "-force" ]]; then
+    FORCE_INSTALL=true
+    echo "强制重新安装模式"
+fi
+
 # 检查操作系统类型
 OS_TYPE=$(uname)
 echo "检测到操作系统: $OS_TYPE"
+
+# 函数：检查环境是否可用
+check_environment() {
+    echo "检查现有环境..."
+    
+    VENV_PATH="$ENV_DIR"
+    
+    # 检查环境目录是否存在
+    if [ ! -d "$VENV_PATH" ]; then
+        echo "环境目录不存在，需要创建新环境"
+        return 1
+    fi
+    
+    # 检查激活脚本是否存在
+    if [ ! -f "$VENV_PATH/bin/activate" ]; then
+        echo "环境激活脚本不存在，需要重新创建"
+        return 1
+    fi
+    
+    # 尝试激活环境并检查Python
+    echo "测试环境可用性..."
+    source "$VENV_PATH/bin/activate" 2>/dev/null
+    
+    if [ $? -ne 0 ]; then
+        echo "环境激活失败，需要重新创建"
+        return 1
+    fi
+    
+    # 检查Python是否可用
+    if ! python -c "import sys; print('Python version:', sys.version)" >/dev/null 2>&1; then
+        echo "环境中的Python不可用，需要重新创建"
+        return 1
+    fi
+    
+    # 检查关键依赖是否已安装
+    echo "检查关键依赖..."
+    if ! python -c "import pandas, numpy, tkinter" >/dev/null 2>&1; then
+        echo "关键依赖缺失，需要重新安装"
+        return 1
+    fi
+    
+    echo "环境检查通过，现有环境可用"
+    return 0
+}
 
 # 函数：检查Python版本
 check_python() {
@@ -256,10 +308,31 @@ main() {
         exit 1
     fi
     
-    # 执行安装步骤
-    create_venv
-    install_dependencies
-    verify_installation
+    # 检查是否需要安装环境
+    NEED_INSTALL=true
+    
+    if [ "$FORCE_INSTALL" = true ]; then
+        echo "强制重新安装模式，将删除现有环境"
+        rm -rf "$ENV_DIR"
+    else
+        # 检查现有环境是否可用
+        if check_environment; then
+            echo "现有环境可用，跳过环境创建"
+            NEED_INSTALL=false
+        else
+            echo "现有环境不可用，需要重新安装"
+        fi
+    fi
+    
+    # 如果需要安装，执行安装步骤
+    if [ "$NEED_INSTALL" = true ]; then
+        create_venv
+        install_dependencies
+        verify_installation
+    fi
+    
+    # 无论是否重新安装，都重新生成启动脚本
+    echo "重新生成启动脚本..."
     create_start_script
     show_usage
     
