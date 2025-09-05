@@ -405,7 +405,14 @@ class TableDisplay:
                     save_var(type)
                 else:
                     cancel_(type)
-            filter_dialog.destroy()
+            
+            # 检查窗口是否仍然存在
+            try:
+                if filter_dialog.winfo_exists():
+                    filter_dialog.destroy()
+            except tk.TclError:
+                # 窗口已经被销毁，忽略错误
+                pass
             
 
         ttk.Button(button_frame, text="插入模板", command=insert_tmp).place(x=5, y=0, width=100, height=30)

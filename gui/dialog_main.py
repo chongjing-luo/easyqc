@@ -429,6 +429,10 @@ class DialogMain:
         self.dialog2.title("设置变量名")
         self.dialog2.geometry("400x300")
 
+        # 初始化变量
+        column_combo = None
+        batch_entry = None
+        
         # 检查df是否已有ezqcid列
         df = self.dt.var['ezqc_filter'].copy() if self.dt.var['ezqc_filter'] is not None else self.dt.var['ezqc_new'].copy()
         if 'ezqcid' in df.columns:
@@ -450,8 +454,8 @@ class DialogMain:
         # 确定按钮
         def set_var():
             raw_df = df.copy()
-            # 检查变量名是否为空
             
+            # 检查变量名控件是否存在
             if not column_combo:
                 varname = None
             elif column_combo and not column_combo.get():
@@ -460,7 +464,7 @@ class DialogMain:
             else:
                 varname = column_combo.get()
 
-            # 检查批次是否为空
+            # 检查批次控件是否存在
             if not batch_entry:
                 batch = None
             elif batch_entry and not batch_entry.get():
