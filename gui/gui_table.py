@@ -278,7 +278,6 @@ class TableDisplay:
         elif df is None and type is not None:
             if type == 'new':
                 df = self.dt.var['ezqc_new'].copy() if self.dt.var['ezqc_new'] is not None else None
-                
             elif type == 'all':
                 select_filter = self.dt.settings['var_select_filter']
                 df = self.dt.var['ezqc_all'].copy()
@@ -379,8 +378,8 @@ class TableDisplay:
                     log_info(f"已保存筛选结果到 self.dt.tab['{type}']，数据行数: {len(df_output)}")
             else:
                 return df_output.copy()
+            self.save_filter_df = True
 
-            filter_dialog.destroy()
              
         def cancel_(type=None):
             filter_dialog.destroy()
@@ -397,15 +396,27 @@ class TableDisplay:
             else:
                 return df.copy()
 
-        def showpre():
-            self.show_df(df)
+        self.save_filter_df = False
+
+        def destroy_(type=None):
+            if not self.save_filter_df:
+                result = messagebox.askyesno("警告", "是否保存结果？")
+                if result:
+                    save_var(type)
+                else:
+                    cancel_(type)
+            filter_dialog.destroy()
+            
 
         ttk.Button(button_frame, text="插入模板", command=insert_tmp).place(x=5, y=0, width=100, height=30)
-        ttk.Button(button_frame, text="执行", command=execute).place(x=110, y=0, width=80, height=30)
-        ttk.Button(button_frame, text="保存", command=lambda: save_var(type)).place(x=195, y=0, width=80, height=30)
-        ttk.Button(button_frame, text="取消", command=lambda: cancel_(type)).place(x=280, y=0, width=80, height=30)
-        ttk.Button(button_frame, text="显示处理前数据", command=showpre).place(x=5, y=35, width=150, height=30)
-        ttk.Button(button_frame, text="显示处理后数据", command=execute).place(x=160, y=35, width=150, height=30)
+        ttk.Button(button_frame, text="执行并查看结果", command=execute).place(x=110, y=0, width=140, height=30)
+        ttk.Button(button_frame, text="保存结果", command=lambda: save_var(type)).place(x=255, y=0, width=110, height=30)
+        ttk.Button(button_frame, text="取消", command=lambda: cancel_(type)).place(x=300, y=35, width=80, height=30)
+        ttk.Button(button_frame, text="显示处理前数据", command=lambda: self.show_df(df)).place(x=5, y=35, width=140, height=30)
+        ttk.Button(button_frame, text="显示处理后数据", command=execute).place(x=155, y=35, width=140, height=30)
+        
+        # 绑定窗口关闭事件
+        filter_dialog.protocol("WM_DELETE_WINDOW", lambda: destroy_(type))
 
 
         

@@ -357,7 +357,7 @@ class EasyQCApp:
         self.filter_btn.place(x=250, y=10, width=225, height=30)
 
         # 新建/合并 按钮
-        self.new_merge_btn = ttk.Button(button_frame, text="新建/合并", command=self.DialM.new_merge)
+        self.new_merge_btn = ttk.Button(button_frame, text="新建/合并", command=self.DialM.merge_newdata)
         self.new_merge_btn.place(x=10, y=40, width=140, height=30)
 
         # 新建/合并 按钮

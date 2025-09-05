@@ -81,8 +81,6 @@ class DataManager:
         :param batch: 批次
         """
         df = df.copy()
-        if varname not in df.columns and len(df.columns) == 1:
-            df.columns = [varname]
 
         # 如果ezqcid列不存在，则添加
         if 'ezqcid' not in df.columns:

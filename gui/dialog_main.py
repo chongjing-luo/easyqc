@@ -344,14 +344,50 @@ class DialogMain:
 
 
     # ############################################################
+    # def extract_path(self):
+    #     """
+    #     提取路径，使用DataManager的get_list获取，生成self.tmp_list_df,
+    #     """
+    #     path = self.app.path_entry.get()
+    #     if path:
+    #         df = self.DataM.get_list(path)
+    #         self.set_varname_batch(df)
     def extract_path(self):
         """
         提取路径，使用DataManager的get_list获取，生成self.tmp_list_df,
         """
         path = self.app.path_entry.get()
         if path:
-            df = self.DataM.get_list(path)
-            self.set_varname_batch(df)
+            self.dt.var['ezqc_new'] = self.DataM.get_list(path)
+            self.set_varname()
+    
+    def set_varname(self):
+        """
+        设置变量名
+        """
+        self.dialog = tk.Toplevel(self.app.root)
+        self.dialog.title("设置变量名")
+        self.dialog.geometry("400x280")
+
+        # 在弹出框中增加两个文本输入框，一个是变量名，一个是批次
+        ttk.Label(self.dialog, text="请设置变量名:", font=self.app.font_13).place(x=10, y=10)
+        varname_entry = ttk.Entry(self.dialog, font=self.app.font_12)
+        varname_entry.place(x=100, y=10)
+
+        def set_varname():
+            varname = varname_entry.get()
+            if varname:
+                if varname not in self.dt.var['ezqc_new'].columns and len(self.dt.var['ezqc_new'].columns) == 1:
+                    self.dt.var['ezqc_new'].columns = [varname]
+
+                self.dt.var['ezqc_new'] = self.dt.var['ezqc_new'].sort_values(by=varname, ascending=True)
+                self.dt.var['ezqc_filter'] = self.dt.var['ezqc_new'].copy()
+                self.TablD.show_df(self.dt.var['ezqc_new'])
+                self.dialog.destroy()
+
+        ttk.Button(self.dialog, text="确定", command=set_varname).place(x=120, y=150)
+        ttk.Button(self.dialog, text="取消", command=self.dialog.destroy).place(x=220, y=150)
+
 
     def extract_file(self):
         """
@@ -369,8 +405,9 @@ class DialogMain:
 
         path = self.app.path_entry2.get()
         if path:
-            df = self.DataM.read_list(path)
-            self.set_varname_batch2(df)
+            self.dt.var['ezqc_new'] = self.DataM.read_list(path)
+            self.dt.var['ezqc_filter'] = self.dt.var['ezqc_new'].copy()
+            self.TablD.show_df(self.dt.var['ezqc_new'])
 
     def extract_words(self):
         """
@@ -381,82 +418,23 @@ class DialogMain:
             messagebox.showerror("错误", "请输入文本")
             return
 
-        df = self.DataM.extract_words_as_df(text)
-        self.set_varname_batch(df)
+        self.dt.var['ezqc_new'] = self.DataM.extract_words_as_df(text)
+        self.set_varname()
         
-            
-    def set_varname_batch(self, df):
-        # 弹出一个对话框，询问将df列的变量，各处一个文本输入框来确定，在增加另一个文本输入框，询问该变量的批次
-        self.dialog = tk.Tk()
-        self.dialog.title("设置变量名")
-        self.dialog.geometry("400x280")
-
-        # 在弹出框中增加两个文本输入框，一个是变量名，一个是批次
-        ttk.Label(self.dialog, text="请设置变量名:", font=self.app.font_13).place(x=10, y=10)
-        varname_entry = ttk.Entry(self.dialog, font=self.app.font_12)
-        varname_entry.insert(0, "ezqcid")  # 设置默认值为ezqcid
-        varname_entry.place(x=100, y=10)
-
-        # 增加一个文本输入框，询问该变量的批次
-        ttk.Label(self.dialog, text="请设置批次:", font=self.app.font_13).place(x=10, y=100)
-        batch_entry = ttk.Entry(self.dialog, font=self.app.font_12)
-        batch_entry.place(x=100, y=100)
-        batch_entry.insert(0, "1")  # 设置默认值为ezqcbatch   
         
-        # 确定按钮
-        def set_var():
-            # 检查变量名是否为空
-            raw_df = df.copy()
-            if not varname_entry.get():
-                messagebox.showerror("错误", "变量名不能为空")
-                return
-            # 检查批次是否为空
-            if not batch_entry.get():
-                messagebox.showerror("错误", "批次不能为空")
-                return
-            
-            if not varname_entry.get().isidentifier():
-                messagebox.showerror("错误", "变量名必须是标识符，不能包含空格或特殊字符")
-                return
 
-            self.dt.tmp_df = self.DataM.set_varname_batch(raw_df, varname_entry.get(), batch_entry.get())
-            self.dt.tmp_df = self.dt.tmp_df.sort_values(by='ezqcid', ascending=True)
-
-        def show_tmp_df():
-            set_var()
-            self.TablD.show_df(self.dt.tmp_df)
-            self.dt.tmp_df = None
-        ttk.Button(self.dialog, text="查看", command=show_tmp_df).place(x=20, y=150)
-
-        def set_var_():
-            set_var()
-            # 根据ezqcid列排序
-            
-            self.dt.var['ezqc_new'] = self.dt.tmp_df.copy()
-            self.dt.var['ezqc_filter'] = self.dt.tmp_df.copy()
-            self.dialog.destroy()
-        ttk.Button(self.dialog, text="确定", command=set_var_).place(x=120, y=150)
-
-        # 增加取消按钮
-        def cancel_():
-            self.dialog.destroy()
-            self.dt.var['ezqc_new'] = None
-            self.dt.var['ezqc_filter'] = None
-        ttk.Button(self.dialog, text="取消", command=cancel_).place(x=220, y=150)
-
-
-    def set_varname_batch2(self, df):
+    def merge_newdata(self):
         # 弹出一个对话框，询问将df列的变量，各处一个文本输入框来确定，在增加另一个文本输入框，询问该变量的批次
         self.dialog2 = tk.Tk()
         self.dialog2.title("设置变量名")
         self.dialog2.geometry("400x300")
 
         # 检查df是否已有ezqcid列
+        df = self.dt.var['ezqc_filter'].copy() if self.dt.var['ezqc_filter'] is not None else self.dt.var['ezqc_new'].copy()
         if 'ezqcid' in df.columns:
             ttk.Label(self.dialog2, text="表格中已有ezqcid列，无需设置", font=self.app.font_13).place(x=10, y=10)
         else:
             ttk.Label(self.dialog2, text="请选择要设置为ezqcid的列:", font=self.app.font_13).place(x=10, y=10)
-            # 创建下拉框
             column_combo = ttk.Combobox(self.dialog2, values=list(df.columns), font=self.app.font_12, state='readonly')
             column_combo.place(x=10, y=50)
             
@@ -484,24 +462,17 @@ class DialogMain:
             result_df = self.DataM.set_varname_batch(raw_df, column_combo.get(), batch_entry.get())
             return result_df
 
-
         def show_tmp_df():
             df = set_var()
             self.TablD.show_df(df) 
         ttk.Button(self.dialog2, text="查看", command=show_tmp_df).place(x=20, y=200)
 
         def set_var_():
-            self.dt.var['ezqc_new'] = set_var()
-            self.dt.var['ezqc_filter'] = self.dt.var['ezqc_new'].copy()
+            self.dt.var['ezqc_filter'] = set_var()
             self.dialog2.destroy()
+            self.new_merge()
         ttk.Button(self.dialog2, text="确定", command=set_var_).place(x=120, y=200)
-
-        # 增加取消按钮
-        def cancel_():
-            self.dialog2.destroy()
-            self.dt.var['ezqc_new'] = None
-            self.dt.var['ezqc_filter'] = None
-        ttk.Button(self.dialog2, text="取消", command=cancel_).place(x=220, y=200)
+        ttk.Button(self.dialog2, text="取消", command=self.dialog2.destroy).place(x=220, y=200)
 
 
     ##########################      ####################################
@@ -524,7 +495,7 @@ class DialogMain:
             # 创建合并变量选项对话框
             merge_dialog = tk.Tk()
             merge_dialog.title("合并变量")
-            merge_dialog.geometry("300x200")
+            merge_dialog.geometry("300x300")
             
             # 提示标签
             ttk.Label(merge_dialog, text="已经存在总变量，请问是否合并变量?", 
