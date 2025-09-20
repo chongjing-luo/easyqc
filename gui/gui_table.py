@@ -20,6 +20,7 @@ sys.path.insert(0, str(project_root))
 # 导入日志系统
 from utils.logger import log_info, log_error, log_warning, log_exception, log_debug, LogContext, log_function
 
+import pandas as pd
 from utils.projects_manager import ProjectManager
 from utils.data_manager import DataManager 
 
@@ -130,7 +131,15 @@ class TableDisplay:
         # 插入数据
         for row_num, (index, row) in enumerate(df.iterrows(), 1):
             # 在values列表开头添加行号
-            values = [str(row_num)] + [str(val) for val in row.values]
+            # 处理NaN值，将其显示为空字符串而不是"nan"
+            processed_values = []
+            for val in row.values:
+                if pd.isna(val):
+                    processed_values.append('')  # NaN值显示为空
+                else:
+                    processed_values.append(str(val))
+            
+            values = [str(row_num)] + processed_values
             self.tree_df.insert('', 'end', values=values)
         
         # 添加状态栏显示数据信息
@@ -184,16 +193,12 @@ class TableDisplay:
         """
         显示右键菜单，显示该ezqcid的所有质控结果
         """
-        if not hasattr(self, 'ProjM') or not hasattr(self.ProjM, 'rating_dict'):
+        if not hasattr(self.ProjM.dt, 'rating_dict'):
             messagebox.showwarning("警告", "评分数据未加载")
             return
             
-        if ezqcid not in self.ProjM.rating_dict:
-            messagebox.showinfo("信息", f"未找到ezqcid '{ezqcid}' 的评分数据")
-            return
 
         qcmodules = [v['name'] for k, v in self.dt.settings['qcmodule'].items()]
-
         # 创建右键菜单
         menu = tk.Menu(self.app.root if hasattr(self, 'app') and hasattr(self.app, 'root') else None, tearoff=0)
         for module in qcmodules:
@@ -205,19 +210,17 @@ class TableDisplay:
 
         
         # 获取该ezqcid的所有评分结果
-        if hasattr(self, 'ProjM') and hasattr(self.ProjM, 'rating_dict') and ezqcid in self.ProjM.rating_dict:
-            rating_data = self.ProjM.rating_dict[ezqcid]
-            print(f'rating_data: {rating_data}')
+        if hasattr(self.ProjM.dt, 'rating_dict') and ezqcid in self.ProjM.dt.rating_dict:
+            rating_data = self.ProjM.dt.rating_dict[ezqcid]
             if rating_data:
                 keys = list(rating_data.keys())
-                print(f'keys: {keys}')
                 for key in keys:
                     label = f'打开评分结果: {key}'
                     rater = rating_data[key]['rater']
-                    module_name = rating_data[key]['module_name']
+                    name = rating_data[key]['name']
                     menu.add_command(
                         label=label,
-                        command=lambda ezqcid=ezqcid, module_name=module_name, rater=rater: self.open_gui(ezqcid, module_name, rater)
+                        command=lambda ezqcid=ezqcid, name=name, rater=rater: self.open_gui(ezqcid,name, rater)
                     )
             
         # 在鼠标位置显示菜单
@@ -339,6 +342,9 @@ class TableDisplay:
             if self.tmp_query:
                 try:
                     # 这里应该调用数据管理器的查询方法
+                    for col in df.columns:
+                        if not pd.api.types.is_numeric_dtype(df[col]):
+                            df[col] = df[col].astype(str)
                     result_df = self.DataM.select_filter_sorter(df, self.tmp_query)
                     return result_df
                 except Exception as e:

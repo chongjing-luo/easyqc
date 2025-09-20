@@ -109,10 +109,24 @@ def open_qcpage_from_shell(project, module, rater, ezqcid):
         )
         
         # 调用open_qcpage_from_shell方法
-        qcpage_instance.open_qcpage_from_shell(project, module, rater, ezqcid)
+        log_info("开始调用open_qcpage_from_shell方法")
+        success = qcpage_instance.open_qcpage_from_shell(project, module, rater, ezqcid)
+        log_info(f"open_qcpage_from_shell返回结果: {success}")
+        
+        if not success:
+            log_error("QC页面创建失败，停止执行")
+            print("错误：QC页面创建失败")
+            return False
         
         log_info("QC页面创建完成，启动GUI主循环")
-
+        
+        # 检查gui_qcpage是否存在
+        if not hasattr(qcpage_instance, 'gui_qcpage') or qcpage_instance.gui_qcpage is None:
+            log_error("gui_qcpage未正确创建")
+            print("错误：gui_qcpage未正确创建")
+            return False
+            
+        log_info("开始启动GUI主循环")
         qcpage_instance.gui_qcpage.mainloop()
         
         

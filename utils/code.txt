@@ -8,3 +8,15 @@ printf 'import gl\ngl.windowposition(0,0,1400,1000)\ngl.loadimage("/Users/luocho
 rm -f "$TMP"
 
 TMP=$(mktemp /tmp/mgl.XXXXXX); TMP="$TMP.py"; printf 'import gl\ngl.windowposition(0,0,1400,1000)\ngl.loadimage("{subjects_dir}/{ezqcid}/mri/orig/001.mgz")\ngl.overlayload("{subjects_dir}/{ezqcid}/mri/mask.nii.gz")\ngl.opacity(1,30)\n' > "$TMP"; /Applications/MRIcroGL.app/Contents/MacOS/MRIcroGL "$TMP"; rm -f "$TMP"
+
+# ============== coregistra ==============
+freeview --layout 4 --viewsize 400 300 \
+  -viewport axial \
+  -v ${subjects_dir}/${subses}/mri/brainmask.mgz:opacity=1:grayscale=0,138 \
+     ${ccs_dir}/${subses_rest}/reg/mean_func2norm.nii.gz:opacity=0.6 \
+  -zoom 1.3 \
+  -f ${subjects_dir}/${subses}/surf/lh.pial:edgecolor=overlay:annot=${subjects_dir}/${subses}/label/lh.aparc.annot \
+     ${subjects_dir}/${subses}/surf/rh.pial:edgecolor=overlay:annot=${subjects_dir}/${subses}/label/rh.aparc.annot \
+     ${subjects_dir}/${subses}/surf/lh.white:edgecolor=overlay:annot=${subjects_dir}/${subses}/label/lh.aparc.annot \
+     ${subjects_dir}/${subses}/surf/rh.white:edgecolor=overlay:annot=${subjects_dir}/${subses}/label/rh.aparc.annot \
+  --hide-3d-slices

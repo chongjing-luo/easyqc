@@ -261,7 +261,7 @@ class EasyQCApp:
         self.show_initial_table_btn.place(x=115, y=25, width=100, height=35)
 
         # 提取质控结果 按钮
-        self.extract_qc_btn = ttk.Button(self.inner_frame_v, text="提取质控结果", command=self.ProjM.load_ratings(), style='Project.TButton')
+        self.extract_qc_btn = ttk.Button(self.inner_frame_v, text="提取质控结果", command=self.ProjM.load_ratings, style='Project.TButton')
         self.extract_qc_btn.place(x=225, y=25, width=100, height=35)
 
         # 过滤和筛选 按钮
@@ -422,13 +422,13 @@ class EasyQCApp:
         rater_var = tk.StringVar(value=module['rater'])
         entry_rater = ttk.Entry(content, textvariable=rater_var)
         entry_rater.place(x=285, y=0, height=30, width=120)
-        rater_var.trace_add('write', lambda *args: module.__setitem__('rater', rater_var.get()))
+        rater_var.trace_add('write', lambda *args: self.dt.settings['qcmodule'][qcidx].__setitem__('rater', rater_var.get()))
         
         # 创建子进程控制复选框
         # subprocess_var = tk.BooleanVar()
         subprocess_var = tk.BooleanVar(value=module['control'])
         subprocess_check = ttk.Checkbutton(content, text="子进程控制", variable=subprocess_var,
-                                        command=lambda: module.update({'control': subprocess_var.get()}))
+                                        command=lambda: self.dt.settings['qcmodule'][qcidx].update({'control': subprocess_var.get()}))
         subprocess_check.place(x=415, y=5, width=100)
         
 
@@ -452,7 +452,7 @@ class EasyQCApp:
             getattr(self, score_entry_name).place(x=140, y=row_y+3, width=150)
             
             def update_label(*args, key=score_key):
-                module['scores'][key]['label'] = getattr(self, f"{module['name']}_{key}_label_var").get()
+                self.dt.settings['qcmodule'][qcidx]['scores'][key]['label'] = getattr(self, f"{module['name']}_{key}_label_var").get()
             score_label_var.trace_add("write", update_label)
 
             # 分值
@@ -468,16 +468,19 @@ class EasyQCApp:
             
             # 添加验证跟踪 - 仅在失去焦点时验证
             def validate_score_on_focus_out(event, key=score_key):
-                result = self.DialM.validate_score(score_var.get(), module, key)
+                result = None
+                num = event.widget.get().strip()
+                result = self.DialM.validate_score(num)
                 if result is None:
-                    score_var.set("")
-                    module['scores'][key]['num'] = None
-                    module['scores'][key]['num_'] = None
+                    setattr(self, f"{score_entry_name}_var", "")
+                    self.dt.settings['qcmodule'][qcidx]['scores'][key]['num'] = None
+                    self.dt.settings['qcmodule'][qcidx]['scores'][key]['num_'] = None
                 else:
-                    score_var.set(module['scores'][key]['num'])
+                    self.dt.settings['qcmodule'][qcidx]['scores'][key]['num'] = num
+                    self.dt.settings['qcmodule'][qcidx]['scores'][key]['num_'] = result
             
             # 绑定失去焦点事件
-            score_entry.bind("<FocusOut>", validate_score_on_focus_out)
+            score_entry.bind("<FocusOut>", lambda event, key=score_key: validate_score_on_focus_out(event, key))
             
             # 放置Entry组件
             getattr(self, score_entry_name).place(x=350, y=row_y+3)
@@ -503,7 +506,7 @@ class EasyQCApp:
             setattr(self, tag_entry_name, ttk.Entry(content, textvariable=getattr(self, tag_var_name)))
             getattr(self, tag_entry_name).place(x=140, y=row_y+3, width=130)
             getattr(self, tag_var_name).trace_add("write", lambda *args, k=tag_key: 
-                            module['tags'][k].update({'label': getattr(self, tag_var_name).get()}))
+                            self.dt.settings['qcmodule'][qcidx]['tags'][k].update({'label': getattr(self, tag_var_name).get()}))
             
             # 在分数设置区域的每一行后面添加增加和删除按钮
             add_btn = ttk.Button(content, text="+", padding=pad, command=lambda idx=irow2: self.DialM.add_tag(qcidx, idx+1))
@@ -537,8 +540,8 @@ class EasyQCApp:
 
         # 绑定文本变化事件
         def on_text_change(event):
-            module['code'] = code_text.get('1.0', tk.END).strip()         
-        code_text.bind("<FocusOut>", on_text_change)
+            self.dt.settings['qcmodule'][qcidx]['code'] = code_text.get('1.0', tk.END).strip() 
+        code_text.bind("<KeyRelease>", on_text_change)
         
         # 创建键盘布局设置区域
         label_layout = ttk.Label(content, text="键盘布局设置:", style='TLabel')

@@ -344,14 +344,7 @@ class DialogMain:
 
 
     # ############################################################
-    # def extract_path(self):
-    #     """
-    #     提取路径，使用DataManager的get_list获取，生成self.tmp_list_df,
-    #     """
-    #     path = self.app.path_entry.get()
-    #     if path:
-    #         df = self.DataM.get_list(path)
-    #         self.set_varname_batch(df)
+
     def extract_path(self):
         """
         提取路径，使用DataManager的get_list获取，生成self.tmp_list_df,
@@ -528,6 +521,7 @@ class DialogMain:
             def merge_as_rows():
                 self.dt.var['ezqc_all'] = pd.concat([self.dt.var['ezqc_all'], self.df_tmp]) if self.dt.var['ezqc_all'] is not None else self.df_tmp
                 self.ProjM.save_table('ezqc_all')
+                self.ProjM.save_table('table',delete=True)
                 messagebox.showinfo("信息", "合并完成")
                 merge_dialog.destroy()
             ttk.Button(button_frame, text="合并成新行", command=merge_as_rows).pack(pady=5)
@@ -536,6 +530,7 @@ class DialogMain:
             def merge_as_columns():
                 self.dt.var['ezqc_all'] = pd.merge(self.dt.var['ezqc_all'], self.df_tmp, on='ezqcid', how='outer') if self.dt.var['ezqc_all'] is not None else self.df_tmp.copy()
                 self.ProjM.save_table('ezqc_all')
+                self.ProjM.save_table('table',delete=True)
                 merge_dialog.destroy()
             ttk.Button(button_frame, text="合并成新列", command=merge_as_columns).pack(pady=5)
             
@@ -543,6 +538,7 @@ class DialogMain:
             def replace():
                 self.dt.var['ezqc_all'] = self.df_tmp
                 self.ProjM.save_table('ezqc_all')
+                self.ProjM.save_table('table',delete=True)
                 merge_dialog.destroy()
             ttk.Button(button_frame, text="替换",command=replace).pack(pady=5)
             
@@ -635,9 +631,9 @@ class DialogMain:
             for i, (old_index, module_data) in enumerate(sorted_modules, 1):
                 reordered_modules[str(i)] = module_data
             self.dt.settings['qcmodule'] = reordered_modules
-            # 删除self.dt.settings['qcpresent']中没有在self.dt.settings['qcmodule']中的模块
-            modules_ = [item['name'] for item in self.dt.settings['qcmodule'].values()]
-            self.dt.settings['qcpresent'] = [item for item in self.dt.settings['qcpresent'] if item in modules_]
+            # # 删除self.dt.settings['qcpresent']中没有在self.dt.settings['qcmodule']中的模块
+            # modules_ = [item['name'] for item in self.dt.settings['qcmodule'].values()]
+            # self.dt.settings['qcpresent'] = [item for item in self.dt.settings['qcpresent'] if item in modules_]
 
             self.ProjM.save_settings()
             self.app.load_module_to_gui()
@@ -774,7 +770,7 @@ class DialogMain:
         self.app.load_module_to_gui()
 
 
-    def validate_score(self, value, qcmodule=None, key=None, show_error=True):
+    def validate_score(self, value, show_error=True):
         
         value = value.strip()
         msgbox = """分值必须为以下形式：\n
@@ -808,7 +804,7 @@ class DialogMain:
                     if show_error:
                         messagebox.showerror("错误", "范围起始值不能大于结束值")
                     return None
-                result = list(range(start, end + 1))
+                result = ','.join(str(i) for i in range(start, end + 1))
 
             # 判断分类三：单个数字表示连续数值
             elif re.match(r'^\s*(\d+)\s*$', value):
@@ -818,19 +814,12 @@ class DialogMain:
                     if show_error:
                         messagebox.showerror("错误", "数值必须大于0")
                     return None
-                result = list(range(1, max_val + 1))
+                result = ','.join(str(i) for i in range(1, max_val + 1))
             
             else:
                 if show_error:
                     messagebox.showerror("错误", msgbox)
                 return None
-
-            # 更新qcmodule数据
-            if qcmodule and key:
-                qcmodule['scores'][key]['num'] = value  # 存储原始输入值
-                if 'num_' not in qcmodule['scores'][key]:
-                    qcmodule['scores'][key]['num_'] = ''
-                qcmodule['scores'][key]['num_'] = ','.join(map(str, result))  # 存储解析后的结果
                 
             return result
             

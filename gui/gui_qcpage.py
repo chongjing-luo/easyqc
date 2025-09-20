@@ -71,6 +71,7 @@ class gui_qcpage:
             self.dt = app.ProjM.dt
             self.module_name = module_name
             self.ezqcid_index = None
+            self.watch_mode_ = False
             
             self.check_module()
             self.module = self.dt.settings['qcmodule'][self.module_index]
@@ -187,35 +188,59 @@ class gui_qcpage:
         :param project: 项目名
         输入模块名和项目名，则打开这个项目这个模块的质控页面，需要先加载项目信息、模块信息和质控信息
         """
-        self.project = project
-        self.module = module
-        self.rater = rater
-        self.ezqcid = ezqcid
-        
-        print(f"project: {project}, module: {module}, rater: {rater}, ezqcid: {ezqcid}")
-        
-        # 获取模块配置
-        module_config = self.dt.settings['qcmodule'][self.module_index]
-        
-        # 创建QC页面窗口
-        self.qcpage_widgets(module=module_config, watch_mode=True, shell=True)
-        
-        # 加载评分数据
-        self.load_rating(ezqcid=ezqcid, module=module_config)
-        
-        # 填充列表
-        module_config = self.dt.settings['qcmodule'][self.module_index]
-        self.populate_listbox(module=module_config)
-        
-        # 加载到GUI
-        self.load_present_to_gui(module=module_config)
+        try:
+            log_info(f"开始打开QC页面: project={project}, module={module}, rater={rater}, ezqcid={ezqcid}")
+            
+            self.project = project
+            self.module = module
+            self.rater = rater
+            self.ezqcid = ezqcid
+            
+            print(f"project: {project}, module: {module}, rater: {rater}, ezqcid: {ezqcid}")
+            log_info(f"self.module_index: {self.module_index}")
+            
+            # 获取模块配置
+            module_config = self.dt.settings['qcmodule'][self.module_index]
+            log_info(f"获取模块配置成功: {module_config.get('name', 'Unknown')}")
+            
+            # 创建QC页面窗口
+            log_info("开始创建QC页面窗口")
+            self.watch_mode_ = True
+            self.qcpage_widgets(module=module_config, watch_mode=self.watch_mode_, shell=True)
+            log_info("QC页面窗口创建完成")
+            
+            # 加载评分数据
+            log_info("开始加载评分数据")
+            self.load_rating(ezqcid=ezqcid, module=module_config)
+            log_info("评分数据加载完成")
+            
+            # 填充列表
+            log_info("开始填充列表")
+            module_config = self.dt.settings['qcmodule'][self.module_index]
+            self.populate_listbox(module=module_config)
+            log_info("列表填充完成")
+            
+            # 加载到GUI
+            log_info("开始加载到GUI")
+            self.load_present_to_gui(module=module_config)
+            log_info("GUI加载完成")
+            
+            log_info("QC页面打开成功")
+            return True
+            
+        except Exception as e:
+            log_exception(f"打开QC页面时发生错误: {e}")
+            print(f"错误：打开QC页面失败 - {e}")
+            return False
 
         # self.gui_qcpage.mainloop()
 
-    def qcpage_widgets(self, module=None, watch_mode=False, shell=False):
+    def qcpage_widgets(self, module=None, watch_mode=None, shell=False):
         """设置4个qc页面的评分页面（相同代码部分）"""
         try:
             
+            if watch_mode is None:
+                watch_mode = self.watch_mode_
             if module is None:
                 module = self.dt.settings['qcmodule'][self.module_index]
             log_debug(f"开始创建QC页面组件，模块: {module['name']}")
@@ -425,7 +450,6 @@ class gui_qcpage:
         # 加载notes
         self.notes_text.delete('1.0', 'end')
         if 'notes' in module and module['notes'] is not None:
-            # 确保notes是字符串类型
             notes_content = str(module['notes']) if module['notes'] else ''
             self.notes_text.insert('1.0', notes_content)
 
@@ -591,7 +615,22 @@ class gui_qcpage:
                 rating_filenames = [os.path.basename(f) for f in rating_files]
                 selected_file = os.path.join(self.dt.dir_module_rater, rating_filenames[0])
                 with open(selected_file, 'r') as f:
-                    self.dt.settings['qcmodule'][self.module_index] = json.load(f)
+                    scores = self.dt.settings['qcmodule'][self.module_index]['scores']
+                    tags = self.dt.settings['qcmodule'][self.module_index]['tags']
+                    code = self.dt.settings['qcmodule'][self.module_index]['code']
+                    new_module = json.load(f)
+                    for key in scores.keys():
+                        if scores[key]['num_'] != new_module['scores'][key]['num_']:
+                            self.watch_mode_ = True
+                            messagebox.showerror("错误", f"评分文件 {rating_filenames[0]} 中的评分与当前模块的评分不一致，观看模式。")
+
+                    for key in tags.keys():
+                        if tags[key]['label'] != new_module['tags'][key]['label']:
+                            self.watch_mode_ = True
+                            messagebox.showerror("错误", f"评分文件 {rating_filenames[0]} 中的标签与当前模块的标签不一致，观看模式。")
+                    self.dt.settings['qcmodule'][self.module_index] = new_module
+                    self.dt.settings['qcmodule'][self.module_index]['code'] = code
+
                 log_debug(f"成功加载评分文件: {rating_filenames[0]}")
 
             elif len(rating_files) == 0:
@@ -658,8 +697,6 @@ class gui_qcpage:
             log_debug(f"开始生成演示数据，模块索引: {self.module_index}")
             if module is None:
                 module = self.dt.settings['qcmodule'][self.module_index]
-            
-            print(f"module: {module}")
                 
             if module['ezqcid'] is None:
                 log_debug(f"为模块 {module['name']} 创建演示配置")
