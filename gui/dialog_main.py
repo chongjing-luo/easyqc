@@ -172,10 +172,11 @@ class DialogMain:
         # 创建项目移除对话框
         dialog = tk.Toplevel(self.app.root)
         dialog.title("移除项目")
-        dialog.geometry("400x500")
+        dialog.geometry("700x400")
         dialog.transient(self.app.root)
         dialog.grab_set()
-        
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(1, weight=1)
         # 添加提示标签
         ttk.Label(dialog, text="双击条目移除项目", padding=10).pack()
         
@@ -185,7 +186,13 @@ class DialogMain:
 
         # 创建列表框显示所有项目
         listbox = tk.Listbox(dialog, width=40, height=15, yscrollcommand=scrollbar.set)
-        listbox.pack(side=tk.LEFT, padx=10, pady=5, fill=tk.BOTH)
+        listbox.pack(side=tk.LEFT, padx=10, pady=5, fill=tk.BOTH, expand=True)
+        listbox.config(exportselection=False)
+        listbox.config(font=("微软雅黑", 12))
+        # 使listbox内容随窗口横向拉伸自动显示更多内容
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(1, weight=1)
+        listbox.pack_configure(fill=tk.BOTH, expand=True)
         
         # 配置滚动条
         scrollbar.config(command=listbox.yview)
@@ -399,8 +406,7 @@ class DialogMain:
         path = self.app.path_entry2.get()
         if path:
             self.dt.var['ezqc_new'] = self.DataM.read_list(path)
-            self.dt.var['ezqc_filter'] = self.dt.var['ezqc_new'].copy()
-            self.TablD.show_df(self.dt.var['ezqc_new'])
+            self.set_varname()
 
     def extract_words(self):
         """
@@ -561,7 +567,7 @@ class DialogMain:
         dialog = tk.Toplevel(self.app.root)
         dialog.title(title)
         dialog.geometry("400x280")
-        dialog.grab_set()
+        # dialog.grab_set()
         dialog.transient(self.app.root)
 
         # 模块名称

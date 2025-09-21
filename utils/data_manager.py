@@ -54,7 +54,7 @@ class DataManager:
         """
         if path.endswith('.list') or path.endswith('.txt'):
             with open(path, 'r') as f:
-                lines = f.readlines()
+                lines = [line.strip() for line in f.readlines()]  # 去除每行的换行符
             df = pd.DataFrame(lines, columns=['path'])
         elif path.endswith('.csv'):
             df = pd.read_csv(path)
