@@ -148,7 +148,7 @@ class EasyQCApp:
         
         # 在框架内部添加"项目管理"标签，使用绝对定位和全局样式
         self.project_label = ttk.Label(self.inner_frame, text="项目管理", style='Title.TLabel')
-        self.project_label.place(x=260, y=0, width=100, height=30)
+        self.project_label.place(x=240, y=0, width=100, height=30)
         
         # 项目下拉列表，使用绝对定位和全局样式
         self.projects_list = tk.StringVar()
@@ -188,23 +188,23 @@ class EasyQCApp:
         
         # 在框架内部添加"项目管理"标签，使用绝对定位
         self.constant_label = ttk.Label(self.inner_frame, text="常量设置", font=self.font_14)
-        self.constant_label.place(x=260, y=0, width=100, height=30)
+        self.constant_label.place(x=240, y=0, width=100, height=30)
 
         # 常量名字文本，文本前有常量名"常量名："
-        self.constant_name_label = ttk.Label(self.inner_frame, text="常量名：", font=self.font_13)
+        self.constant_name_label = ttk.Label(self.inner_frame, text="常量名:", font=self.font_13)
         self.constant_name_label.place(x=0, y=30, width=50, height=32)
         self.constant_name = ttk.Entry(self.inner_frame, font=self.font_12)
-        self.constant_name.place(x=50, y=30, width=100, height=28)
+        self.constant_name.place(x=60, y=30, width=120, height=28)
 
         # 常量值文本，文本前有常量值"常量值："
-        self.constant_value_label = ttk.Label(self.inner_frame, text="值：", font=self.font_13)
-        self.constant_value_label.place(x=160, y=30, width=25, height=32)
+        self.constant_value_label = ttk.Label(self.inner_frame, text="值:", font=self.font_13)
+        self.constant_value_label.place(x=195, y=30, width=25, height=32)
         self.constant_value = ttk.Entry(self.inner_frame, font=self.font_12)
-        self.constant_value.place(x=190, y=30, width=230, height=28)
+        self.constant_value.place(x=225, y=30, width=230, height=28)
 
         # 添加按钮
         self.constant_btn = ttk.Button(self.inner_frame, text="添加", command=self.DialM.add_constant, style='Project.TButton')
-        self.constant_btn.place(x=430, y=25, width=77, height=35)
+        self.constant_btn.place(x=475, y=27, width=80, height=30)
 
 
         # 创建表格和滚动条
@@ -249,7 +249,7 @@ class EasyQCApp:
 
         # 设置标题 变量设置，居中放置
         self.variable_title = ttk.Label(self.inner_frame_v, text="变量设置", font=self.font_14)
-        self.variable_title.place(x=260, y=0, width=100, height=30)
+        self.variable_title.place(x=240, y=0, width=100, height=30)
 
 
         # 新建/增加 按钮
@@ -388,7 +388,7 @@ class EasyQCApp:
         total_length = 45
         padding = (total_length - len(title)) // 2
         tmp_tilte = f"{' ' * padding}{title}{' ' * (total_length - padding - len(title))}"
-        title_lbl = ttk.Label(header, text=tmp_tilte, font=("Arial", 14, "bold"))
+        title_lbl = ttk.Label(header, text=tmp_tilte, font=("Arial", 13, "bold"))
         title_lbl.pack(side="left", expand=True)
 
         # 右侧按钮
@@ -449,7 +449,7 @@ class EasyQCApp:
             score_label_var = tk.StringVar(value=tmp_score[score_key]['label'])
             setattr(self, f"{score_entry_name}_var", score_label_var)
             setattr(self, score_entry_name, ttk.Entry(content, width=8, textvariable=score_label_var))
-            getattr(self, score_entry_name).place(x=140, y=row_y+3, width=150)
+            getattr(self, score_entry_name).place(x=150, y=row_y, width=150, height=25)
             
             def update_label(*args, key=score_key):
                 self.dt.settings['qcmodule'][qcidx]['scores'][key]['label'] = getattr(self, f"{module['name']}_{key}_label_var").get()
@@ -464,7 +464,9 @@ class EasyQCApp:
             
             # 创建Entry组件
             score_entry = ttk.Entry(content, width=8, textvariable=score_var)
+            score_entry.place(x=350, y=row_y, width=90, height=25)
             setattr(self, score_entry_name, score_entry)
+            
             
             # 添加验证跟踪 - 仅在失去焦点时验证
             def validate_score_on_focus_out(event, key=score_key):
@@ -504,17 +506,17 @@ class EasyQCApp:
             tag_var_name = f"{tag_entry_name}_var"
             setattr(self, tag_var_name, tk.StringVar(value=module['tags'][tag_key]['label']))
             setattr(self, tag_entry_name, ttk.Entry(content, textvariable=getattr(self, tag_var_name)))
-            getattr(self, tag_entry_name).place(x=140, y=row_y+3, width=130)
+            getattr(self, tag_entry_name).place(x=150, y=row_y, width=130, height=25)
             getattr(self, tag_var_name).trace_add("write", lambda *args, k=tag_key: 
                             self.dt.settings['qcmodule'][qcidx]['tags'][k].update({'label': getattr(self, tag_var_name).get()}))
             
             # 在分数设置区域的每一行后面添加增加和删除按钮
             add_btn = ttk.Button(content, text="+", padding=pad, command=lambda idx=irow2: self.DialM.add_tag(qcidx, idx+1))
-            add_btn.place(x=280, y=row_y+3, width=25, height=25)
+            add_btn.place(x=300, y=row_y+3, width=25, height=25)
             
             if irow2 > 1:
                 del_btn = ttk.Button(content, text="-", padding=pad, command=lambda idx=irow2: self.DialM.del_tag(qcidx, idx))
-                del_btn.place(x=310, y=row_y+3, width=25, height=25)
+                del_btn.place(x=330, y=row_y+3, width=25, height=25)
 
         # =========================   代码设置   =========================
         ystart = tag_y + len(tmp_tag) * 30 + 3
@@ -610,7 +612,7 @@ class EasyQCApp:
         self.inner_frame_mo.place(x=10, y=0, width=580, height=555)
 
         variable_title = ttk.Label(self.inner_frame_mo, text="质控模块设置", font=self.font_14)
-        variable_title.place(x=230, y=-3, width=100, height=30)
+        variable_title.place(x=220, y=-3, width=120, height=30)
 
         add_module = ttk.Button(self.inner_frame_mo, text="增加模块", command=self.DialM.add_module, style='Project.TButton')
         add_module.place(x=110, y=25, width=100, height=30)

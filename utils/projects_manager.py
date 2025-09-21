@@ -116,6 +116,7 @@ class ProjectManager:
 
     def change_project(self, project):
         self.save_settings()
+        self.save_table()
         self.load_project(project)
 
     def load_project(self, project=None, output_dir=None, fresh_gui=True):

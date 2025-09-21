@@ -363,9 +363,9 @@ class DialogMain:
         self.dialog.geometry("400x280")
 
         # 在弹出框中增加两个文本输入框，一个是变量名，一个是批次
-        ttk.Label(self.dialog, text="请设置变量名:", font=self.app.font_13).place(x=10, y=10)
+        ttk.Label(self.dialog, text="请设置变量名:", font=self.app.font_12).place(x=10, y=10)
         varname_entry = ttk.Entry(self.dialog, font=self.app.font_12)
-        varname_entry.place(x=100, y=10)
+        varname_entry.place(x=120, y=10,width=250)
 
         def set_varname():
             varname = varname_entry.get()
@@ -517,29 +517,30 @@ class DialogMain:
                 messagebox.showinfo("信息", "没有可显示的数据")
                 return
             
+            def fresh_tables():
+                self.ProjM.save_table('ezqc_all')
+                self.ProjM.save_table('table',delete=True)
+                self.ProjM.load_project(self.dt.project)
+                merge_dialog.destroy()
+
             # 合并成新行按钮
             def merge_as_rows():
                 self.dt.var['ezqc_all'] = pd.concat([self.dt.var['ezqc_all'], self.df_tmp]) if self.dt.var['ezqc_all'] is not None else self.df_tmp
-                self.ProjM.save_table('ezqc_all')
-                self.ProjM.save_table('table',delete=True)
                 messagebox.showinfo("信息", "合并完成")
-                merge_dialog.destroy()
+                fresh_tables()
+                
             ttk.Button(button_frame, text="合并成新行", command=merge_as_rows).pack(pady=5)
             
             # 合并成新列按钮
             def merge_as_columns():
                 self.dt.var['ezqc_all'] = pd.merge(self.dt.var['ezqc_all'], self.df_tmp, on='ezqcid', how='outer') if self.dt.var['ezqc_all'] is not None else self.df_tmp.copy()
-                self.ProjM.save_table('ezqc_all')
-                self.ProjM.save_table('table',delete=True)
-                merge_dialog.destroy()
+                fresh_tables()
             ttk.Button(button_frame, text="合并成新列", command=merge_as_columns).pack(pady=5)
             
             # 替换按钮
             def replace():
                 self.dt.var['ezqc_all'] = self.df_tmp
-                self.ProjM.save_table('ezqc_all')
-                self.ProjM.save_table('table',delete=True)
-                merge_dialog.destroy()
+                fresh_tables()
             ttk.Button(button_frame, text="替换",command=replace).pack(pady=5)
             
             # 取消按钮
