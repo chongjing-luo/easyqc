@@ -32,6 +32,7 @@ projects.json
 settings.json
 settings*.json
 code.template
+qcmodule_*.json
 
 # 自动生成的脚本
 start.sh
