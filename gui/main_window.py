@@ -380,26 +380,24 @@ class EasyQCApp:
         header.pack(fill="x", pady=2)
 
         # 左侧按钮
+
         toggle_btn = ttk.Button(header, text="展开▼", width=6)
-        toggle_btn.pack(side="left", padx=(2, 10), pady=2)
+        toggle_btn.place(x=2, y=2, width=60, height=26)
 
         # 标题（居中）
         title = f"{qcidx} - {module['name']} - {module['label']}"
-        total_length = 45
-        padding = (total_length - len(title)) // 2
-        tmp_tilte = f"{' ' * padding}{title}{' ' * (total_length - padding - len(title))}"
-        title_lbl = ttk.Label(header, text=tmp_tilte, font=("Arial", 13, "bold"))
-        title_lbl.pack(side="left", expand=True)
+        title_lbl = ttk.Label(header, text=title, font=("Arial", 12, "bold"))
+        title_lbl.place(x=68, y=2, width=370, height=26)
 
         # 右侧按钮
         startqc_btn = ttk.Button(header, text="开始质控", width=8, command=lambda: self.DialM.start_qc(module))
-        startqc_btn.pack(side="right", padx=(10, 10), pady=2)
+        startqc_btn.place(x=460, y=2, width=68, height=26)
 
         # 创建外层容器frame,设置固定高度
         # 获取tag的数量
         tag_num = len(module['tags'])
         score_num = len(module['scores'])
-        height = 30 + 30 * tag_num + 30 * score_num + 165
+        height = 30 + 30 * tag_num + 30 * score_num + 65
         content_ = ttk.Frame(frame, relief="ridge", padding=10, height=height)
         content_.pack(fill="x", pady=1)
         content_.pack_propagate(False)  # 防止frame被子组件撑开
@@ -434,7 +432,7 @@ class EasyQCApp:
 
         # =============================       创建分数设置区域     =============================
         score_frame = ttk.Frame(content)
-        score_frame.place(x=5, y=35, width=440)
+        score_frame.place(x=5, y=40, width=440)
 
         # 创建分数设置区域
         tmp_score = module['scores']
@@ -485,7 +483,7 @@ class EasyQCApp:
             score_entry.bind("<FocusOut>", lambda event, key=score_key: validate_score_on_focus_out(event, key))
             
             # 放置Entry组件
-            getattr(self, score_entry_name).place(x=350, y=row_y+3)
+            getattr(self, score_entry_name).place(x=350, y=row_y)
 
             # 在分数设置区域的每一行后面添加增加和删除按钮
             pad = (-28,-10,-15,-10)
@@ -519,41 +517,51 @@ class EasyQCApp:
                 del_btn.place(x=330, y=row_y+3, width=25, height=25)
 
         # =========================   代码设置   =========================
+        def code_setting():
+            code_frame = tk.Toplevel(self.root)
+            code_frame.title("代码设置")
+            code_frame.geometry("800x600")
+            code_frame.transient(self.root)
+
+            # 创建底部Frame用于放置按钮
+            btn_frame = ttk.Frame(code_frame)
+            btn_frame.pack(side="bottom", fill="x", pady=10)
+
+            # 代码文本框
+            code_text = tk.Text(code_frame, wrap=tk.CHAR, font=("Courier", 11), undo=True)
+            code_text.pack(side="top", fill="both", expand=True)
+
+            if self.dt.settings['qcmodule'][qcidx]['code']:
+                code_text.insert('1.0', self.dt.settings['qcmodule'][qcidx]['code'])
+
+            # 确认按钮
+            def confirm():
+                self.dt.settings['qcmodule'][qcidx]['code'] = code_text.get('1.0', tk.END).strip()
+                code_frame.destroy()
+
+            # 直接用pack布局让按钮可见且居中
+            confirm_btn = ttk.Button(btn_frame, text="确认", command=confirm)
+            cancel_btn = ttk.Button(btn_frame, text="取消", command=code_frame.destroy)
+            confirm_btn.pack(side="left", padx=(0, 2), ipadx=20, ipady=5, expand=True)
+            cancel_btn.pack(side="left", padx=(2, 0), ipadx=20, ipady=5, expand=True)
+
+
         ystart = tag_y + len(tmp_tag) * 30 + 3
-        ttk.Label(content, text="代码设置:", style='Bold.TLabel').place(x=5, y=ystart,height=30)
+        code_btn = ttk.Button(content, text="代码设置", command=code_setting, style='Project.TButton')
+        code_btn.place(x=5, y=ystart, width=105, height=30)
 
-        # 创建一个 Frame 容器，方便放置 Text + Scrollbar
-        code_frame = ttk.Frame(content)
-        code_frame.place(x=80, y=ystart+3, width=400, height=100)
-
-        # 垂直滚动条
-        code_scrollbar = ttk.Scrollbar(code_frame, orient="vertical")
-        code_scrollbar.pack(side="right", fill="y")
-
-        # 多行文本框
-        code_text = tk.Text(code_frame, wrap=tk.CHAR, font=("Courier", 11), undo=True)
-        code_text.pack(side="left", fill="both", expand=True)
-        code_scrollbar.config(command=code_text.yview)
-
-        # 如果存在代码内容则加载
-        if module['code']:
-            code_text.delete('1.0', tk.END)
-            code_text.insert('1.0', module['code'])
-
-        # 绑定文本变化事件
-        def on_text_change(event):
-            self.dt.settings['qcmodule'][qcidx]['code'] = code_text.get('1.0', tk.END).strip() 
-        code_text.bind("<KeyRelease>", on_text_change)
+        export_btn = ttk.Button(content, text="导出本模块设置", command=lambda: self.DialM.export_module(module['name']), style='Project.TButton')
+        export_btn.place(x=120, y=ystart, width=150, height=30)
         
-        # 创建键盘布局设置区域
-        label_layout = ttk.Label(content, text="键盘布局设置:", style='TLabel')
-        label_layout.place(x=5, y=ystart+110, width=110)
-        browse_btn1 = ttk.Button(content, text="导入", command=self.DialM.import_json,  style='Project.TButton')
-        browse_btn1.place(x=110, y=ystart+110, width=60, height=30)
-        browse_btn2 = ttk.Button(content, text="导出", command=self.DialM.export_json, style='Project.TButton')
-        browse_btn2.place(x=180, y=ystart+110,width=60, height=30)
-        browse_btn2 = ttk.Button(content, text="显示键盘布局", command=lambda: self.DialM.show_keyboard(module), style='Project.TButton')
-        browse_btn2.place(x=250, y=ystart+110,width=100, height=30)
+        # # 创建键盘布局设置区域
+        # label_layout = ttk.Label(content, text="键盘布局设置:", style='TLabel')
+        # label_layout.place(x=5, y=ystart+110, width=110)
+        # browse_btn1 = ttk.Button(content, text="导入", command=self.DialM.import_json,  style='Project.TButton')
+        # browse_btn1.place(x=110, y=ystart+110, width=60, height=30)
+        # browse_btn2 = ttk.Button(content, text="导出", command=self.DialM.export_json, style='Project.TButton')
+        # browse_btn2.place(x=180, y=ystart+110,width=60, height=30)
+        # browse_btn2 = ttk.Button(content, text="显示键盘布局", command=lambda: self.DialM.show_keyboard(module), style='Project.TButton')
+        # browse_btn2.place(x=250, y=ystart+110,width=100, height=30)
         
         content_.pack(fill="x", pady=5) if module['showing'] else content_.pack_forget()
         
@@ -615,13 +623,13 @@ class EasyQCApp:
         variable_title.place(x=220, y=-3, width=120, height=30)
 
         add_module = ttk.Button(self.inner_frame_mo, text="增加模块", command=self.DialM.add_module, style='Project.TButton')
-        add_module.place(x=110, y=25, width=100, height=30)
+        add_module.place(x=100, y=25, width=100, height=30)
+
+        load_module = ttk.Button(self.inner_frame_mo, text="导入模块", command=self.DialM.import_module, style='Project.TButton')
+        load_module.place(x=230, y=25, width=100, height=30)
 
         del_module = ttk.Button(self.inner_frame_mo, text="模块管理", command=self.DialM.manage_module, style='Project.TButton')
-        del_module.place(x=230, y=25, width=100, height=30)
-
-        multi_qc = ttk.Button(self.inner_frame_mo, text="多模块质控", command=self.DialM.multi_qc, style='Project.TButton')
-        multi_qc.place(x=350, y=25, width=100, height=30)
+        del_module.place(x=360, y=25, width=100, height=30)
 
 
         self.param_settings = ttk.Frame(self.inner_frame_mo)

@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 import pandas as pd
 import re
+import json
 
 # 添加项目根目录到Python路径
 project_root = Path(__file__).parent.parent
@@ -652,11 +653,99 @@ class DialogMain:
         ttk.Button(dialog, text=text, command=create_module).place(x=120, y=200, width=80)
         ttk.Button(dialog, text="取消", command=dialog.destroy).place(x=220, y=200, width=80)
 
-    def delete_module(self):
-        pass
+    def change_module_index(self, index, module):
+        frame = tk.Toplevel(self.app.root)
+        frame.title("修改模块信息")
+        frame.geometry("400x280")
+        frame.transient(self.app.root)
+        frame.grab_set()  # 设置为模态对话框
+        
+        # 用于跟踪操作结果
+        result = {'success': False}
+        
+        ttk.Label(frame, text="模块名称:", font=self.app.font_13).place(x=30, y=30)
+        name_entry = ttk.Entry(frame, font=self.app.font_12)
+        name_entry.place(x=120, y=30, width=230)
+        name_entry.insert(0, module['name'])
 
-    def multi_qc(self):
-        pass
+        ttk.Label(frame, text="模块标题:", font=self.app.font_13).place(x=30, y=80)
+        label_entry = ttk.Entry(frame, font=self.app.font_12)
+        label_entry.place(x=120, y=80, width=230)
+        label_entry.insert(0, module['label'])
+
+        ttk.Label(frame, text="模块序号:", font=self.app.font_13).place(x=30, y=130)
+        index_entry = ttk.Entry(frame, font=self.app.font_12)
+        index_entry.place(x=120, y=130, width=230)
+        index_entry.insert(0, index)
+        
+        def change_module():
+            index_ = next((i for i, m in self.dt.settings['qcmodule'].items() if m['name'] == name_entry.get()), None)
+            if index_ is not None:
+                messagebox.showerror("错误", "模块名称已存在,请修改模块名称")
+            else:
+                module['name'] = name_entry.get()
+                module['label'] = label_entry.get()
+                index = index_entry.get()
+                self.dt.settings['qcmodule'] = self.ProjM.add_key(self.dt.settings['qcmodule'], int(index), module)
+                result['success'] = True  # 标记操作成功
+                frame.grab_release()  # 释放模态状态
+                frame.destroy()
+
+        def cancel_dialog():
+            frame.grab_release()  # 释放模态状态
+            frame.destroy()
+            
+        ttk.Button(frame, text="确定", command=change_module).place(x=120, y=170, width=80)
+        ttk.Button(frame, text="取消", command=cancel_dialog).place(x=220, y=170, width=80)
+        
+        # 等待对话框关闭
+        frame.wait_window()
+        
+        # 返回操作结果
+        return result['success']
+
+    def import_module(self):
+        file_path = filedialog.askopenfilename(
+            title="请选择qcmodule模块文件",
+            filetypes=[("JSON文件", "*.json"), ("所有文件", "*.*")]
+        )
+        if not file_path:
+            return
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                module = json.load(f)
+
+            if not self.ProjM.check_module(module):
+                messagebox.showerror("错误", "模块文件不合法")
+                return
+
+            module_name = module['name']
+            index = next((i for i, m in self.dt.settings['qcmodule'].items() if m['name'] == module_name), None)
+            if index is not None:
+                # 弹出一个框警告用户，模块名称已存在，请修改模块名称
+                if not messagebox.askyesno("警告", "模块名称已存在，请修改模块名称"):
+                    messagebox.showinfo("提示", "放弃导入")
+                    return
+                if self.change_module_index(index, module):
+                    self.ProjM.save_settings()
+                    self.app.load_module_to_gui()
+                    messagebox.showinfo("提示", "模块导入成功")
+            else:
+                self.ProjM.import_module(module, check=False)
+                self.ProjM.save_settings()
+                self.app.load_module_to_gui()
+                messagebox.showinfo("提示", "模块导入成功")
+        except Exception as e:
+            messagebox.showerror("错误", f"导入模块失败: {str(e)}")
+
+
+
+    def export_module(self, module_name):
+        folder_selected = filedialog.askdirectory(title="请选择导出路径")
+        if folder_selected:
+            self.ProjM.export_module(module_name, os.path.join(folder_selected, f"qcmodule_{module_name}.json"))
+
+
 
 
     def manage_module(self):
@@ -666,7 +755,6 @@ class DialogMain:
         dialog.title("管理模块")
         dialog.geometry("400x300")
         dialog.transient(self.app.root)
-        dialog.grab_set()
 
         # 一句文字，双击修改模块设置，右键删除模块
         ttk.Label(dialog, text="左键双击修改模块设置，右键单击删除模块", font=self.app.font_13).pack(pady=5)

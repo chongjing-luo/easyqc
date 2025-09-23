@@ -341,6 +341,88 @@ class ProjectManager:
 
         return self.add_key(dict, index, module)
 
+    def check_module(self, module):
+        """检查模块所有字段是否合法"""
+        required_fields = ['name', 'label', 'interper', 'code', 'tags', 'scores']
+        # 检查必需字段是否存在
+        for field in required_fields:
+            if field not in module:
+                log_error(f"模块缺少字段: {field}", "ProjectManager")
+                return False
+
+        # 检查name
+        if not isinstance(module['name'], str) or module['name'].strip() == '':
+            log_error("模块名称不能为空", "ProjectManager")
+            return False
+
+        # 检查label
+        if not isinstance(module['label'], str) or module['label'].strip() == '':
+            log_error("模块标题不能为空", "ProjectManager")
+            return False
+
+        # 检查interper
+        if not isinstance(module['interper'], str) or module['interper'].strip() == '':
+            log_error("模块解释器类型不能为空", "ProjectManager")
+            return False
+
+        # 检查tags和scores为字典
+        if not isinstance(module['tags'], dict):
+            log_error("模块tags字段必须为字典", "ProjectManager")
+            return False
+        if not isinstance(module['scores'], dict):
+            log_error("模块scores字段必须为字典", "ProjectManager")
+            return False
+
+        return True
+
+
+    def import_module(self, path, check=True):
+        """导入模块"""
+        with open(path, 'r', encoding='utf-8') as f:
+            module = json.load(f)
+
+        if check and not self.check_module(module):
+            log_error("模块文件不合法", "ProjectManager")
+            return
+
+        def change_module_name():
+            module_name_ = input(f"请输入模块名称，当前模块名称: {module_name},退出输入q(): ")
+            if module_name_ == 'q()':
+                return
+            index_ = (i for i, m in self.dt.settings['qcmodule'].items() if m['name'] == module_name_)
+            if index_ is not None:
+                print(f"模块 '{module_name_}' 已存在，请修改模块名称")
+                change_module_name()
+            index = int(index_)
+            module['name'] = module_name
+            self.dt.settings['qcmodule'] = self.add_key(self.dt.settings['qcmodule'], index, module)
+            self.save_settings()
+
+        module_name = module['name']
+        index = next((i for i, m in self.dt.settings['qcmodule'].items() if m['name'] == module_name), None)
+        index = int(index)
+        if index is not None:
+            change_module_name()
+        else:
+            self.dt.settings['qcmodule'] = self.add_key(self.dt.settings['qcmodule'], index, module)
+            self.save_settings()
+
+
+    def export_module(self, module_name, path):
+        """导出模块"""
+        module_index = next((i for i, m in self.dt.settings['qcmodule'].items() if m['name'] == module_name), None)
+        module = self.dt.settings['qcmodule'][module_index]
+        if module is None:
+            log_error(f"模块 '{module_name}' 不存在", "ProjectManager")
+            return
+
+        dir = os.path.dirname(path)
+        if not os.path.exists(dir):
+            os.makedirs(dir, exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(module, f, indent=4, ensure_ascii=False)
+        log_info(f"模块 '{module_name}' 导出成功", "ProjectManager")
+
 
 
     def add_key(self, dict, index, module=None):
