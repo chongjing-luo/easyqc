@@ -34,6 +34,7 @@ class ProjectManager:
             self.var['ezqc_filter'] = None
             self.var['ezqc_all'] = None
             self.tab['ezqc_qctable'] = None
+            self.tab['ezqc_qctable_filter'] = None
 
         def __contains__(self, key):
             """支持'in'操作符"""
@@ -169,7 +170,6 @@ class ProjectManager:
                 self.new_settings()
                 self.save_settings()
 
-        
 
     def load_table(self,type=None):
         if self.dt.project is None:
@@ -179,7 +179,8 @@ class ProjectManager:
         if type is None:
             self.load_table('ezqc_all')
             self.load_table('ezqc_qctable')
-            # self.load_table('table')
+            self.load_table('ezqc_qctable_filter')
+            self.load_table('table')
         elif type == 'ezqc_all':
             ptcsv = os.path.join(table_dir, 'ezqc_all.csv')
             if os.path.exists(ptcsv):
@@ -189,18 +190,29 @@ class ProjectManager:
         elif type == 'ezqc_qctable':
             ptcsv = os.path.join(table_dir, 'ezqc_qctable.csv')
             if os.path.exists(ptcsv):
-                self.dt.var['ezqc_qctable'] = pd.read_csv(ptcsv, encoding='utf-8')
+                self.dt.tab['ezqc_qctable'] = pd.read_csv(ptcsv, encoding='utf-8')
             else:
-                self.dt.var['ezqc_qctable'] = None
+                self.dt.tab['ezqc_qctable'] = None
+        elif type == 'ezqc_qctable_filter':
+            ptcsv = os.path.join(table_dir, 'ezqc_qctable_filter.csv')
+            if os.path.exists(ptcsv):
+                self.dt.tab['ezqc_qctable_filter'] = pd.read_csv(ptcsv, encoding='utf-8')
+            else:
+                self.dt.tab['ezqc_qctable_filter'] = None
         elif type == 'table':
-            pass
-            # for key in self.dt.settings['qcmodule'].keys():
-            #     name = self.dt.settings['qcmodule'][key]['name']
-            #     ptcsv = os.path.join(table_dir, f'ezqc_{name}.csv')
-            #     if os.path.exists(ptcsv):
-            #         self.dt.tab[name] = pd.read_csv(ptcsv, encoding='utf-8')
-            #     else:
-            #         self.dt.tab[name] = None
+            for key in self.dt.settings['qcmodule'].keys():
+                name = self.dt.settings['qcmodule'][key]['name']
+                ptcsv = os.path.join(table_dir, f'ezqc_{name}.csv')
+                if os.path.exists(ptcsv):
+                    self.dt.tab[name] = pd.read_csv(ptcsv, encoding='utf-8')
+                else:
+                    self.dt.tab[name] = None
+        else:
+            ptcsv = os.path.join(table_dir, f'ezqc_{type}.csv')
+            if os.path.exists(ptcsv):
+                self.dt.tab[type] = pd.read_csv(ptcsv, encoding='utf-8')
+            else:
+                self.dt.tab[type] = None
         
 
     def save_table(self,type=None,delete=False):
@@ -213,6 +225,7 @@ class ProjectManager:
             self.save_table('ezqc_all',delete)
             self.save_table('ezqc_qctable',delete)
             self.save_table('table',delete)
+            self.save_table('ezqc_qctable_filter',delete)
 
         elif type == 'ezqc_all':
 
@@ -229,8 +242,29 @@ class ProjectManager:
                     log_warning(f"ezqc_all 表格为空，未保存")
 
         elif type == 'ezqc_qctable':
-
-            pass
+            ptcsv = os.path.join(table_dir, 'ezqc_qctable.csv')
+            if delete:
+                if os.path.exists(ptcsv):
+                    os.remove(ptcsv)
+                    log_info(f"ezqc_qctable 表格已删除")
+                    return
+            else:
+                if self.dt.tab['ezqc_qctable'] is not None:
+                    self.dt.tab['ezqc_qctable'].to_csv(ptcsv, index=False, encoding='utf-8')
+                else:
+                    log_warning(f"ezqc_qctable 表格为空，未保存")
+        elif type == 'ezqc_qctable_filter':
+            ptcsv = os.path.join(table_dir, 'ezqc_qctable_filter.csv')
+            if delete:
+                if os.path.exists(ptcsv):
+                    os.remove(ptcsv)
+                    log_info(f"ezqc_qctable_filter 表格已删除")
+                    return
+            else:
+                if self.dt.tab['ezqc_qctable_filter'] is not None:
+                    self.dt.tab['ezqc_qctable_filter'].to_csv(ptcsv, index=False, encoding='utf-8')
+                else:
+                    log_warning(f"ezqc_qctable_filter 表格为空，未保存")
         elif type == 'table':
             if delete:
                 for name, table in self.dt.tab.items():
@@ -242,6 +276,18 @@ class ProjectManager:
                 for name, table in self.dt.tab.items():
                     if table is not None:
                         table.to_csv(os.path.join(table_dir, f'ezqc_{name}.csv'), index=False, encoding='utf-8')
+
+        else:
+            if delete:
+                if os.path.exists(os.path.join(table_dir, f'ezqc_{type}.csv')):
+                    os.remove(os.path.join(table_dir, f'ezqc_{type}.csv'))
+                    log_info(f"{type} 表格已删除")
+                    return
+            else:
+                if self.dt.tab[type] is not None:
+                    self.dt.tab[type].to_csv(os.path.join(table_dir, f'ezqc_{type}.csv'), index=False, encoding='utf-8')
+                else:
+                    log_warning(f"{type} 表格为空，未保存")
 
     def save_settings(self):
         """保存设置"""
@@ -592,7 +638,7 @@ class ProjectManager:
             file_ezqcid = parts[1]
             with open(json_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            print(f"data: {data}")
+            # print(f"data: {data}")
             if len(parts) < 3 or file_module != module or file_rater != rater:
                 log_warning(f"文件 {json_file} 的 module({file_module}) 或 rater({file_rater}) 与目录结构不一致，跳过")
                 return False
@@ -649,5 +695,6 @@ class ProjectManager:
                 self.dt.rating_dict[data['ezqcid']][f"{data['name']}-{data['rater']}"] = data
                 data_rows.append(self.load_rating_json(json_file))
         self.dt.tab['ezqc_qctable'] = gen_table(data_rows)
+        # self.dt.tab['ezqc_qctable_filter'] = self.dt.tab['ezqc_qctable'].copy()
         self.save_table('ezqc_qctable')
             

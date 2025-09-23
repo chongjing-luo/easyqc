@@ -269,7 +269,10 @@ class EasyQCApp:
         self.filter_btn.place(x=335, y=25, width=100, height=35)
 
         # 显示当前变量 按钮
-        self.show_current_variable_btn = ttk.Button(self.inner_frame_v, text="显示质控表格", command=lambda: self.TablD.show_df(self.dt.tab['ezqc_qctable']), style='Project.TButton')
+        def show_qctable():
+            table = self.dt.tab['ezqc_qctable_filter'] if 'ezqc_qctable_filter' in self.dt.tab else self.dt.tab['ezqc_qctable'] if 'ezqc_qctable' in self.dt.tab else self.dt.var['ezqc_all']
+            self.TablD.show_df(table)
+        self.show_current_variable_btn = ttk.Button(self.inner_frame_v, text="显示质控表格", command=show_qctable, style='Project.TButton')
         self.show_current_variable_btn.place(x=445, y=25, width=100, height=35)
 
     def set_variable(self):

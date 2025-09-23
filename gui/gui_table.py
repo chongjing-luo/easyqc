@@ -285,7 +285,8 @@ class TableDisplay:
                 select_filter = self.dt.settings['var_select_filter']
                 df = self.dt.var['ezqc_all'].copy()
             elif type == 'qctable':
-                pass
+                select_filter = self.dt.settings['select_filter']
+                df = self.dt.tab['ezqc_qctable'].copy()
             else:
                 matching_indices = [k for k, v in self.dt.settings['qcmodule'].items() if v.get('name') == type]
                 index = matching_indices[0] if matching_indices else None
@@ -375,13 +376,15 @@ class TableDisplay:
                 elif type == 'all':
                     self.dt.var['ezqc_all'] = df_output.copy()
                 elif type == 'qctable':
-                    pass
+                    self.dt.tab['ezqc_qctable_filter'] = df_output.copy()
+                    self.dt.settings['select_filter'] = self.tmp_query
+                    self.ProjM.save_settings()
+                    self.ProjM.save_table('ezqc_qctable_filter')
                 else:
-                    if not hasattr(self.dt, 'tab') or self.dt.tab is None:
-                        self.dt.tab = {}
                     self.dt.tab[type] = df_output.copy()
                     index = [k for k, v in self.dt.settings['qcmodule'].items() if v.get('name') == type][0]
                     self.dt.settings['qcmodule'][index]['select_filter'] = self.tmp_query
+                    self.ProjM.save_table(type)
                     self.ProjM.save_settings()
                     log_info(f"已保存筛选结果到 self.dt.tab['{type}']，数据行数: {len(df_output)}")
             else:

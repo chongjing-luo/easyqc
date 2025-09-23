@@ -129,7 +129,6 @@ def open_qcpage_from_shell(project, module, rater, ezqcid):
         log_info("开始启动GUI主循环")
         qcpage_instance.gui_qcpage.mainloop()
         
-        
         return True
         
     except Exception as e:

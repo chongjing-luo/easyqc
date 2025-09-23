@@ -73,14 +73,13 @@ class gui_qcpage:
             self.ezqcid_index = None
             self.watch_mode_ = False
             
-            if not self.check_module():
+            if self.check_module():
                 return
             self.module = self.dt.settings['qcmodule'][self.module_index]
             self.dt.dir_module_rater = os.path.join(self.dt.output_dir, 'RatingFiles', module_name, self.module['rater'])
-            if not self.check_table():
+            if self.check_table():
                 return
             self.gen_present()
-
             log_debug("保存设置")
             self.ProjM.save_settings()
             log_debug("开始创建QC页面组件")
@@ -100,19 +99,11 @@ class gui_qcpage:
         # 检查和准备数据表
         log_debug(f"检查模块 {self.module_name} 数据")
         if self.module_name not in self.dt.tab or self.dt.tab[self.module_name] is None:
-            tmp_query = self.dt.settings['qcmodule'][self.module_index]['select_filter']
 
             if 'ezqc_qctable' in self.dt.tab and self.dt.tab['ezqc_qctable'] is not None:
-                df = self.dt.tab['ezqc_qctable']
-            elif 'ezqc_qctable' in self.dt.var and self.dt.var['ezqc_qctable'] is not None:
-                df = self.dt.var['ezqc_qctable']
+                self.dt.tab[self.module_name] = self.dt.tab['ezqc_qctable']
             else:
-                df = self.dt.var['ezqc_all']
-
-            if tmp_query is not None and tmp_query != '':
-                self.dt.tab[self.module_name] = self.DataM.select_filter_sorter(df, tmp_query)
-            else:
-                self.dt.tab[self.module_name] = df
+                self.dt.tab[self.module_name] = self.dt.tab['ezqc_all']
 
         if self.dt.tab[self.module_name] is None or (hasattr(self.dt.tab[self.module_name], 'empty') and self.dt.tab[self.module_name].empty):
             log_error("数据为空")
@@ -624,6 +615,7 @@ class gui_qcpage:
                     scores = self.dt.settings['qcmodule'][self.module_index]['scores']
                     tags = self.dt.settings['qcmodule'][self.module_index]['tags']
                     code = self.dt.settings['qcmodule'][self.module_index]['code']
+                    select_filter = self.dt.settings['qcmodule'][self.module_index]['select_filter']
                     new_module = json.load(f)
                     for key in scores.keys():
                         if scores[key]['num_'] != new_module['scores'][key]['num_']:
@@ -636,6 +628,7 @@ class gui_qcpage:
                             messagebox.showerror("错误", f"评分文件 {rating_filenames[0]} 中的标签与当前模块的标签不一致，观看模式。")
                     self.dt.settings['qcmodule'][self.module_index] = new_module
                     self.dt.settings['qcmodule'][self.module_index]['code'] = code
+                    self.dt.settings['qcmodule'][self.module_index]['select_filter'] = select_filter
 
                 log_debug(f"成功加载评分文件: {rating_filenames[0]}")
 
@@ -722,8 +715,8 @@ class gui_qcpage:
                 else:
                     self.ezqcid = current_ezqcid
                     self.load_rating()
-                
                 log_info(f"演示配置创建完成，模块: {module['name']}")
+
         except Exception as e:
             log_exception(f"生成演示数据失败: {str(e)}")
             messagebox.showerror("错误", f"生成演示数据失败: {str(e)}")
