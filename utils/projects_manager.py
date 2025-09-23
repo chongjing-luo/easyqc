@@ -179,7 +179,7 @@ class ProjectManager:
         if type is None:
             self.load_table('ezqc_all')
             self.load_table('ezqc_qctable')
-            self.load_table('table')
+            # self.load_table('table')
         elif type == 'ezqc_all':
             ptcsv = os.path.join(table_dir, 'ezqc_all.csv')
             if os.path.exists(ptcsv):
@@ -187,15 +187,20 @@ class ProjectManager:
             else:
                 self.dt.var['ezqc_all'] = None
         elif type == 'ezqc_qctable':
-            pass
+            ptcsv = os.path.join(table_dir, 'ezqc_qctable.csv')
+            if os.path.exists(ptcsv):
+                self.dt.var['ezqc_qctable'] = pd.read_csv(ptcsv, encoding='utf-8')
+            else:
+                self.dt.var['ezqc_qctable'] = None
         elif type == 'table':
-            for key in self.dt.settings['qcmodule'].keys():
-                name = self.dt.settings['qcmodule'][key]['name']
-                ptcsv = os.path.join(table_dir, f'ezqc_{name}.csv')
-                if os.path.exists(ptcsv):
-                    self.dt.tab[name] = pd.read_csv(ptcsv, encoding='utf-8')
-                else:
-                    self.dt.tab[name] = None
+            pass
+            # for key in self.dt.settings['qcmodule'].keys():
+            #     name = self.dt.settings['qcmodule'][key]['name']
+            #     ptcsv = os.path.join(table_dir, f'ezqc_{name}.csv')
+            #     if os.path.exists(ptcsv):
+            #         self.dt.tab[name] = pd.read_csv(ptcsv, encoding='utf-8')
+            #     else:
+            #         self.dt.tab[name] = None
         
 
     def save_table(self,type=None,delete=False):
@@ -570,7 +575,7 @@ class ProjectManager:
             return
 
         self.dt.tab['ezqc_qctable'] = self.dt.var['ezqc_all'].copy()
-        dir_ratingFiles = os.path.join(self.dt.output_dir, 'ratingFiles')
+        dir_ratingFiles = os.path.join(self.dt.output_dir, 'RatingFiles')
         if not os.path.exists(dir_ratingFiles):
             log_warning(f"评分文件目录不存在: {dir_ratingFiles}")
             return 
@@ -646,201 +651,3 @@ class ProjectManager:
         self.dt.tab['ezqc_qctable'] = gen_table(data_rows)
         self.save_table('ezqc_qctable')
             
-            
-
-
-
-    # def load_ratings_(self):
-    #     """
-    #     遍历 ratingFiles 目录下的所有 JSON 文件，读取内容并合并成 pandas DataFrame
-    #     """
-    #     log_info(f"开始读取评分文件")
-    #     if self.dt.project is None:
-    #         return
-
-    #     dir_ratingFiles = os.path.join(self.dt.output_dir, 'ratingFiles')
-        
-    #     # 检查目录是否存在
-    #     if not os.path.exists(dir_ratingFiles):
-    #         log_warning(f"评分文件目录不存在: {dir_ratingFiles}")
-    #         return pd.DataFrame()
-        
-    #     # 遍历 module 目录
-    #     data_rows = []
-        
-    #     module_dirs = [d for d in os.listdir(dir_ratingFiles) 
-    #                   if os.path.isdir(os.path.join(dir_ratingFiles, d))]
-        
-    #     if not module_dirs:
-    #         log_info(f"在目录 {dir_ratingFiles} 中未找到 module 子目录")
-    #         return pd.DataFrame()
-        
-    #     for module_name in module_dirs:
-    #         module_path = os.path.join(dir_ratingFiles, module_name)
-            
-    #         # 遍历 rater 目录
-    #         rater_dirs = [d for d in os.listdir(module_path) 
-    #                      if os.path.isdir(os.path.join(module_path, d))]
-            
-    #         for rater_name in rater_dirs:
-    #             rater_path = os.path.join(module_path, rater_name)
-                
-    #             # 获取该 rater 目录下的所有 JSON 文件
-    #             json_files = glob.glob(os.path.join(rater_path, '*.json'))
-                
-    #             for json_file in json_files:
-    #                 try:
-    #                     # 解析文件名验证 module 和 rater
-    #                     filename = os.path.basename(json_file)
-                        
-    #                     # 文件名格式: module._.ezqcid._.rater._.score1._.tag1.json
-    #                     parts = filename.replace('.json', '').split('._.')
-                        
-    #                     if len(parts) >= 3:
-    #                         file_module = parts[0]
-    #                         file_rater = parts[2]
-                            
-    #                         # 验证 module 和 rater 是否与目录结构一致
-    #                         if file_module == module_name and file_rater == rater_name:
-    #                              # 将数据添加到列表中
-    #                             data_rows.append(self.load_rating_json(json_file))
-                                
-    #                             log_debug(f"成功读取文件: {json_file}")
-    #                         else:
-    #                             log_warning(f"文件 {json_file} 的 module({file_module}) 或 rater({file_rater}) 与目录结构不一致，跳过")
-    #                     else:
-    #                         log_warning(f"文件名格式不正确，跳过: {json_file}")
-                            
-    #                 except Exception as e:
-    #                     log_error(f"读取文件 {json_file} 时出错: {str(e)}")
-    #                     continue
-        
-    #     # 将所有数据合并成 DataFrame
-    #     if data_rows:
-    #         # 过滤掉空的DataFrame
-    #         valid_dfs = [df for df in data_rows if not df.empty]
-    #         if valid_dfs:
-    #             df_ezqc_qctable_orig = pd.concat(valid_dfs, ignore_index=False).sort_index()
-    #             self.gen_rating_dict(df_ezqc_qctable_orig)
-    #             table_dir = os.path.join(self.dt.output_dir, 'Table','ezqc_qctable_orig.csv')
-    #             df_ezqc_qctable_orig.to_csv(table_dir, index=False)
-    #             # 进行透视表转换,保留ezqcid列不变
-    #             df_ezqc_qctable_orig_wide = df_ezqc_qctable_orig.pivot_table(
-    #                 index='ezqcid',
-    #                 columns=['module_name', 'rater'],
-    #                 aggfunc='first'
-    #             ).reset_index()
-
-    #             new_columns = []
-    #             for col in df_ezqc_qctable_orig_wide.columns:
-    #                 if col == 'ezqcid' or (isinstance(col, tuple) and col[0] == 'ezqcid'):  # 单级列或多级列中的ezqcid
-    #                     new_columns.append('ezqcid')
-    #                 else:  # 多级列
-    #                     new_columns.append(f"{col[1]}.{col[2]}.{col[0]}")
-
-    #             df_ezqc_qctable_orig_wide.columns = new_columns
-    #             df_ezqc_qctable_orig_wide['ezqcid'] = df_ezqc_qctable_orig_wide['ezqcid'].astype(str)
-    #             table_dir = os.path.join(self.dt.output_dir, 'Table','ezqc_qctable_orig_wide.csv')
-    #             df_ezqc_qctable_orig_wide.to_csv(table_dir, index=False)
-
-    #             # 如果ezqc_all存在，则合并df_wide到ezqc_all中
-    #             if self.dt.var['ezqc_all'] is not None:
-    #                 # 基于ezqcid进行内连接,只保留df_ezqc_qctable_orig_wide中存在的ezqcid行
-    #                 df_ezqc_qctable_orig_wide = pd.merge(
-    #                     self.dt.var['ezqc_all'],
-    #                     df_ezqc_qctable_orig_wide,
-    #                     on='ezqcid',
-    #                     how='inner'
-    #                 )
-
-    #             # 删除df_ezqc_qctable_orig_wide中包含.code和.code_exe的列，将ezqcid放在第一列，让包含.score【1-n】的列，以及.tag【1-n】的列在ezqcid后面
-    #             df_ezqc_qctable_orig_wide = df_ezqc_qctable_orig_wide.drop(columns=[col for col in df_ezqc_qctable_orig_wide.columns if '.code' in col or '.code_exe' in col])
-                
-    #             score_cols = [col for col in df_ezqc_qctable_orig_wide.columns if re.search(r'\.score\d+$', col) and col != 'ezqcid']
-    #             tag_cols = [col for col in df_ezqc_qctable_orig_wide.columns if re.search(r'\.tag\d+$', col) and col != 'ezqcid']
-    #             other_cols = [col for col in df_ezqc_qctable_orig_wide.columns if col != 'ezqcid' and not re.search(r'\.score\d+$', col) and not re.search(r'\.tag\d+$', col)]
-                
-    #             new_column_order = ['ezqcid'] + score_cols + tag_cols + other_cols
-    #             df_ezqc_qctable_orig_wide = df_ezqc_qctable_orig_wide[new_column_order]
-
-    #             self.dt.tab['ezqc_qctable'] = df_ezqc_qctable_orig_wide
-    #             self.save_table('ezqc_qctable')
-    #         else:
-    #             log_warning("没有成功读取任何评分文件")
-    #             self.dt.tab['ezqc_qctable'] = pd.DataFrame()
-    #     else:
-    #         log_warning("没有成功读取任何评分文件")
-    #         self.dt.tab['ezqc_qctable_'] = pd.DataFrame()
-
-
-    # def gen_rating_dict(self, df):
-    #     """
-    #     生成评分字典，支持多评分、多标签，自动适配DataFrame的行类型
-    #     """
-    #     self.rating_dict = {}
-    #     if df is None or len(df) == 0:
-    #         return
-
-    #     # 检查DataFrame的列
-    #     if 'ezqcid' not in df.columns:
-    #         log_warning("DataFrame中没有ezqcid列，无法生成评分字典")
-    #         return
-
-    #     # 兼容DataFrame的iterrows()返回(row_index, row_series)
-    #     ezqcids = list(set(df['ezqcid'].tolist()))
-    #     for ezqcid in ezqcids:
-    #         df_ezqcid = df[df['ezqcid'] == ezqcid]
-    #         self.rating_dict[ezqcid] = {}
-    #         for _, row in df_ezqcid.iterrows():
-    #             try:
-    #                 # 从文件名中提取module_name和rater信息
-    #                 filename = row.get('filename', '')
-    #                 if filename:
-    #                     parts = filename.replace('.json', '').split('._.')
-    #                     if len(parts) >= 3:
-    #                         module_name = parts[0]
-    #                         rater = parts[2]
-    #                     else:
-    #                         module_name = 'unknown'
-    #                         rater = 'unknown'
-    #                 else:
-    #                     module_name = 'unknown'
-    #                     rater = 'unknown'
-
-    #                 # 收集所有score和tag列
-    #                 score_dict = {}
-    #                 tag_dict = {}
-                    
-    #                 for col in df.columns:
-    #                     if col.startswith('score') and col != 'ezqcid':
-    #                         value = row.get(col)
-    #                         if value is not None and value != '':
-    #                             score_dict[col] = value
-    #                     elif col.startswith('tag') and col != 'ezqcid':
-    #                         value = row.get(col)
-    #                         if value is not None and value != '':
-    #                             tag_dict[col] = value
-
-    #                 # 合并所有信息
-    #                 entry = {
-    #                     'module_name': module_name,
-    #                     'rater': rater,
-    #                 }
-    #                 entry.update(score_dict)
-    #                 entry.update(tag_dict)
-    #                 self.rating_dict[ezqcid][f"{module_name}-{rater}"] = entry
-    #             except Exception as e:
-    #                 log_warning(f"生成评分字典时出错: {e}，行内容: {row}")
-
-        
-
-
-
-
-             
-    
-
-
-
-            
-

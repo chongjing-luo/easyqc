@@ -290,6 +290,8 @@ class TableDisplay:
                 matching_indices = [k for k, v in self.dt.settings['qcmodule'].items() if v.get('name') == type]
                 index = matching_indices[0] if matching_indices else None
                 select_filter = self.dt.settings['qcmodule'][index]['select_filter'] if index is not None else None
+                log_info(f"select_filter: {select_filter}")
+                print(f"type: {type}")
                 df = self.dt.tab.get('ezqc_qctable', None)
                 if df is not None:
                     df = df.copy()

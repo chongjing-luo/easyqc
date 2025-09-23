@@ -73,10 +73,12 @@ class gui_qcpage:
             self.ezqcid_index = None
             self.watch_mode_ = False
             
-            self.check_module()
+            if not self.check_module():
+                return
             self.module = self.dt.settings['qcmodule'][self.module_index]
             self.dt.dir_module_rater = os.path.join(self.dt.output_dir, 'RatingFiles', module_name, self.module['rater'])
-            self.check_table()
+            if not self.check_table():
+                return
             self.gen_present()
 
             log_debug("保存设置")
@@ -97,21 +99,25 @@ class gui_qcpage:
     def check_table(self):
         # 检查和准备数据表
         log_debug(f"检查模块 {self.module_name} 数据")
-        if self.module_name not in self.dt.tab:
-            self.dt.tab[self.module_name] = None
-        if self.dt.tab[self.module_name] is None or (hasattr(self.dt.tab[self.module_name], 'empty') and self.dt.tab[self.module_name].empty):
-            log_debug(f"模块 {self.module_name} 数据为空，尝试从其他数据源获取")
-            self.dt.tab[self.module_name] = self.dt.tab.get('ezqc_qctable', None)
-            if self.dt.tab[self.module_name] is None:
-                self.dt.tab[self.module_name] = self.dt.var.get('ezqc_all', None)
-                log_debug("使用ezqc_all数据")
+        if self.module_name not in self.dt.tab or self.dt.tab[self.module_name] is None:
+            tmp_query = self.dt.settings['qcmodule'][self.module_index]['select_filter']
+
+            if 'ezqc_qctable' in self.dt.tab and self.dt.tab['ezqc_qctable'] is not None:
+                df = self.dt.tab['ezqc_qctable']
+            elif 'ezqc_qctable' in self.dt.var and self.dt.var['ezqc_qctable'] is not None:
+                df = self.dt.var['ezqc_qctable']
             else:
-                log_debug("使用ezqc_qctable数据")
+                df = self.dt.var['ezqc_all']
+
+            if tmp_query is not None and tmp_query != '':
+                self.dt.tab[self.module_name] = self.DataM.select_filter_sorter(df, tmp_query)
+            else:
+                self.dt.tab[self.module_name] = df
 
         if self.dt.tab[self.module_name] is None or (hasattr(self.dt.tab[self.module_name], 'empty') and self.dt.tab[self.module_name].empty):
             log_error("数据为空")
             messagebox.showerror("错误", "数据为空")
-            return
+            return False
 
     def check_module(self,module_name=None):
         try:
@@ -123,19 +129,19 @@ class gui_qcpage:
             if self.module_index is None:
                 log_error(f"找不到模块: {module_name}")
                 messagebox.showerror("错误", f"找不到模块: {module_name}")
-                return
+                return False
             
             module = self.dt.settings['qcmodule'][self.module_index]
             if module['name'] != module_name:
                 log_error(f"模块名不一致: {module['name']} != {module_name}")
                 messagebox.showerror("错误", f"模块名不一致: {module['name']} != {module_name}")
-                return
+                return False
             
             # 检查评分人设置
             if module['rater'] is None or module['rater'] == '':
                 log_error("评分人未设置")
                 messagebox.showerror("错误", "请先设置评分人")
-                return
+                return False
             
             log_debug(f"评分人: {module['rater']}")
 
@@ -147,13 +153,13 @@ class gui_qcpage:
                         if isinstance(item, dict) and (not item.get('label') or not item.get('num_')):
                             log_error(f"scores项 {key} 配置不完整: {item}")
                             messagebox.showerror("错误", "请先设置评分项")
-                            return
+                            return False 
                 elif isinstance(module['scores'], list):
                     for idx, item in enumerate(module['scores']):
                         if isinstance(item, dict) and (not item.get('label') or not item.get('num_')):
                             log_error(f"scores项 {idx} 配置不完整: {item}")
                             messagebox.showerror("错误", "请先设置评分项")
-                            return
+                            return False
                 log_debug("scores字段检查通过")
             
             # 检查tags字段
@@ -170,7 +176,7 @@ class gui_qcpage:
                         if isinstance(item, dict) and not item.get('label'):
                             log_error(f"tags项 {idx} 配置不完整: {item}")
                             messagebox.showerror("错误", "请先设置标签项")
-                            return
+                            return False
                 log_debug("tags字段检查通过")
             
             log_info("qcpage_prep执行完成")
@@ -178,7 +184,7 @@ class gui_qcpage:
         except Exception as e:
             log_exception(f"qcpage_prep执行失败: {str(e)}")
             messagebox.showerror("错误", f"QC页面准备失败: {str(e)}")
-            raise
+            raise 
 
 
     def open_qcpage_from_shell(self, project, module, rater, ezqcid):
@@ -333,7 +339,7 @@ class gui_qcpage:
             self.load_present_to_gui()
         Button(frame_buttons, text="刷新", command=refresh_df_list, style = 'TButton').place(x=0, y=35, width=120, height=30)
 
-        Button(frame_buttons, text="过滤和筛选", command=lambda: self._call_table_method('filter_sorter', module_name),
+        Button(frame_buttons, text="过滤和筛选", command=lambda: self.TablD.filter_sorter(module['name']),
                style = 'TButton').place(x=0, y=70, width=120, height=30)
         Button(frame_buttons, text="Previous", command=lambda: self.navigate_subject(-1),
                style="TButton").place(x=0, y=105, width=120, height=45)
