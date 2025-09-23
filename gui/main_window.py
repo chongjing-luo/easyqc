@@ -380,18 +380,17 @@ class EasyQCApp:
         header.pack(fill="x", pady=2)
 
         # 左侧按钮
-
         toggle_btn = ttk.Button(header, text="展开▼", width=6)
-        toggle_btn.place(x=2, y=2, width=60, height=26)
+        toggle_btn.place(x=0, y=2, width=80, height=26)
 
         # 标题（居中）
         title = f"{qcidx} - {module['name']} - {module['label']}"
         title_lbl = ttk.Label(header, text=title, font=("Arial", 12, "bold"))
-        title_lbl.place(x=68, y=2, width=370, height=26)
+        title_lbl.place(x=85, y=2, width=360, height=26)
 
         # 右侧按钮
         startqc_btn = ttk.Button(header, text="开始质控", width=8, command=lambda: self.DialM.start_qc(module))
-        startqc_btn.place(x=460, y=2, width=68, height=26)
+        startqc_btn.place(x=450, y=2, width=80, height=26)
 
         # 创建外层容器frame,设置固定高度
         # 获取tag的数量
