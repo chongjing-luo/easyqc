@@ -763,12 +763,22 @@ class gui_qcpage:
             code = code.replace(f"${{{var_name}}}", str(var_value))   # shell脚本风格
             code = code.replace(f"{{{var_name}}}", str(var_value)) 
 
-        if code.startswith('MULTILINE'):
+        if code.startswith('MULTICMD'):
             code_exe = {}
-            code = code.replace('MULTILINE', '', 1).strip()
+            code = code.replace('MULTICMD', '', 1).strip()
             commands = [cmd.strip() for cmd in code.split(';|') if cmd.strip()]
             code_exe = {i: cmd for i, cmd in enumerate(commands)}
 
+        elif 'MULTICMD' in code:
+            code_exe = {}
+            # 将code根据MULTICMD分成两部分
+            code_parts = code.split('MULTICMD', 1)
+            code_pre = code_parts[0].strip()
+            if not code_pre.endswith(';'):
+                code_pre += ';'
+            code_pos = code_parts[1].strip() if len(code_parts) > 1 else ''
+            commands = [cmd.strip() for cmd in code_pos.split(';|') if cmd.strip()]
+            code_exe = {i: code_pre + cmd for i, cmd in enumerate(commands)}
         else:
             code_exe = {0: code}
 
