@@ -359,7 +359,7 @@ class DialogMain:
         """
         path = self.app.path_entry.get()
         if path:
-            self.dt.var['ezqc_new'] = self.DataM.get_list(path)
+            self.dt.var['ezqc_new'] = self.DataM.get_list(path) 
             self.set_varname()
     
     def set_varname(self):
@@ -407,7 +407,8 @@ class DialogMain:
         path = self.app.path_entry2.get()
         if path:
             self.dt.var['ezqc_new'] = self.DataM.read_list(path)
-            self.set_varname()
+            if path.endswith('.list') or path.endswith('.txt'):  
+                self.set_varname()
 
     def extract_words(self):
         """

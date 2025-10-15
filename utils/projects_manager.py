@@ -431,11 +431,11 @@ class ProjectManager:
         """导入模块"""
         with open(path, 'r', encoding='utf-8') as f:
             module = json.load(f)
-
+        
         if check and not self.check_module(module):
             log_error("模块文件不合法", "ProjectManager")
             return
-
+        
         def change_module_name():
             module_name_ = input(f"请输入模块名称，当前模块名称: {module_name},退出输入q(): ")
             if module_name_ == 'q()':
@@ -467,6 +467,9 @@ class ProjectManager:
             log_error(f"模块 '{module_name}' 不存在", "ProjectManager")
             return
 
+        # 将module中的rater字段和ezqcid字段设置为None
+        module['rater'] = None
+        module['ezqcid'] = None
         dir = os.path.dirname(path)
         if not os.path.exists(dir):
             os.makedirs(dir, exist_ok=True)
