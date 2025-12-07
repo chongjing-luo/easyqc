@@ -192,6 +192,7 @@ class gui_qcpage:
             self.module = module
             self.rater = rater
             self.ezqcid = ezqcid
+            self.dt.dir_module_rater = os.path.join(self.dt.output_dir, 'RatingFiles', module, rater)
             
             print(f"project: {project}, module: {module}, rater: {rater}, ezqcid: {ezqcid}")
             log_info(f"self.module_index: {self.module_index}")
@@ -208,7 +209,7 @@ class gui_qcpage:
             
             # 加载评分数据
             log_info("开始加载评分数据")
-            self.load_rating(ezqcid=ezqcid, module=module_config)
+            self.load_rating(ezqcid=ezqcid, module=module_config, rater=rater)
             log_info("评分数据加载完成")
             
             # 填充列表
@@ -249,7 +250,7 @@ class gui_qcpage:
 
             self.gui_qcpage.geometry('510x500')
             self.gui_qcpage.resizable(True, True)
-            self.gui_qcpage.grab_set()  # 设置为模态窗口
+            # self.gui_qcpage.grab_set()  # 设置为模态窗口
             
             # 设置窗口标题
             module_name = module['name']
@@ -593,7 +594,7 @@ class gui_qcpage:
             log_exception(f"保存评分失败: {str(e)}")
             messagebox.showerror("错误", f"保存评分失败: {str(e)}")
 
-    def load_rating(self, ezqcid=None, module=None):
+    def load_rating(self, ezqcid=None, module=None, rater=None):
         """
         加载评分
         """
@@ -603,8 +604,12 @@ class gui_qcpage:
                 ezqcid = self.ezqcid
             if module is None:
                 module = self.dt.settings['qcmodule'][self.module_index]
+            if rater is None:
+                rater = module['rater']
             # 构建文件名前缀
-            file_prefix = f"{module['name']}._.{ezqcid}._.{module['rater']}"
+            file_prefix = f"{module['name']}._.{ezqcid}._.{rater}"
+            print(f"file_prefix: {file_prefix}")
+            print(f"self.dt.dir_module_rater: {self.dt.dir_module_rater}")
             rating_files = glob.glob(os.path.join(self.dt.dir_module_rater, f"{file_prefix}*"))
             
             if len(rating_files) == 1:
