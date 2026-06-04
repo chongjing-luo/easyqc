@@ -19,9 +19,6 @@ seaborn>=0.11.0
 # 科学计算依赖
 scikit-learn>=1.0.0
 
-# 数据库查询依赖
-pandasql>=0.7.3
-
 # 文件处理依赖
 # pathlib  # 路径处理（Python标准库）
 # json     # JSON处理（Python标准库）

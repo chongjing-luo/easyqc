@@ -1,0 +1,1244 @@
+{
+  "version": "1.0.0",
+  "gitCommitHash": "1faecee9fa3d3ba990bcffdb2b35a160fdc9c5ff",
+  "generatedAt": "2026-06-01T13:05:55.789Z",
+  "files": {
+    "easyqc.py": {
+      "filePath": "easyqc.py",
+      "contentHash": "421f54a7cf35dd955e0192f5f901ac40b32155ae7dd748c1d7fdccff8b960fe5",
+      "functions": [
+        {
+          "name": "parse_arguments",
+          "params": [],
+          "exported": true,
+          "lineCount": 27
+        },
+        {
+          "name": "open_qcpage_from_shell",
+          "params": [
+            "project",
+            "module",
+            "rater",
+            "ezqcid"
+          ],
+          "exported": true,
+          "lineCount": 84
+        },
+        {
+          "name": "main",
+          "params": [],
+          "exported": true,
+          "lineCount": 59
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "argparse",
+          "specifiers": [
+            "argparse"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "platform",
+          "specifiers": [
+            "platform"
+          ]
+        },
+        {
+          "source": "utils.logger",
+          "specifiers": [
+            "log_info",
+            "log_error",
+            "log_warning",
+            "log_exception",
+            "log_debug",
+            "LogContext",
+            "log_function",
+            "clear_old_logs"
+          ]
+        }
+      ],
+      "exports": [
+        "parse_arguments",
+        "open_qcpage_from_shell",
+        "main"
+      ],
+      "totalLines": 201,
+      "hasStructuralAnalysis": true
+    },
+    "gui/main_window.py": {
+      "filePath": "gui/main_window.py",
+      "contentHash": "b49c8f6c998058b62ad14825c749afa95e342215b00b8e1c023d55d46298cbf1",
+      "functions": [],
+      "classes": [
+        {
+          "name": "EasyQCApp",
+          "methods": [
+            "__init__",
+            "setup_global_styles",
+            "setup_window",
+            "project_manager_widget",
+            "constant_widget",
+            "variable_widget",
+            "set_variable",
+            "create_collapsible_card",
+            "module_widget",
+            "load_project_to_gui",
+            "load_module_to_gui",
+            "quit_app"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 650
+        }
+      ],
+      "imports": [
+        {
+          "source": "tkinter",
+          "specifiers": [
+            "tk"
+          ]
+        },
+        {
+          "source": "tkinter",
+          "specifiers": [
+            "ttk",
+            "scrolledtext"
+          ]
+        },
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "platform",
+          "specifiers": [
+            "platform"
+          ]
+        },
+        {
+          "source": "utils.logger",
+          "specifiers": [
+            "log_info",
+            "log_error",
+            "log_warning",
+            "log_exception",
+            "log_debug",
+            "LogContext",
+            "log_function"
+          ]
+        },
+        {
+          "source": "utils.file_utils",
+          "specifiers": [
+            "FileUtils"
+          ]
+        },
+        {
+          "source": "utils.projects_manager",
+          "specifiers": [
+            "ProjectManager"
+          ]
+        },
+        {
+          "source": "utils.data_manager",
+          "specifiers": [
+            "DataManager"
+          ]
+        },
+        {
+          "source": "gui.dialog_main",
+          "specifiers": [
+            "DialogMain"
+          ]
+        },
+        {
+          "source": "gui.gui_table",
+          "specifiers": [
+            "TableDisplay"
+          ]
+        }
+      ],
+      "exports": [
+        "EasyQCApp"
+      ],
+      "totalLines": 679,
+      "hasStructuralAnalysis": true
+    },
+    "gui/dialog_main.py": {
+      "filePath": "gui/dialog_main.py",
+      "contentHash": "4905b58bdeca247174db7e698716f61a0ad8cbfe5fd478ab8c5e958a328f5ed9",
+      "functions": [],
+      "classes": [
+        {
+          "name": "DialogMain",
+          "methods": [
+            "__init__",
+            "browse_path",
+            "browse_file",
+            "import_json",
+            "export_json",
+            "create_project",
+            "import_project",
+            "remove_project",
+            "add_constant",
+            "refresh_constant_table",
+            "edit_constant",
+            "extract_path",
+            "set_varname",
+            "extract_file",
+            "extract_words",
+            "merge_newdata",
+            "new_merge",
+            "show_all_variable",
+            "add_module",
+            "change_module_index",
+            "import_module",
+            "export_module",
+            "manage_module",
+            "start_qc",
+            "add_score",
+            "del_score",
+            "validate_score",
+            "add_tag",
+            "del_tag"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 909
+        }
+      ],
+      "imports": [
+        {
+          "source": "tkinter",
+          "specifiers": [
+            "tk"
+          ]
+        },
+        {
+          "source": "tkinter",
+          "specifiers": [
+            "N",
+            "ttk",
+            "messagebox",
+            "filedialog",
+            "scrolledtext"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "pandas",
+          "specifiers": [
+            "pd"
+          ]
+        },
+        {
+          "source": "re",
+          "specifiers": [
+            "re"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "utils.logger",
+          "specifiers": [
+            "log_info",
+            "log_error",
+            "log_warning",
+            "log_exception",
+            "log_debug",
+            "LogContext",
+            "log_function"
+          ]
+        },
+        {
+          "source": "utils.data_manager",
+          "specifiers": [
+            "DataManager"
+          ]
+        },
+        {
+          "source": "gui.gui_table",
+          "specifiers": [
+            "TableDisplay"
+          ]
+        },
+        {
+          "source": "gui.gui_qcpage",
+          "specifiers": [
+            "gui_qcpage"
+          ]
+        }
+      ],
+      "exports": [
+        "DialogMain"
+      ],
+      "totalLines": 939,
+      "hasStructuralAnalysis": true
+    },
+    "gui/gui_qcpage.py": {
+      "filePath": "gui/gui_qcpage.py",
+      "contentHash": "a0ef49d1a8865d38d169f177720c1856985a9fe13e6f80c239c88580337d929a",
+      "functions": [],
+      "classes": [
+        {
+          "name": "gui_qcpage",
+          "methods": [
+            "__init__",
+            "__del__",
+            "_call_table_method",
+            "open_qcpage_from_main",
+            "check_table",
+            "check_module",
+            "open_qcpage_from_shell",
+            "qcpage_widgets",
+            "load_present_to_gui",
+            "populate_listbox",
+            "select_listbox_ezqcid",
+            "navigate_subject",
+            "load_keyboard",
+            "save_rating",
+            "load_rating",
+            "update_listbox_row",
+            "init_present",
+            "gen_present",
+            "open_image",
+            "gen_code",
+            "exe_code",
+            "close_current_process"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 839
+        }
+      ],
+      "imports": [
+        {
+          "source": "codecs",
+          "specifiers": [
+            "codecs"
+          ]
+        },
+        {
+          "source": "math",
+          "specifiers": [
+            "log"
+          ]
+        },
+        {
+          "source": "tkinter",
+          "specifiers": [
+            "tk"
+          ]
+        },
+        {
+          "source": "tkinter",
+          "specifiers": [
+            "ttk"
+          ]
+        },
+        {
+          "source": "tkinter.ttk",
+          "specifiers": [
+            "Button",
+            "Label",
+            "Treeview",
+            "Checkbutton",
+            "Radiobutton"
+          ]
+        },
+        {
+          "source": "tkinter",
+          "specifiers": [
+            "StringVar",
+            "BooleanVar",
+            "Scrollbar",
+            "Menu"
+          ]
+        },
+        {
+          "source": "tkinter",
+          "specifiers": [
+            "messagebox"
+          ]
+        },
+        {
+          "source": "subprocess",
+          "specifiers": [
+            "subprocess"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "glob",
+          "specifiers": [
+            "glob"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "platform",
+          "specifiers": [
+            "platform"
+          ]
+        },
+        {
+          "source": "datetime",
+          "specifiers": [
+            "datetime"
+          ]
+        },
+        {
+          "source": "utils.logger",
+          "specifiers": [
+            "log_info",
+            "log_error",
+            "log_warning",
+            "log_exception",
+            "log_debug",
+            "LogContext",
+            "log_function"
+          ]
+        },
+        {
+          "source": "utils.file_utils",
+          "specifiers": [
+            "FileUtils"
+          ]
+        },
+        {
+          "source": "utils.projects_manager",
+          "specifiers": [
+            "ProjectManager"
+          ]
+        },
+        {
+          "source": "utils.data_manager",
+          "specifiers": [
+            "DataManager"
+          ]
+        },
+        {
+          "source": "utils.qcpage",
+          "specifiers": [
+            "qcpage"
+          ]
+        }
+      ],
+      "exports": [
+        "gui_qcpage"
+      ],
+      "totalLines": 869,
+      "hasStructuralAnalysis": true
+    },
+    "gui/gui_table.py": {
+      "filePath": "gui/gui_table.py",
+      "contentHash": "f929a4047c505c59d0077c514f0a27a66ee3337e5b119206d092430f3df2a42e",
+      "functions": [],
+      "classes": [
+        {
+          "name": "TableDisplay",
+          "methods": [
+            "__init__",
+            "show_df",
+            "show_right_menu",
+            "open_gui",
+            "open_image_from_right_menu",
+            "filter_sorter"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 411
+        }
+      ],
+      "imports": [
+        {
+          "source": "locale",
+          "specifiers": [
+            "D_FMT"
+          ]
+        },
+        {
+          "source": "tkinter",
+          "specifiers": [
+            "tk"
+          ]
+        },
+        {
+          "source": "tkinter",
+          "specifiers": [
+            "ttk",
+            "messagebox",
+            "scrolledtext"
+          ]
+        },
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "platform",
+          "specifiers": [
+            "platform"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "utils.logger",
+          "specifiers": [
+            "log_info",
+            "log_error",
+            "log_warning",
+            "log_exception",
+            "log_debug",
+            "LogContext",
+            "log_function"
+          ]
+        },
+        {
+          "source": "pandas",
+          "specifiers": [
+            "pd"
+          ]
+        },
+        {
+          "source": "utils.projects_manager",
+          "specifiers": [
+            "ProjectManager"
+          ]
+        },
+        {
+          "source": "utils.data_manager",
+          "specifiers": [
+            "DataManager"
+          ]
+        }
+      ],
+      "exports": [
+        "TableDisplay"
+      ],
+      "totalLines": 440,
+      "hasStructuralAnalysis": true
+    },
+    "gui/__init__.py": {
+      "filePath": "gui/__init__.py",
+      "contentHash": "843030c5bd2ca3eea7aa1db0d2a474109c177695fdfa0ebfac1518fb81bfdcb1",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 9,
+      "hasStructuralAnalysis": true
+    },
+    "utils/projects_manager.py": {
+      "filePath": "utils/projects_manager.py",
+      "contentHash": "1e19cc78e7c8ce49d5a3bd056593ce22c008ca836b528830ae92d723449b2131",
+      "functions": [],
+      "classes": [
+        {
+          "name": "ProjectManager",
+          "methods": [
+            "__init__",
+            "init_projects",
+            "save_projects_info",
+            "create_project",
+            "new_settings",
+            "change_project",
+            "load_project",
+            "load_settings",
+            "load_table",
+            "save_table",
+            "save_settings",
+            "rm_project",
+            "modify_qcmodule",
+            "add_qcmodule",
+            "check_module",
+            "import_module",
+            "export_module",
+            "add_key",
+            "load_rating_json",
+            "load_ratings"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 688
+        }
+      ],
+      "imports": [
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "re",
+          "specifiers": [
+            "re"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "shutil",
+          "specifiers": [
+            "shutil"
+          ]
+        },
+        {
+          "source": "platform",
+          "specifiers": [
+            "platform"
+          ]
+        },
+        {
+          "source": "glob",
+          "specifiers": [
+            "glob"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "tkinter",
+          "specifiers": [
+            "messagebox"
+          ]
+        },
+        {
+          "source": "utils.logger",
+          "specifiers": [
+            "log_info",
+            "log_error",
+            "log_warning",
+            "log_exception",
+            "log_debug",
+            "LogContext",
+            "log_function"
+          ]
+        },
+        {
+          "source": "pandas",
+          "specifiers": [
+            "pd"
+          ]
+        }
+      ],
+      "exports": [
+        "ProjectManager"
+      ],
+      "totalLines": 703,
+      "hasStructuralAnalysis": true
+    },
+    "utils/data_manager.py": {
+      "filePath": "utils/data_manager.py",
+      "contentHash": "4ef9d6ec671808ad8877f0fc24df12ecfbc993a1217434ef55c5dae293182e23",
+      "functions": [],
+      "classes": [
+        {
+          "name": "DataManager",
+          "methods": [
+            "__init__",
+            "get_list",
+            "read_list",
+            "extract_words_as_df",
+            "set_varname_batch",
+            "select_filter_sorter"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 105
+        }
+      ],
+      "imports": [
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "threading",
+          "specifiers": [
+            "threading"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "typing",
+          "specifiers": [
+            "Dict",
+            "List",
+            "Callable",
+            "Optional"
+          ]
+        },
+        {
+          "source": "pandas",
+          "specifiers": [
+            "pd"
+          ]
+        },
+        {
+          "source": "re",
+          "specifiers": [
+            "re"
+          ]
+        },
+        {
+          "source": "pandasql",
+          "specifiers": [
+            "sqldf"
+          ]
+        },
+        {
+          "source": "utils.logger",
+          "specifiers": [
+            "log_info",
+            "log_error",
+            "log_warning",
+            "log_exception",
+            "log_debug",
+            "LogContext",
+            "log_function"
+          ]
+        },
+        {
+          "source": "pandasql",
+          "specifiers": [
+            "sqldf"
+          ]
+        }
+      ],
+      "exports": [
+        "DataManager"
+      ],
+      "totalLines": 135,
+      "hasStructuralAnalysis": true
+    },
+    "utils/logger.py": {
+      "filePath": "utils/logger.py",
+      "contentHash": "f6b7f38ef32119d54b20089d206613ee1012728294cf77c519bf6ac84ceaec5f",
+      "functions": [
+        {
+          "name": "log_debug",
+          "params": [
+            "message",
+            "module"
+          ],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "log_info",
+          "params": [
+            "message",
+            "module"
+          ],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "log_warning",
+          "params": [
+            "message",
+            "module",
+            "show_popup"
+          ],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "log_error",
+          "params": [
+            "message",
+            "module",
+            "show_popup"
+          ],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "log_critical",
+          "params": [
+            "message",
+            "module",
+            "show_popup"
+          ],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "log_exception",
+          "params": [
+            "message",
+            "module",
+            "show_popup"
+          ],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "show_success_message",
+          "params": [
+            "message",
+            "title"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "show_error_message",
+          "params": [
+            "message",
+            "title"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "show_warning_message",
+          "params": [
+            "message",
+            "title"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "clear_old_logs",
+          "params": [
+            "days"
+          ],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "log_function",
+          "params": [
+            "module"
+          ],
+          "exported": true,
+          "lineCount": 15
+        }
+      ],
+      "classes": [
+        {
+          "name": "EasyQCLogger",
+          "methods": [
+            "__new__",
+            "__init__",
+            "debug",
+            "info",
+            "warning",
+            "error",
+            "critical",
+            "exception",
+            "_log",
+            "show_error_popup",
+            "show_info_popup",
+            "show_warning_popup",
+            "log_function_call",
+            "log_function_result",
+            "log_file_operation",
+            "get_log_file_path",
+            "clear_old_logs"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 207
+        },
+        {
+          "name": "LogContext",
+          "methods": [
+            "__init__",
+            "__enter__",
+            "__exit__"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 20
+        }
+      ],
+      "imports": [
+        {
+          "source": "logging",
+          "specifiers": [
+            "logging"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "traceback",
+          "specifiers": [
+            "traceback"
+          ]
+        },
+        {
+          "source": "datetime",
+          "specifiers": [
+            "datetime"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "typing",
+          "specifiers": [
+            "Optional",
+            "Any"
+          ]
+        },
+        {
+          "source": "tkinter",
+          "specifiers": [
+            "tk"
+          ]
+        },
+        {
+          "source": "tkinter",
+          "specifiers": [
+            "messagebox"
+          ]
+        }
+      ],
+      "exports": [
+        "EasyQCLogger",
+        "log_debug",
+        "log_info",
+        "log_warning",
+        "log_error",
+        "log_critical",
+        "log_exception",
+        "show_success_message",
+        "show_error_message",
+        "show_warning_message",
+        "clear_old_logs",
+        "log_function",
+        "LogContext"
+      ],
+      "totalLines": 312,
+      "hasStructuralAnalysis": true
+    },
+    "utils/qcpage.py": {
+      "filePath": "utils/qcpage.py",
+      "contentHash": "d247ae098bb243a5856ba032b1f250e053f771bd5ded7ffc853b51f1265be7ad",
+      "functions": [],
+      "classes": [
+        {
+          "name": "qcpage",
+          "methods": [
+            "__init__",
+            "refresh_df_list"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 10
+        }
+      ],
+      "imports": [
+        {
+          "source": "utils.data_manager",
+          "specifiers": [
+            "DataManager"
+          ]
+        }
+      ],
+      "exports": [
+        "qcpage"
+      ],
+      "totalLines": 16,
+      "hasStructuralAnalysis": true
+    },
+    "utils/file_utils.py": {
+      "filePath": "utils/file_utils.py",
+      "contentHash": "58173fa8c41358bf2ee36622ab2663815acec3b3bb6732981ab8d0770fb40cf7",
+      "functions": [],
+      "classes": [
+        {
+          "name": "FileUtils",
+          "methods": [
+            "__init__",
+            "read_file",
+            "copy_file"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 21
+        }
+      ],
+      "imports": [
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "pickle",
+          "specifiers": [
+            "pickle"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "typing",
+          "specifiers": [
+            "Dict",
+            "Any",
+            "Optional"
+          ]
+        }
+      ],
+      "exports": [
+        "FileUtils"
+      ],
+      "totalLines": 35,
+      "hasStructuralAnalysis": true
+    },
+    "utils/__init__.py": {
+      "filePath": "utils/__init__.py",
+      "contentHash": "713b9ee9d7a41cdffbb6b80b10902110dd9193c78a75320e62d92acad66f8a85",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 9,
+      "hasStructuralAnalysis": true
+    },
+    "README.md": {
+      "filePath": "README.md",
+      "contentHash": "bd551dc2185d59dc6c68577247015c6f0d6a9c2a4b9e1111234112fedfdf4b05",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 185,
+      "hasStructuralAnalysis": true
+    },
+    "projects.json": {
+      "filePath": "projects.json",
+      "contentHash": "f2e73200ee634780786c6e226f94f976892da4204acd255a39ed87e6c9710713",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 10,
+      "hasStructuralAnalysis": true
+    },
+    "requirements.txt": {
+      "filePath": "requirements.txt",
+      "contentHash": "3bcfba51e018a542485e66a70ee1bf1a0338fe8c1ad7f45b9ece1f25314fac18",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 36,
+      "hasStructuralAnalysis": false
+    },
+    "setup.sh": {
+      "filePath": "setup.sh",
+      "contentHash": "01d6e58d151d2b32732d917a27b46515bd088e960357fd2ed02cf0cc160a8ebb",
+      "functions": [
+        {
+          "name": "check_environment",
+          "params": [],
+          "exported": false,
+          "lineCount": 42
+        },
+        {
+          "name": "check_python",
+          "params": [],
+          "exported": false,
+          "lineCount": 21
+        },
+        {
+          "name": "install_python",
+          "params": [],
+          "exported": false,
+          "lineCount": 28
+        },
+        {
+          "name": "create_venv",
+          "params": [],
+          "exported": false,
+          "lineCount": 31
+        },
+        {
+          "name": "install_dependencies",
+          "params": [],
+          "exported": false,
+          "lineCount": 31
+        },
+        {
+          "name": "verify_installation",
+          "params": [],
+          "exported": false,
+          "lineCount": 32
+        },
+        {
+          "name": "create_start_script",
+          "params": [],
+          "exported": false,
+          "lineCount": 31
+        },
+        {
+          "name": "show_usage",
+          "params": [],
+          "exported": false,
+          "lineCount": 25
+        },
+        {
+          "name": "main",
+          "params": [],
+          "exported": false,
+          "lineCount": 50
+        }
+      ],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 343,
+      "hasStructuralAnalysis": true
+    },
+    "start.sh": {
+      "filePath": "start.sh",
+      "contentHash": "5e2b322958f51c301f6f9f21231f7a9d9912ffae5ba4f34b23bf3c226183c172",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 14,
+      "hasStructuralAnalysis": true
+    }
+  }
+}

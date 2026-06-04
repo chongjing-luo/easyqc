@@ -7,7 +7,6 @@ EasyQC 主启动程序
 """
 
 import sys
-import os
 import argparse
 from pathlib import Path
 
@@ -55,58 +54,52 @@ def open_qcpage_from_shell(project, module, rater, ezqcid):
     """
     从命令行直接打开QC页面
     """
+    cli_root = None
     try:
         log_info(f"开始从命令行打开QC页面: project={project}, module={module}, rater={rater}, ezqcid={ezqcid}")
         
         # 导入必要的模块
+        import tkinter as tk
+        from core.cli_service import QCPageLaunchError, resolve_qcpage_launch
         from utils.projects_manager import ProjectManager
         from gui.gui_qcpage import gui_qcpage
-        import tkinter as tk
+        from gui.state_adapter import LegacyGUIStateAdapter
+        from gui.qc_page import QCPageRuntimeContext
+        launch_context = resolve_qcpage_launch(
+            project,
+            module,
+            rater,
+            ezqcid,
+            project_root / "projects.json",
+        )
         
         # 初始化项目管理器
         pm = ProjectManager()
         pm.init_projects()
         
-        # 加载指定项目
-        if project not in pm.dt.projects:
-            log_error(f"项目 '{project}' 不存在")
-            print(f"错误：项目 '{project}' 不存在")
-            print(f"可用项目: {list(pm.dt.projects.keys())}")
-            return False
-            
+        # 加载指定项目（兼容旧版 QCPage 仍需要 DataContainer）
         pm.load_project(project, fresh_gui=False)
+        gui_state = LegacyGUIStateAdapter(pm)
         log_info(f"成功加载项目: {project}")
-        
-        # 检查模块是否存在
-        module_found = False
-        module_index = None
-        for idx, mod in pm.dt.settings['qcmodule'].items():
-            if mod.get('name') == module:
-                module_found = True
-                module_index = idx
-                break
-                
-        if not module_found:
-            log_error(f"模块 '{module}' 在项目 '{project}' 中不存在")
-            print(f"错误：模块 '{module}' 在项目 '{project}' 中不存在")
-            available_modules = [mod.get('name') for mod in pm.dt.settings['qcmodule'].values()]
-            print(f"可用模块: {available_modules}")
-            return False
-            
-        log_info(f"找到模块: {module} (索引: {module_index})")
+        log_info(f"找到模块: {module} (索引: {launch_context.module_index})")
+        gui_state.update_module_field(launch_context.module_index, "rater", rater)
+        gui_state.update_module_field(launch_context.module_index, "ezqcid", ezqcid)
+
+        # CLI 模式没有主窗口；显式创建并隐藏 root，避免 Toplevel 触发 tkinter 隐式空白根窗口。
+        cli_root = tk.Tk()
+        cli_root.withdraw()
         
         # 创建QC页面实例
         qcpage_instance = gui_qcpage()
-        qcpage_instance.dt = pm.dt
-        qcpage_instance.module_index = module_index
+        qcpage_instance.gui_state = gui_state
+        qcpage_instance.runtime_context = QCPageRuntimeContext.from_gui_state(gui_state)
+        qcpage_instance.module_index = launch_context.module_index
         qcpage_instance.ezqcid = ezqcid
         qcpage_instance.module_name = module
         qcpage_instance.rater = rater
         
         # 设置输出目录
-        qcpage_instance.dt.dir_module_rater = os.path.join(
-            qcpage_instance.dt.output_dir, 'RatingFiles', module, rater
-        )
+        qcpage_instance.runtime_context.set_module_rater_dir(launch_context.module_rater_dir)
         
         # 调用open_qcpage_from_shell方法
         log_info("开始调用open_qcpage_from_shell方法")
@@ -116,6 +109,7 @@ def open_qcpage_from_shell(project, module, rater, ezqcid):
         if not success:
             log_error("QC页面创建失败，停止执行")
             print("错误：QC页面创建失败")
+            cli_root.destroy()
             return False
         
         log_info("QC页面创建完成，启动GUI主循环")
@@ -124,14 +118,58 @@ def open_qcpage_from_shell(project, module, rater, ezqcid):
         if not hasattr(qcpage_instance, 'gui_qcpage') or qcpage_instance.gui_qcpage is None:
             log_error("gui_qcpage未正确创建")
             print("错误：gui_qcpage未正确创建")
+            cli_root.destroy()
             return False
+
+        def close_cli_qcpage():
+            try:
+                qcpage_instance.close_current_process()
+            except Exception:
+                pass
+            try:
+                if qcpage_instance.gui_qcpage.winfo_exists():
+                    qcpage_instance.gui_qcpage.destroy()
+            except tk.TclError:
+                pass
+            try:
+                if cli_root is not None and cli_root.winfo_exists():
+                    cli_root.destroy()
+            except tk.TclError:
+                pass
+
+        def destroy_cli_root(event):
+            if event.widget is not qcpage_instance.gui_qcpage:
+                return
+            try:
+                if cli_root is not None and cli_root.winfo_exists():
+                    cli_root.after_idle(close_cli_qcpage)
+            except tk.TclError:
+                pass
+
+        qcpage_instance.gui_qcpage.protocol("WM_DELETE_WINDOW", close_cli_qcpage)
+        qcpage_instance.gui_qcpage.bind("<Destroy>", destroy_cli_root, add="+")
+        qcpage_instance.gui_qcpage.lift()
             
         log_info("开始启动GUI主循环")
-        qcpage_instance.gui_qcpage.mainloop()
+        cli_root.mainloop()
         
         return True
         
+    except QCPageLaunchError as e:
+        if cli_root is not None:
+            try:
+                cli_root.destroy()
+            except Exception:
+                pass
+        log_error(str(e))
+        print(f"错误：{e}")
+        return False
     except Exception as e:
+        if cli_root is not None:
+            try:
+                cli_root.destroy()
+            except Exception:
+                pass
         log_exception(f"从命令行打开QC页面时发生错误: {e}")
         print(f"从命令行打开QC页面时发生错误：{e}")
         return False
@@ -166,26 +204,18 @@ def main():
         log_info("开始启动EasyQC应用程序")
         
         # 导入GUI模块
-        from gui.main_window import EasyQCApp
-        import tkinter as tk
+        from gui.app import EasyQCApp
         
         log_info("成功导入GUI模块")
         clear_old_logs()
         
-        # 创建主窗口
-        root = tk.Tk()
-        log_info("创建主窗口成功")
-        
         # 创建应用程序实例
-        app = EasyQCApp(root)
+        app = EasyQCApp()
         log_info("创建应用程序实例成功")
-        
-        # 设置窗口关闭事件
-        root.protocol("WM_DELETE_WINDOW", app.quit_app)
         
         # 启动主循环
         log_info("启动GUI主循环")
-        root.mainloop()
+        app.run()
         
     except ImportError as e:
         log_error(f"无法导入必要的模块: {e}")

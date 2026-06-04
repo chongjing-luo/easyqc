@@ -6,6 +6,7 @@
 # 使用方法：
 #   ./setup.sh          # 安装虚拟环境（如果不存在）
 #   ./setup.sh -force   # 强制重新安装环境
+#   ./setup.sh -check   # 只检查当前环境和启动脚本，不安装依赖
 # 
 # Author: chongjing.luo@mail.bnu.edu.cn
 # Date: 2024.09-04
@@ -21,10 +22,31 @@ ENV_DIR=".venv"
 
 # 解析命令行参数
 FORCE_INSTALL=false
-if [[ "$1" == "-force" ]]; then
-    FORCE_INSTALL=true
-    echo "强制重新安装模式"
-fi
+CHECK_ONLY=false
+for arg in "$@"; do
+    case "$arg" in
+        -force|--force)
+            FORCE_INSTALL=true
+            echo "强制重新安装模式"
+            ;;
+        -check|--check)
+            CHECK_ONLY=true
+            echo "检查模式：只验证当前环境，不安装依赖"
+            ;;
+        -h|--help)
+            echo "使用方法："
+            echo "  ./setup.sh          # 安装虚拟环境（如果不存在）"
+            echo "  ./setup.sh -force   # 强制重新安装环境"
+            echo "  ./setup.sh -check   # 只检查当前环境和启动脚本"
+            exit 0
+            ;;
+        *)
+            echo "错误：未知参数 $arg"
+            echo "使用 ./setup.sh --help 查看帮助"
+            exit 1
+            ;;
+    esac
+done
 
 # 检查操作系统类型
 OS_TYPE=$(uname)
@@ -62,6 +84,27 @@ check_environment() {
         echo "环境中的Python不可用，需要重新创建"
         return 1
     fi
+
+    # 检查激活后的 Python 是否确实来自当前 easyqc/.venv，避免复制项目后仍指向旧路径
+    EXPECTED_PREFIX=$(cd "$VENV_PATH" && pwd)
+    ACTIVE_PREFIX=$(python -c "import sys; print(sys.prefix)" 2>/dev/null)
+    if [ "$(readlink -f "$ACTIVE_PREFIX")" != "$(readlink -f "$EXPECTED_PREFIX")" ]; then
+        echo "环境路径不匹配，需要重新创建"
+        echo "  期望: $EXPECTED_PREFIX"
+        echo "  实际: $ACTIVE_PREFIX"
+        return 1
+    fi
+
+    # 检查 pip 入口脚本，避免 shebang 仍指向复制前的旧 .venv
+    if [ -f "$VENV_PATH/bin/pip" ]; then
+        PIP_SHEBANG=$(head -n 1 "$VENV_PATH/bin/pip")
+        if [[ "$PIP_SHEBANG" == '#!'*'.venv'* ]] && [[ "$PIP_SHEBANG" != "#!$EXPECTED_PREFIX/"* ]]; then
+            echo "pip 入口脚本路径不匹配，需要重新创建"
+            echo "  期望前缀: #!$EXPECTED_PREFIX/"
+            echo "  实际: $PIP_SHEBANG"
+            return 1
+        fi
+    fi
     
     # 检查关键依赖是否已安装
     echo "检查关键依赖..."
@@ -75,16 +118,21 @@ check_environment() {
 }
 
 # 函数：检查Python版本
+python_version_at_least_310() {
+    "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1
+}
+
 check_python() {
     echo "检查Python环境..."
     
     # 检查Python 3.10是否可用
-    if command -v python3.10 &> /dev/null; then
+    if command -v python3.10 &> /dev/null && python_version_at_least_310 python3.10; then
         PYTHON_CMD="python3.10"
-        echo "找到Python 3.10"
+        PYTHON_VERSION=$(python3.10 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        echo "找到Python $PYTHON_VERSION"
     elif command -v python3 &> /dev/null; then
-        PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        if [[ "$PYTHON_VERSION" == "3.10" ]] || [[ "$PYTHON_VERSION" > "3.10" ]]; then
+        PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "未知")
+        if python_version_at_least_310 python3; then
             PYTHON_CMD="python3"
             echo "找到Python $PYTHON_VERSION"
         else
@@ -201,14 +249,19 @@ verify_installation() {
     
     VENV_PATH="$ENV_DIR"
     source "$VENV_PATH/bin/activate"
+    export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/easyqc_matplotlib_cache_${USER:-user}}"
+    mkdir -p "$MPLCONFIGDIR"
     
     # 验证tkinter
     echo "验证tkinter..."
-    python -c "import tkinter; print('✓ tkinter 可用')" || echo "⚠ 警告：tkinter 可能未正确安装"
+    if ! python -c "import tkinter; print('✓ tkinter 可用')"; then
+        echo "错误：tkinter 不可用，请安装系统 tkinter 包后重试"
+        return 1
+    fi
     
     # 验证主要依赖
     echo "验证主要依赖..."
-    python -c "
+    if ! python -c "
 import numpy; print('✓ numpy 可用')
 import pandas; print('✓ pandas 可用')
 import scipy; print('✓ scipy 可用')
@@ -218,13 +271,44 @@ import sklearn; print('✓ scikit-learn 可用')
 import nibabel; print('✓ nibabel 可用')
 import pydicom; print('✓ pydicom 可用')
 import PIL; print('✓ Pillow 可用')
-import pandasql; print('✓ pandasql 可用')
 print('所有依赖验证完成')
-" || echo "⚠ 部分依赖验证失败"
+"; then
+        echo "错误：部分依赖验证失败"
+        return 1
+    fi
     
     # 获取Python路径
     PYTHON_PATH=$(which python)
     echo "Python路径: $PYTHON_PATH"
+}
+
+# 函数：验证启动脚本
+check_start_script() {
+    echo "=========================================="
+    echo "验证启动脚本"
+    echo "=========================================="
+
+    if [ ! -f "$SCRIPT_DIR/start.sh" ]; then
+        echo "错误：未找到 start.sh"
+        return 1
+    fi
+
+    if ! grep -q 'BASH_SOURCE\[0\]' "$SCRIPT_DIR/start.sh"; then
+        echo "错误：start.sh 未使用 BASH_SOURCE 自定位"
+        return 1
+    fi
+
+    if ! grep -q 'python "$SCRIPT_DIR/easyqc.py" "$@"' "$SCRIPT_DIR/start.sh"; then
+        echo "错误：start.sh 未指向当前 easyqc.py"
+        return 1
+    fi
+
+    if grep -q 'easyqc_back' "$SCRIPT_DIR/start.sh" && ! grep -q '仅作旧版参照' "$SCRIPT_DIR/start.sh"; then
+        echo "错误：start.sh 可能错误指向 easyqc_back"
+        return 1
+    fi
+
+    echo "启动脚本检查通过"
 }
 
 # 函数：创建启动脚本
@@ -239,16 +323,21 @@ create_start_script() {
 #!/bin/bash
 # EasyQC 启动脚本
 # 自动生成于 $(date)
+# 自动定位当前 easyqc/ 主线目录；easyqc_back/ 仅作旧版参照，不作为启动目标。
 
-# 切换到项目目录
-cd "$PROJECT_ROOT"
+SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+cd "\$SCRIPT_DIR"
 
 # 激活虚拟环境
-source "$VENV_PATH/bin/activate"
+if [ -f "$VENV_PATH/bin/activate" ]; then
+    source "$VENV_PATH/bin/activate"
+else
+    echo "警告：未找到 $VENV_PATH/bin/activate，将使用当前 Python 环境"
+fi
 
 # 启动 EasyQC
 echo "启动 EasyQC..."
-python "$PROJECT_ROOT/easyqc.py" "\$@"
+python "\$SCRIPT_DIR/easyqc.py" "\$@"
 EOF
     
     chmod +x start.sh
@@ -307,6 +396,14 @@ main() {
         echo "错误：未找到 requirements.txt 文件"
         exit 1
     fi
+
+    if [ "$CHECK_ONLY" = true ]; then
+        check_environment || exit 1
+        verify_installation || exit 1
+        check_start_script || exit 1
+        echo "检查完成：Linux 主线环境和启动脚本可用"
+        exit 0
+    fi
     
     # 检查是否需要安装环境
     NEED_INSTALL=true
@@ -328,7 +425,7 @@ main() {
     if [ "$NEED_INSTALL" = true ]; then
         create_venv
         install_dependencies
-        verify_installation
+        verify_installation || exit 1
     fi
     
     # 无论是否重新安装，都重新生成启动脚本

@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Test infrastructure
+pytest>=8.0.0

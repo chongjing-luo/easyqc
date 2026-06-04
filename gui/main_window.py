@@ -18,6 +18,7 @@ sys.path.insert(0, str(project_root))
 # 导入日志系统
 from utils.logger import log_info, log_error, log_warning, log_exception, log_debug, LogContext, log_function
 
+from core.table_service import TABLE_QCTABLE
 from utils.file_utils import FileUtils
 from utils.projects_manager import ProjectManager
 from utils.data_manager import DataManager
@@ -25,11 +26,12 @@ from utils.data_manager import DataManager
 # 导入对话框和表格显示功能类
 from gui.dialog_main import DialogMain
 from gui.gui_table import TableDisplay
+from gui.state_adapter import LegacyGUIStateAdapter
 
 
 class EasyQCApp:
     @log_function("EasyQCApp")
-    def __init__(self, root):
+    def __init__(self, root, services=None):
 
         
         try:
@@ -39,8 +41,16 @@ class EasyQCApp:
                 try:
 
                     self.root = root
+                    self.services = services
+                    self.project_service = getattr(services, "project_service", None)
+                    self.rating_service = getattr(services, "rating_service", None)
+                    self.table_service = getattr(services, "table_service", None)
+                    self.code_executor = getattr(services, "code_executor", None)
+                    self.table_transform = getattr(services, "table_transform", None)
                     # 先创建基础组件
                     self.DataM = DataManager()
+                    if self.table_transform is not None:
+                        self.DataM.table_transform = self.table_transform
                     self.FileU = FileUtils()
                     
                     # 创建ProjectManager
@@ -55,7 +65,7 @@ class EasyQCApp:
                     self.ProjM = ProjectManager()
                     self.ProjM.init_projects(app=self, cbProjM=Callback_ProjM)
                     self.ProjM.load_project(self.ProjM.dt.project, fresh_gui=False)
-                    self.dt = self.ProjM.dt
+                    self.gui_state = LegacyGUIStateAdapter(self.ProjM)
                     
                     # 创建DialogMain（需要ProjM已存在）
                     self.DialM = DialogMain(self)
@@ -116,12 +126,6 @@ class EasyQCApp:
         self.root.geometry("600x940")
         self.root.resizable(True, True)
         
-        # 设置窗口图标（如果有的话）
-        try:
-            pass
-        except:
-            pass
-
         self.project_manager_widget()
         self.constant_widget()
         self.variable_widget()
@@ -157,7 +161,7 @@ class EasyQCApp:
         
 
         # ---------------------------   绑定选择事件（下拉框选择时触发）   ---------------------------
-        self.project_combo.bind("<<ComboboxSelected>>", lambda e: self.ProjM.change_project(self.project_combo.get()))
+        self.project_combo.bind("<<ComboboxSelected>>", lambda e: self.gui_state.change_project(self.project_combo.get()))
         
         # ---------------------------------   新建项目按钮   ---------------------------------
         self.new_project_btn = ttk.Button(self.inner_frame, text="新建项目", command=self.DialM.create_project, style='Project.TButton')
@@ -257,11 +261,11 @@ class EasyQCApp:
         self.new_variable_btn.place(x=5, y=25, width=100, height=35)
 
         # 显示初始变量 按钮
-        self.show_initial_table_btn = ttk.Button(self.inner_frame_v, text="显示初始表格", command=lambda:self.TablD.show_df(self.dt.var['ezqc_all']), style='Project.TButton')
+        self.show_initial_table_btn = ttk.Button(self.inner_frame_v, text="显示初始表格", command=lambda:self.TablD.show_df(self.gui_state.all_variable_table()), style='Project.TButton')
         self.show_initial_table_btn.place(x=115, y=25, width=100, height=35)
 
         # 提取质控结果 按钮
-        self.extract_qc_btn = ttk.Button(self.inner_frame_v, text="提取质控结果", command=self.ProjM.load_ratings, style='Project.TButton')
+        self.extract_qc_btn = ttk.Button(self.inner_frame_v, text="提取质控结果", command=self.extract_qc_results, style='Project.TButton')
         self.extract_qc_btn.place(x=225, y=25, width=100, height=35)
 
         # 过滤和筛选 按钮
@@ -270,8 +274,7 @@ class EasyQCApp:
 
         # 显示当前变量 按钮
         def show_qctable():
-            table = self.dt.tab['ezqc_qctable_filter'] if 'ezqc_qctable_filter' in self.dt.tab else self.dt.tab['ezqc_qctable'] if 'ezqc_qctable' in self.dt.tab else self.dt.var['ezqc_all']
-            self.TablD.show_df(table)
+            self.TablD.show_df(self.gui_state.qctable_for_display())
         self.show_current_variable_btn = ttk.Button(self.inner_frame_v, text="显示质控表格", command=show_qctable, style='Project.TButton')
         self.show_current_variable_btn.place(x=445, y=25, width=100, height=35)
 
@@ -280,7 +283,7 @@ class EasyQCApp:
         设置变量：弹出一个对话框，500*400
         """
         # 创建设置变量对话框
-        self.dialog_setvar = tk.Tk()
+        self.dialog_setvar = tk.Toplevel(self.root)
         self.dialog_setvar.title("设置变量")
         self.dialog_setvar.geometry("500x450")
         
@@ -352,7 +355,7 @@ class EasyQCApp:
         button_frame.place(x=10, y=360, width=480, height=80)
 
         # 创建按钮并水平排列
-        self.show_variable_btn = ttk.Button(button_frame, text="查看新变量", command=lambda: self.TablD.show_df(self.dt.var['ezqc_new']))
+        self.show_variable_btn = ttk.Button(button_frame, text="查看新变量", command=lambda: self.TablD.show_df(self.gui_state.new_variable_table()))
         self.show_variable_btn.place(x=10, y=10, width=225, height=30)
 
         # 筛选按钮
@@ -368,13 +371,13 @@ class EasyQCApp:
         self.filter_btn_all.place(x=170, y=40, width=140, height=30)
 
         # 查看总变量表格
-        self.show_all_variable_btn = ttk.Button(button_frame, text="查看总变量", command=lambda: self.TablD.show_df(self.dt.var['ezqc_all']))
+        self.show_all_variable_btn = ttk.Button(button_frame, text="查看总变量", command=lambda: self.TablD.show_df(self.gui_state.all_variable_table()))
         self.show_all_variable_btn.place(x=330, y=40, width=140, height=30)
 
 
     # ----------- 卡片函数（替代 CollapsibleCard）-----------
     def create_collapsible_card(self, qcidx):
-        module = self.dt.settings['qcmodule'][qcidx]
+        module = self.gui_state.module_by_key(qcidx)
         frame = ttk.Frame(self.scroll_area.scrollable_frame)
         frame.showing = module['showing']
 
@@ -412,7 +415,7 @@ class EasyQCApp:
         filter_btn = ttk.Button(content, text="过滤和筛选", style='Project.TButton', command=lambda: self.TablD.filter_sorter(module['name']))
         filter_btn.place(x=5, y=0, width=100, height=30)
 
-        filter_btn = ttk.Button(content, text="显示质控结果", style='Project.TButton', command=lambda: self.TablD.show_df(self.dt.tab[module['name']]))
+        filter_btn = ttk.Button(content, text="显示质控结果", style='Project.TButton', command=lambda: self.TablD.show_df(self.gui_state.result_table(module['name'])))
         filter_btn.place(x=115, y=0, width=110, height=30)
 
         # 创建评分人标签和输入框
@@ -422,13 +425,13 @@ class EasyQCApp:
         rater_var = tk.StringVar(value=module['rater'])
         entry_rater = ttk.Entry(content, textvariable=rater_var)
         entry_rater.place(x=285, y=0, height=30, width=120)
-        rater_var.trace_add('write', lambda *args: self.dt.settings['qcmodule'][qcidx].__setitem__('rater', rater_var.get()))
+        rater_var.trace_add('write', lambda *args: self.gui_state.update_module_field(qcidx, 'rater', rater_var.get()))
         
         # 创建子进程控制复选框
         # subprocess_var = tk.BooleanVar()
         subprocess_var = tk.BooleanVar(value=module['control'])
         subprocess_check = ttk.Checkbutton(content, text="子进程控制", variable=subprocess_var,
-                                        command=lambda: self.dt.settings['qcmodule'][qcidx].update({'control': subprocess_var.get()}))
+                                        command=lambda: self.gui_state.update_module_field(qcidx, 'control', subprocess_var.get()))
         subprocess_check.place(x=415, y=5, width=100)
         
 
@@ -452,7 +455,7 @@ class EasyQCApp:
             getattr(self, score_entry_name).place(x=150, y=row_y, width=150, height=25)
             
             def update_label(*args, key=score_key):
-                self.dt.settings['qcmodule'][qcidx]['scores'][key]['label'] = getattr(self, f"{module['name']}_{key}_label_var").get()
+                self.gui_state.update_score_fields(qcidx, key, label=getattr(self, f"{module['name']}_{key}_label_var").get())
             score_label_var.trace_add("write", update_label)
 
             # 分值
@@ -475,11 +478,9 @@ class EasyQCApp:
                 result = self.DialM.validate_score(num)
                 if result is None:
                     setattr(self, f"{score_entry_name}_var", "")
-                    self.dt.settings['qcmodule'][qcidx]['scores'][key]['num'] = None
-                    self.dt.settings['qcmodule'][qcidx]['scores'][key]['num_'] = None
+                    self.gui_state.update_score_fields(qcidx, key, num=None, num_=None)
                 else:
-                    self.dt.settings['qcmodule'][qcidx]['scores'][key]['num'] = num
-                    self.dt.settings['qcmodule'][qcidx]['scores'][key]['num_'] = result
+                    self.gui_state.update_score_fields(qcidx, key, num=num, num_=result)
             
             # 绑定失去焦点事件
             score_entry.bind("<FocusOut>", lambda event, key=score_key: validate_score_on_focus_out(event, key))
@@ -507,8 +508,14 @@ class EasyQCApp:
             setattr(self, tag_var_name, tk.StringVar(value=module['tags'][tag_key]['label']))
             setattr(self, tag_entry_name, ttk.Entry(content, textvariable=getattr(self, tag_var_name)))
             getattr(self, tag_entry_name).place(x=150, y=row_y, width=130, height=25)
-            getattr(self, tag_var_name).trace_add("write", lambda *args, k=tag_key: 
-                            self.dt.settings['qcmodule'][qcidx]['tags'][k].update({'label': getattr(self, tag_var_name).get()}))
+            getattr(self, tag_var_name).trace_add(
+                "write",
+                lambda *args, k=tag_key, var_name=tag_var_name: self.gui_state.update_tag_fields(
+                    qcidx,
+                    k,
+                    label=getattr(self, var_name).get(),
+                ),
+            )
             
             # 在分数设置区域的每一行后面添加增加和删除按钮
             add_btn = ttk.Button(content, text="+", padding=pad, command=lambda idx=irow2: self.DialM.add_tag(qcidx, idx+1))
@@ -533,12 +540,12 @@ class EasyQCApp:
             code_text = tk.Text(code_frame, wrap=tk.CHAR, font=("Courier", 11), undo=True)
             code_text.pack(side="top", fill="both", expand=True)
 
-            if self.dt.settings['qcmodule'][qcidx]['code']:
-                code_text.insert('1.0', self.dt.settings['qcmodule'][qcidx]['code'])
+            if self.gui_state.module_by_key(qcidx).get('code'):
+                code_text.insert('1.0', self.gui_state.module_by_key(qcidx)['code'])
 
             # 确认按钮
             def confirm():
-                self.dt.settings['qcmodule'][qcidx]['code'] = code_text.get('1.0', tk.END).strip()
+                self.gui_state.update_module_field(qcidx, 'code', code_text.get('1.0', tk.END).strip())
                 code_frame.destroy()
 
             # 直接用pack布局让按钮可见且居中
@@ -554,16 +561,6 @@ class EasyQCApp:
 
         export_btn = ttk.Button(content, text="导出本模块设置", command=lambda: self.DialM.export_module(module['name']), style='Project.TButton')
         export_btn.place(x=120, y=ystart, width=150, height=30)
-        
-        # # 创建键盘布局设置区域
-        # label_layout = ttk.Label(content, text="键盘布局设置:", style='TLabel')
-        # label_layout.place(x=5, y=ystart+110, width=110)
-        # browse_btn1 = ttk.Button(content, text="导入", command=self.DialM.import_json,  style='Project.TButton')
-        # browse_btn1.place(x=110, y=ystart+110, width=60, height=30)
-        # browse_btn2 = ttk.Button(content, text="导出", command=self.DialM.export_json, style='Project.TButton')
-        # browse_btn2.place(x=180, y=ystart+110,width=60, height=30)
-        # browse_btn2 = ttk.Button(content, text="显示键盘布局", command=lambda: self.DialM.show_keyboard(module), style='Project.TButton')
-        # browse_btn2.place(x=250, y=ystart+110,width=100, height=30)
         
         content_.pack(fill="x", pady=5) if module['showing'] else content_.pack_forget()
         
@@ -643,28 +640,101 @@ class EasyQCApp:
 
     def load_project_to_gui(self):
         """加载项目数据到GUI"""
+        self._sync_project_service_from_legacy_state()
+        self._sync_legacy_tables_from_service()
         # 表格的值从settings中获取
         self.DialM.refresh_constant_table()
-        if hasattr(self.ProjM, 'dt') and 'projects' in self.ProjM.dt:
-            self.project_combo['values'] = list(self.dt.projects.keys())
+        if self.gui_state.has_project_registry():
+            self.project_combo['values'] = self.gui_state.project_names()
 
-        if self.dt.project and self.dt.project in self.project_combo['values']:
-            self.project_combo.set(self.dt.project) 
+        current_project = self.gui_state.current_project_name()
+        if current_project and current_project in self.project_combo['values']:
+            self.project_combo.set(current_project) 
         self.load_module_to_gui()
+
+    def _sync_project_service_from_legacy_state(self):
+        if self.project_service is None:
+            return False
+
+        project_name = self.gui_state.current_project_name()
+        if not project_name:
+            return False
+
+        if hasattr(self.project_service, "reload_registry"):
+            self.project_service.reload_registry()
+
+        try:
+            self.project_service.load(project_name)
+        except (KeyError, FileNotFoundError, ValueError) as exc:
+            log_warning(f"服务层项目同步失败: {project_name}: {exc}", "EasyQCApp")
+            return False
+        return True
+
+    def extract_qc_results(self):
+        """Extract QC ratings, preferring services while preserving legacy fallback."""
+        if self._load_ratings_from_service():
+            return
+        self.gui_state.load_ratings()
+
+    def _load_ratings_from_service(self):
+        if self.rating_service is None or self.table_service is None:
+            return False
+
+        project = self.gui_state.current_project_model()
+        subjects = self.gui_state.all_variable_table()
+        if project is None or subjects is None:
+            return False
+
+        rating_service = self._rating_service_for_project(project)
+        if rating_service is None:
+            return False
+
+        loaded_ratings = rating_service.load_legacy_state(subjects)
+        self.gui_state.apply_loaded_ratings(loaded_ratings)
+        self.table_service.save_table(project, TABLE_QCTABLE, loaded_ratings.qctable)
+        if not loaded_ratings.original_table.empty:
+            self.table_service.save_table(project, "ezqc_qctable_orig", loaded_ratings.original_table)
+        if not loaded_ratings.original_wide_table.empty:
+            self.table_service.save_table(project, "ezqc_qctable_orig_wide", loaded_ratings.original_wide_table)
+        return True
+
+    def _rating_service_for_project(self, project):
+        if self.rating_service is None:
+            return None
+
+        try:
+            active_project = self.rating_service.project
+        except (AttributeError, ValueError):
+            active_project = None
+
+        if active_project is not None and active_project.name == project.name and active_project.path == project.path:
+            return self.rating_service
+
+        return self.rating_service.__class__(project)
+
+    def _sync_legacy_tables_from_service(self):
+        """Synchronize legacy dt.var/dt.tab tables through the service bridge."""
+        if self.table_service is None:
+            return
+
+        project = self.gui_state.current_project_model()
+        if project is None:
+            return
+
+        loaded_tables = self.table_service.load_legacy_state_tables(
+            project,
+            module_names=self.gui_state.module_names(),
+        )
+        self.gui_state.apply_loaded_tables(loaded_tables)
 
     def load_module_to_gui(self):
         """加载模块到GUI"""
-        # 获取所有的key并转换为数字进行排序
-        keys = list(self.dt.settings['qcmodule'].keys())
-        numeric_keys = [int(k) for k in keys]
-        numeric_keys.sort()
         # 清空当前的卡片
         for widget in self.scroll_area.scrollable_frame.winfo_children():
             widget.destroy()
         
         # 按照排序后的数字key顺序创建卡片
-        for key in numeric_keys:
-            qcindex = str(key)  # 转回字符串形式
+        for qcindex in self.gui_state.module_keys():
             card = self.create_collapsible_card(qcidx=qcindex)
             card.pack(fill="x", padx=5, pady=5)
 
@@ -672,8 +742,7 @@ class EasyQCApp:
 
     def quit_app(self):
         """退出应用"""
-        self.ProjM.save_settings()
-        self.ProjM.save_table()
+        self.gui_state.save_project_state()
         # self.ProjM.save_ratings()
         self.root.destroy()
         log_info("应用退出", "EasyQCApp")

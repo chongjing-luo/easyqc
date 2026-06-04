@@ -1,0 +1,317 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "EasyQC",
+    "description": "EasyQC 是一个专业的医学影像质量控制工具，专为神经影像研究设计，支持多种医学影像格式的质量评估和评分。提供基于 tkinter 的图形用户界面，用于多项目、多评分者的目视检查和打分工-作流。",
+    "languages": ["python", "shell", "markdown"],
+    "frameworks": ["tkinter"],
+    "analyzedAt": "2026-06-01T13:00:00Z",
+    "gitCommitHash": "1faecee9fa3d3ba990bcffdb2b35a160fdc9c5ff"
+  },
+  "nodes": [
+    {
+      "id": "file:easyqc.py",
+      "type": "file",
+      "name": "easyqc.py",
+      "filePath": "easyqc.py",
+      "summary": "主程序入口。解析命令行参数，支持GUI模式（默认）和CLI模式（传入四个参数 project module rater ezqcid 直接打开QC页面）。负责路径初始化、日志系统导入、以及 tkinter 主循环的启动。",
+      "tags": ["入口点", "cli", "应用启动"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:gui/main_window.py",
+      "type": "file",
+      "name": "main_window.py",
+      "filePath": "gui/main_window.py",
+      "summary": "EasyQCApp 主窗口类。包含整个GUI的构建逻辑：项目管理下拉框、常量设置面板、变量设置面板、以及可滚动的QC模块卡片区域。每个模块卡片包含展开/收起、评分(score)和标签(tag)的动态配置、评分人设置、子进程控制、代码编辑等完整功能。初始化时创建 DataManager、FileUtils、ProjectManager、DialogMain 和 TableDisplay，形成组件依赖网。",
+      "tags": ["主窗口", "GUI", "tkinter", "模块管理", "卡片布局"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:gui/dialog_main.py",
+      "type": "file",
+      "name": "dialog_main.py",
+      "filePath": "gui/dialog_main.py",
+      "summary": "DialogMain 对话框功能类。实现所有模态操作：创建/导入/移除项目、添加/编辑常量、浏览文件夹和文件、设置变量(三种方法：路径导入、文件导入、文本输入)、合并新数据、添加/删除/管理模块、分数验证(支持范围'3-5'、列表'1,3,5'、比较'>3'、等式'=3')、模块导入导出、开始质控等。",
+      "tags": ["对话框", "项目管理", "变量设置", "模块管理", "分数验证"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:gui/gui_qcpage.py",
+      "type": "file",
+      "name": "gui_qcpage.py",
+      "filePath": "gui/gui_qcpage.py",
+      "summary": "gui_qcpage QC页面类。管理单个被试的质控评分界面：加载被试数据、执行自定义Python代码(通过子进程或eval)、渲染tags和scores的交互控件(键盘快捷键支持)、保存评分到JSON文件、支持自动/手动切换被试、监听模式(watch_mode)自动刷新。每个评分文件命名为 '{module}._.{ezqcid}._.{rater}.json'。",
+      "tags": ["QC页面", "评分界面", "键盘控制", "子进程", "被试管理"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:gui/gui_table.py",
+      "type": "file",
+      "name": "gui_table.py",
+      "filePath": "gui/gui_table.py",
+      "summary": "TableDisplay 表格显示类。提供DataFrame的可视化展示和SQL过滤排序功能。通过 pandasql 对数据执行 SQL 查询实现筛选，支持所有模块的数据表格和变量表格的展示。包含过滤界面、排序功能和数据导出。",
+      "tags": ["表格显示", "SQL过滤", "pandasql", "数据可视化"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:utils/projects_manager.py",
+      "type": "file",
+      "name": "projects_manager.py",
+      "filePath": "utils/projects_manager.py",
+      "summary": "ProjectManager 项目管理核心。管理项目CRUD操作、设置持久化(settings JSON)、模块管理(add_key插队逻辑和重新索引)、评分文件加载和聚合。load_ratings()扫描所有 RatingFiles 目录下的JSON文件，验证文件名-目录-内容一致性，通过pivot_table构建宽格式评分汇总表，合并到 ezqc_all 主表中。DataContainer 内部类持有所有可变状态。",
+      "tags": ["项目管理", "数据聚合", "评分加载", "pivot", "状态管理", "JSON持久化"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:utils/data_manager.py",
+      "type": "file",
+      "name": "data_manager.py",
+      "filePath": "utils/data_manager.py",
+      "summary": "DataManager 数据管理器。处理所有数据I/O操作：目录列表提取、多格式文件读取(CSV/Excel/TXT/list)、文本解析为DataFrame、变量名和批次设置、以及核心的SQL过滤排序引擎 select_filter_sorter()。通过 pandasql 对DataFrame执行SQL查询，支持 _othervar_ 占位符自动展开为所有未指定列。",
+      "tags": ["数据管理", "文件读取", "SQL引擎", "pandasql", "文本解析"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:utils/logger.py",
+      "type": "file",
+      "name": "logger.py",
+      "filePath": "utils/logger.py",
+      "summary": "EasyQCLogger 日志系统。单例模式，同时输出到文件(logs/easyqc_YYYYMMDD.log)和控制台。提供分级便捷函数(log_info/log_error/log_warning/log_exception/log_debug)、@log_function 装饰器自动记录函数调用和异常、LogContext 上下文管理器计时代码块、以及错误弹窗集成。包含30天自动清理旧日志功能。",
+      "tags": ["日志系统", "单例模式", "装饰器", "上下文管理器", "错误弹窗"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:utils/qcpage.py",
+      "type": "file",
+      "name": "qcpage.py",
+      "filePath": "utils/qcpage.py",
+      "summary": "qcpage 基础QC页面逻辑类。当前为轻量级占位实现，仅提供 refresh_df_list 方法骨架。作为 gui_qcpage 的业务逻辑基类（待扩展）。",
+      "tags": ["QC逻辑", "基类", "WIP"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:utils/file_utils.py",
+      "type": "file",
+      "name": "file_utils.py",
+      "filePath": "utils/file_utils.py",
+      "summary": "FileUtils 文件工具类。提供路径辅助方法，用于文件操作和目录管理的通用工具函数。",
+      "tags": ["文件工具", "路径处理"],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "README.md",
+      "summary": "项目README文档(中文)。介绍EasyQC的功能特性、系统要求、安装步骤(GUI和命令行模式)、项目结构说明、依赖包列表、开发指南和贡献流程。",
+      "tags": ["文档", "README", "中文"],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:projects.json",
+      "type": "config",
+      "name": "projects.json",
+      "filePath": "projects.json",
+      "summary": "顶层项目注册表。存储所有项目的名称到目录路径映射，追踪最近使用的项目(last_project)。格式：{\"projects\": {\"ProjectName\": \"/path/to/easyqc_ProjectName\"}, \"last_project\": \"ProjectName\"}。",
+      "tags": ["配置", "项目注册表", "JSON"],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:requirements.txt",
+      "type": "config",
+      "name": "requirements.txt",
+      "filePath": "requirements.txt",
+      "summary": "Python依赖清单。核心依赖：numpy、pandas、scipy(数据处理)；nibabel、pydicom、Pillow(医学影像)；matplotlib、seaborn(可视化)；scikit-learn(科学计算)；pandasql(SQL查询)。可选依赖：nipype、nilearn、SimpleITK。",
+      "tags": ["配置", "依赖", "Python", "pip"],
+      "complexity": "simple"
+    },
+    {
+      "id": "script:setup.sh",
+      "type": "script",
+      "name": "setup.sh",
+      "filePath": "setup.sh",
+      "summary": "自动化安装脚本。创建Python虚拟环境、安装requirements.txt中的依赖包、配置项目环境。简化新用户的安装流程。",
+      "tags": ["脚本", "安装", "自动化", "bash"],
+      "complexity": "simple"
+    },
+    {
+      "id": "script:start.sh",
+      "type": "script",
+      "name": "start.sh",
+      "filePath": "start.sh",
+      "summary": "EasyQC启动脚本。切换到项目目录、激活虚拟环境、启动Python主程序。支持传递命令行参数给easyqc.py，如 './start.sh project module rater ezqcid' 直接打开QC页面。",
+      "tags": ["脚本", "启动", "bash", "CLI"],
+      "complexity": "simple"
+    },
+    {
+      "id": "concept:data-container",
+      "type": "concept",
+      "name": "DataContainer 共享状态容器",
+      "summary": "ProjectManager 的内部类 DataContainer 作为全局可变状态容器。包含 projects、project、output_dir、settings、var(变量DataFrame字典)、tab(表格DataFrame字典)、rating_dict(评分字典)等字段。所有GUI组件(EasyQCApp、DialogMain、gui_qcpage、TableDisplay)通过引用共享同一个 dt 实例，形成非正式的全局状态模式。",
+      "tags": ["设计模式", "状态容器", "共享状态", "DataContainer"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "concept:qc-module-model",
+      "type": "concept",
+      "name": "QC模块数据模型",
+      "summary": "QC模块以JSON对象形式存储在 settings.qcmodule 中，索引为1-based字符串键。每个模块包含：name(标识符)、label(显示标题)、tags(多级标签，每级有label和value)、scores(多级评分，支持复杂数值表达式)、code(自定义Python代码)、interper(解释器类型)、control(子进程控制标志)、rater(评分人)、select_filter(SQL筛选)。模块可通过JSON文件导入导出。",
+      "tags": ["数据模型", "QC模块", "JSON Schema", "评分系统"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "concept:rating-aggregation",
+      "type": "concept",
+      "name": "评分聚合流水线",
+      "summary": "评分数据流：单个评分JSON({module}._.{ezqcid}._.{rater}.json) → load_rating_json()展平嵌套结构 → 验证文件名与内容一致性 → 通过pivot_table构建宽格式表(列名格式：'{rater}.{module}.{field}') → merge到ezqc_all主表 → 移除code/code_exe列 → 按score/tag/notes/other列重排 → 保存为ezqc_qctable.csv。",
+      "tags": ["数据流", "评分聚合", "pivot", "数据验证"],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {"source": "file:easyqc.py", "target": "file:gui/main_window.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+    {"source": "file:easyqc.py", "target": "file:utils/logger.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+    {"source": "file:easyqc.py", "target": "file:utils/projects_manager.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+    {"source": "file:easyqc.py", "target": "file:gui/gui_qcpage.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+
+    {"source": "file:gui/main_window.py", "target": "file:utils/logger.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+    {"source": "file:gui/main_window.py", "target": "file:utils/file_utils.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+    {"source": "file:gui/main_window.py", "target": "file:utils/projects_manager.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+    {"source": "file:gui/main_window.py", "target": "file:utils/data_manager.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+    {"source": "file:gui/main_window.py", "target": "file:gui/dialog_main.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+    {"source": "file:gui/main_window.py", "target": "file:gui/gui_table.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+
+    {"source": "file:gui/dialog_main.py", "target": "file:utils/logger.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+    {"source": "file:gui/dialog_main.py", "target": "file:utils/data_manager.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+    {"source": "file:gui/dialog_main.py", "target": "file:gui/gui_table.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+    {"source": "file:gui/dialog_main.py", "target": "file:gui/gui_qcpage.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+
+    {"source": "file:gui/gui_qcpage.py", "target": "file:utils/logger.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+    {"source": "file:gui/gui_qcpage.py", "target": "file:utils/file_utils.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+    {"source": "file:gui/gui_qcpage.py", "target": "file:utils/projects_manager.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+    {"source": "file:gui/gui_qcpage.py", "target": "file:utils/data_manager.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+    {"source": "file:gui/gui_qcpage.py", "target": "file:utils/qcpage.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+
+    {"source": "file:gui/gui_table.py", "target": "file:utils/logger.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+    {"source": "file:gui/gui_table.py", "target": "file:utils/projects_manager.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+    {"source": "file:gui/gui_table.py", "target": "file:utils/data_manager.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+
+    {"source": "file:utils/projects_manager.py", "target": "file:utils/logger.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+    {"source": "file:utils/projects_manager.py", "target": "file:utils/data_manager.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+
+    {"source": "file:utils/qcpage.py", "target": "file:utils/data_manager.py", "type": "imports", "direction": "outgoing", "weight": 0.7},
+
+    {"source": "file:gui/main_window.py", "target": "file:gui/gui_qcpage.py", "type": "calls", "direction": "outgoing", "weight": 0.8},
+    {"source": "file:gui/main_window.py", "target": "file:utils/projects_manager.py", "type": "calls", "direction": "outgoing", "weight": 0.8},
+    {"source": "file:gui/main_window.py", "target": "file:gui/dialog_main.py", "type": "calls", "direction": "outgoing", "weight": 0.8},
+    {"source": "file:gui/main_window.py", "target": "file:gui/gui_table.py", "type": "calls", "direction": "outgoing", "weight": 0.8},
+
+    {"source": "file:gui/dialog_main.py", "target": "file:gui/gui_qcpage.py", "type": "calls", "direction": "outgoing", "weight": 0.8},
+    {"source": "file:gui/dialog_main.py", "target": "file:utils/projects_manager.py", "type": "calls", "direction": "outgoing", "weight": 0.8},
+    {"source": "file:gui/dialog_main.py", "target": "file:utils/data_manager.py", "type": "calls", "direction": "outgoing", "weight": 0.8},
+
+    {"source": "file:utils/projects_manager.py", "target": "file:utils/data_manager.py", "type": "calls", "direction": "outgoing", "weight": 0.8},
+
+    {"source": "file:easyqc.py", "target": "file:gui/gui_qcpage.py", "type": "calls", "direction": "outgoing", "weight": 0.8},
+
+    {"source": "file:gui/gui_qcpage.py", "target": "file:utils/qcpage.py", "type": "inherits", "direction": "outgoing", "weight": 0.9},
+
+    {"source": "concept:data-container", "target": "file:utils/projects_manager.py", "type": "defined_by", "direction": "outgoing", "weight": 0.6},
+    {"source": "concept:qc-module-model", "target": "file:utils/projects_manager.py", "type": "defined_by", "direction": "outgoing", "weight": 0.6},
+    {"source": "concept:rating-aggregation", "target": "file:utils/projects_manager.py", "type": "defined_by", "direction": "outgoing", "weight": 0.6},
+
+    {"source": "file:utils/logger.py", "target": "file:easyqc.py", "type": "configures", "direction": "outgoing", "weight": 0.6},
+    {"source": "file:utils/logger.py", "target": "file:gui/main_window.py", "type": "configures", "direction": "outgoing", "weight": 0.6},
+    {"source": "file:utils/logger.py", "target": "file:gui/dialog_main.py", "type": "configures", "direction": "outgoing", "weight": 0.6},
+    {"source": "file:utils/logger.py", "target": "file:gui/gui_qcpage.py", "type": "configures", "direction": "outgoing", "weight": 0.6},
+
+    {"source": "document:README.md", "target": "file:easyqc.py", "type": "documents", "direction": "outgoing", "weight": 0.5},
+    {"source": "config:requirements.txt", "target": "file:easyqc.py", "type": "configures", "direction": "outgoing", "weight": 0.6},
+    {"source": "config:projects.json", "target": "file:utils/projects_manager.py", "type": "configures", "direction": "outgoing", "weight": 0.6},
+    {"source": "script:start.sh", "target": "file:easyqc.py", "type": "triggers", "direction": "outgoing", "weight": 0.6},
+    {"source": "script:setup.sh", "target": "config:requirements.txt", "type": "configures", "direction": "outgoing", "weight": 0.6}
+  ],
+  "layers": [
+    {
+      "id": "layer:application-entry",
+      "name": "应用入口",
+      "description": "程序启动入口和自动化脚本，负责环境初始化和主循环启动",
+      "nodeIds": ["file:easyqc.py", "script:start.sh", "script:setup.sh"]
+    },
+    {
+      "id": "layer:gui-presentation",
+      "name": "GUI表示层",
+      "description": "基于tkinter的图形用户界面，包含主窗口、对话框、QC评分页面和表格显示组件",
+      "nodeIds": ["file:gui/main_window.py", "file:gui/dialog_main.py", "file:gui/gui_qcpage.py", "file:gui/gui_table.py"]
+    },
+    {
+      "id": "layer:business-logic",
+      "name": "业务逻辑层",
+      "description": "项目管理、数据聚合、QC逻辑等核心业务处理",
+      "nodeIds": ["file:utils/projects_manager.py", "file:utils/data_manager.py", "file:utils/qcpage.py"]
+    },
+    {
+      "id": "layer:infrastructure",
+      "name": "基础设施层",
+      "description": "日志系统、文件工具等横切关注点的基础设施",
+      "nodeIds": ["file:utils/logger.py", "file:utils/file_utils.py"]
+    },
+    {
+      "id": "layer:configuration",
+      "name": "配置与文档",
+      "description": "项目注册表、依赖清单和文档",
+      "nodeIds": ["config:projects.json", "config:requirements.txt", "document:README.md"]
+    },
+    {
+      "id": "layer:architectural-concepts",
+      "name": "架构概念",
+      "description": "贯穿多层的架构模式和设计概念",
+      "nodeIds": ["concept:data-container", "concept:qc-module-model", "concept:rating-aggregation"]
+    }
+  ],
+  "tour": [
+    {
+      "order": 1,
+      "title": "项目概览",
+      "description": "阅读README了解EasyQC的功能定位、系统需求和使用方式。这是一个面向神经影像研究的质量控制工具，支持多项目、多评分者的视觉检查和打分流程。",
+      "nodeIds": ["document:README.md", "config:requirements.txt"]
+    },
+    {
+      "order": 2,
+      "title": "应用入口与启动流程",
+      "description": "easyqc.py 是程序的唯一入口。支持两种模式：无参数启动GUI主窗口，或传入四个参数(project module rater ezqcid)直接打开QC评分页面。start.sh 封装了虚拟环境激活和启动逻辑。",
+      "nodeIds": ["file:easyqc.py", "script:start.sh"]
+    },
+    {
+      "order": 3,
+      "title": "共享状态与依赖注入",
+      "description": "ProjectManager.DataContainer 是所有组件共享的可变状态容器。EasyQCApp 初始化时创建 DataManager、ProjectManager、DialogMain、TableDisplay 等组件，它们都持有对同一个 dt 实例的引用——这是一种非正式的依赖注入模式。理解这个状态共享机制是理解整个架构的关键。",
+      "nodeIds": ["file:utils/projects_manager.py", "concept:data-container", "file:utils/data_manager.py"]
+    },
+    {
+      "order": 4,
+      "title": "GUI主窗口与模块管理",
+      "description": "main_window.py 构建整个主窗口布局：项目管理区、常量设置、变量设置(三种数据导入方式)、以及可滚动的QC模块卡片。每个卡片动态生成score/tag配置控件，支持展开/收起和模块代码编辑器。",
+      "nodeIds": ["file:gui/main_window.py", "file:gui/dialog_main.py"]
+    },
+    {
+      "order": 5,
+      "title": "QC评分页面",
+      "description": "gui_qcpage.py 是核心的工作页面。每个被试(ezqcid)打开一个QC页面，展示该被试的影像数据，通过键盘快捷键(可自定义)进行tags标记和scores打分。支持自定义Python代码执行(子进程或eval)，评分结果保存为JSON文件。",
+      "nodeIds": ["file:gui/gui_qcpage.py", "file:utils/qcpage.py"]
+    },
+    {
+      "order": 6,
+      "title": "评分聚合与数据导出",
+      "description": "ProjectManager.load_ratings() 扫描所有评分JSON，验证数据完整性，通过pivot_table构建宽格式汇总表，合并到ezqc_all主表。TableDisplay 提供SQL过滤和数据浏览功能。整个数据流：被试列表 → 逐人评分 → JSON存储 → 聚合汇总 → CSV导出 → SQL分析。",
+      "nodeIds": ["file:utils/projects_manager.py", "file:gui/gui_table.py", "concept:rating-aggregation", "concept:qc-module-model"]
+    },
+    {
+      "order": 7,
+      "title": "基础设施：日志与文件工具",
+      "description": "EasyQCLogger 采用单例模式，同时输出到文件和控制台。@log_function 装饰器自动追踪函数调用，LogContext 上下文管理器计时代码块。FileUtils 提供路径处理辅助方法。",
+      "nodeIds": ["file:utils/logger.py", "file:utils/file_utils.py"]
+    }
+  ]
+}

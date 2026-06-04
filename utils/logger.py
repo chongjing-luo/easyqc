@@ -6,14 +6,12 @@ EasyQC 日志和错误处理系统
 """
 
 import logging
-import os
 import sys
 import traceback
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
-from typing import Optional, Any
-import tkinter as tk
-from tkinter import messagebox
+from typing import Any
 
 class EasyQCLogger:
     """EasyQC统一日志管理器"""
@@ -21,20 +19,24 @@ class EasyQCLogger:
     _instance = None
     _initialized = False
     
-    def __new__(cls):
+    def __new__(cls, *args, **kwargs):
         """单例模式"""
         if cls._instance is None:
             cls._instance = super(EasyQCLogger, cls).__new__(cls)
         return cls._instance
     
-    def __init__(self):
+    def __init__(self, project_root: str | Path | None = None):
         """初始化日志系统"""
-        if self._initialized:
+        if self._initialized and project_root is None:
             return
-        
-        self.project_root = Path(__file__).parent.parent
+
+        if self._initialized:
+            for handler in self.logger.handlers:
+                handler.close()
+
+        self.project_root = Path(project_root) if project_root is not None else Path(__file__).parent.parent
         self.log_dir = self.project_root / "logs"
-        self.log_dir.mkdir(exist_ok=True)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
         
         # 设置日志文件路径
         self.log_file = self.log_dir / f"easyqc_{datetime.now().strftime('%Y%m%d')}.log"
@@ -123,78 +125,30 @@ class EasyQCLogger:
             self.logger.log(level, message)
     
     def show_error_popup(self, title: str, message: str):
-        """显示错误弹窗"""
-        try:
-            # 创建临时的根窗口（如果没有的话）
-            root = None
-            try:
-                # 尝试获取现有的根窗口
-                root = tk._default_root
-                if root is None:
-                    raise tk.TclError
-            except (tk.TclError, AttributeError):
-                # 如果没有根窗口，创建一个临时的
-                root = tk.Tk()
-                root.withdraw()  # 隐藏主窗口
-            
-            # 显示错误对话框
-            messagebox.showerror(title, message)
-            
-            # 如果是临时创建的根窗口，销毁它
-            if root and root != tk._default_root:
-                root.destroy()
-                
-        except Exception as e:
-            # 如果弹窗失败，至少在控制台输出错误
-            print(f"弹窗显示失败: {e}")
-            print(f"{title}: {message}")
+        """兼容旧 API：logger 不再负责 GUI 弹窗。"""
+        self.info(f"{title}: {message}", "Popup")
     
     def show_info_popup(self, title: str, message: str):
-        """显示信息弹窗"""
-        try:
-            root = None
-            try:
-                root = tk._default_root
-                if root is None:
-                    raise tk.TclError
-            except (tk.TclError, AttributeError):
-                root = tk.Tk()
-                root.withdraw()
-            
-            messagebox.showinfo(title, message)
-            
-            if root and root != tk._default_root:
-                root.destroy()
-                
-        except Exception as e:
-            print(f"弹窗显示失败: {e}")
-            print(f"{title}: {message}")
+        """兼容旧 API：logger 不再负责 GUI 弹窗。"""
+        self.info(f"{title}: {message}", "Popup")
     
     def show_warning_popup(self, title: str, message: str):
-        """显示警告弹窗"""
-        try:
-            root = None
-            try:
-                root = tk._default_root
-                if root is None:
-                    raise tk.TclError
-            except (tk.TclError, AttributeError):
-                root = tk.Tk()
-                root.withdraw()
-            
-            messagebox.showwarning(title, message)
-            
-            if root and root != tk._default_root:
-                root.destroy()
-                
-        except Exception as e:
-            print(f"弹窗显示失败: {e}")
-            print(f"{title}: {message}")
+        """兼容旧 API：logger 不再负责 GUI 弹窗。"""
+        self.warning(f"{title}: {message}", "Popup")
     
-    def log_function_call(self, func_name: str, module: str = None, **kwargs):
+    def log_function_call(
+        self,
+        func_name: str,
+        module: str = None,
+        args: tuple[Any, ...] | None = None,
+        kwargs: dict[str, Any] | None = None,
+    ):
         """记录函数调用"""
-        args_str = ", ".join([f"{k}={v}" for k, v in kwargs.items()])
-        message = f"调用函数: {func_name}({args_str})"
+        args = args or ()
+        kwargs = kwargs or {}
+        args_text = [repr(arg) for arg in args]
+        args_text.extend([f"{key}={value!r}" for key, value in kwargs.items()])
+        message = f"调用函数: {func_name}({', '.join(args_text)})"
         self.debug(message, module)
     
     def log_function_result(self, func_name: str, result: Any, module: str = None):
@@ -276,10 +230,11 @@ def clear_old_logs(days: int = 30):
 def log_function(module: str = None):
     """函数调用日志装饰器"""
     def decorator(func):
+        @wraps(func)
         def wrapper(*args, **kwargs):
             func_name = func.__name__
             try:
-                logger.log_function_call(func_name, module, **kwargs)
+                logger.log_function_call(func_name, module, args=args, kwargs=kwargs)
                 result = func(*args, **kwargs)
                 logger.log_function_result(func_name, "成功", module)
                 return result

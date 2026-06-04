@@ -36,6 +36,7 @@ qcmodule_*.json
 
 # 自动生成的脚本
 start.sh
+!start.sh
 
 # 数据文件（如果包含敏感数据）
 DataAndTable/
@@ -46,3 +47,4 @@ Table/
 test_*.py
 *_test.py
 debug_*.py
+!tests/**/*.py

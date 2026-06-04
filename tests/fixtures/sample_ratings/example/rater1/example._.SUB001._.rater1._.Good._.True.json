@@ -1,0 +1,34 @@
+{
+  "name": "example",
+  "label": "Example",
+  "rater": "rater1",
+  "ezqcid": "SUB001",
+  "tags": {
+    "1": {
+      "label": "Visible artifact",
+      "value": true
+    }
+  },
+  "scores": {
+    "1": {
+      "label": "Overall quality",
+      "num": "Poor,Fair,Good",
+      "num_": [
+        "Poor",
+        "Fair",
+        "Good"
+      ],
+      "value": "Good"
+    }
+  },
+  "code": "echo {ezqcid}",
+  "interper": "shell",
+  "control": true,
+  "select_filter": null,
+  "showing": true,
+  "code_exe": {
+    "0": "echo SUB001"
+  },
+  "time": "2026-06-02 00:00:00",
+  "notes": "fixture rating"
+}

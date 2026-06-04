@@ -6,24 +6,20 @@ EasyQC 对话框主要功能模块
 包含文件浏览、路径选择、变量设置等对话框功能
 """
 
-import codecs
-from math import log
 import tkinter as tk
 from tkinter import ttk
 from tkinter.ttk import Button,  Label,  Treeview, Checkbutton, Radiobutton
-from tkinter import StringVar, BooleanVar,  Scrollbar, Menu
+from tkinter import StringVar, BooleanVar,  Scrollbar
 from tkinter import messagebox
-import subprocess, os, glob, json, platform
-from datetime import datetime
+import os
 
 
-from utils.logger import log_info, log_error, log_warning, log_exception, log_debug, LogContext, log_function
+from utils.logger import log_info, log_error, log_warning, log_exception, log_debug
+from core.code_executor import CodeExecutor, CodeExecutorError
 
-from utils.file_utils import FileUtils
-from utils.projects_manager import ProjectManager
-from utils.data_manager import DataManager
-
-from utils.qcpage import qcpage
+from gui.qc_page import QCPageController, QCPageRuntimeContext
+from gui.state_adapter import LegacyGUIStateAdapter
+from gui.widgets import bind_context_menu
 
 
 
@@ -35,6 +31,8 @@ class gui_qcpage:
 
             # 用于存储当前运行的进程句柄
             self.current_process = None
+            self.code_executor = CodeExecutor()
+            self.controller = QCPageController(code_executor=self.code_executor)
             log_info("gui_qcpage初始化完成")
         except Exception as e:
             log_exception(f"gui_qcpage初始化失败: {str(e)}")
@@ -57,6 +55,38 @@ class gui_qcpage:
         else:
             log_warning(f"无法调用TableDisplay方法 {method_name}，TablD未初始化")
 
+    def _ensure_controller(self):
+        if not hasattr(self, 'controller'):
+            self.controller = QCPageController()
+        return self.controller
+
+    def _ensure_runtime_context(self):
+        if not hasattr(self, "runtime_context"):
+            if hasattr(self, "gui_state"):
+                self.runtime_context = QCPageRuntimeContext.from_gui_state(self.gui_state)
+            else:
+                self.runtime_context = QCPageRuntimeContext.from_legacy_dt(getattr(self, "dt", None))
+        return self.runtime_context
+
+    def _runtime_settings(self):
+        return self._ensure_runtime_context().settings
+
+    def _runtime_tables(self):
+        return self._ensure_runtime_context().tables
+
+    def _module_rater_dir(self):
+        return self._ensure_runtime_context().module_rater_dir
+
+    def _set_module_rater_dir(self, module_name, rater):
+        context = self._ensure_runtime_context()
+        path = self._ensure_controller().module_rater_dir(context.output_dir, module_name, rater)
+        return context.set_module_rater_dir(path)
+
+    def current_module(self, settings=None):
+        if settings is None:
+            settings = self._runtime_settings()
+        return self._ensure_controller().current_module(settings, self.module_index)
+
     def open_qcpage_from_main(self, app, module_name):
         """
         从main_window打开qc页面
@@ -65,23 +95,23 @@ class gui_qcpage:
         """
         try:
             log_info(f"开始打开QC页面，模块: {module_name}")
-            self.ProjM = app.ProjM
-            self.DataM = app.DataM
             self.TablD = app.TablD
-            self.dt = app.ProjM.dt
+            project_manager = getattr(app, "ProjM", None)
+            self.gui_state = getattr(app, "gui_state", LegacyGUIStateAdapter(project_manager))
+            self.runtime_context = QCPageRuntimeContext.from_gui_state(self.gui_state)
             self.module_name = module_name
             self.ezqcid_index = None
             self.watch_mode_ = False
             
             if self.check_module():
                 return
-            self.module = self.dt.settings['qcmodule'][self.module_index]
-            self.dt.dir_module_rater = os.path.join(self.dt.output_dir, 'RatingFiles', module_name, self.module['rater'])
+            self.module = self.current_module()
+            self._set_module_rater_dir(module_name, self._ensure_controller().module_rater(self.module))
             if self.check_table():
                 return
             self.gen_present()
             log_debug("保存设置")
-            self.ProjM.save_settings()
+            self.gui_state.save_settings()
             log_debug("开始创建QC页面组件")
             self.qcpage_widgets()
             log_info(f"QC页面打开完成，模块: {module_name}")
@@ -98,14 +128,9 @@ class gui_qcpage:
     def check_table(self):
         # 检查和准备数据表
         log_debug(f"检查模块 {self.module_name} 数据")
-        if self.module_name not in self.dt.tab or self.dt.tab[self.module_name] is None:
+        table = self._ensure_controller().ensure_module_table(self._runtime_tables(), self.module_name)
 
-            if 'ezqc_qctable' in self.dt.tab and self.dt.tab['ezqc_qctable'] is not None:
-                self.dt.tab[self.module_name] = self.dt.tab['ezqc_qctable']
-            else:
-                self.dt.tab[self.module_name] = self.dt.tab['ezqc_all']
-
-        if self.dt.tab[self.module_name] is None or (hasattr(self.dt.tab[self.module_name], 'empty') and self.dt.tab[self.module_name].empty):
+        if not self._ensure_controller().table_has_rows(table):
             log_error("数据为空")
             messagebox.showerror("错误", "数据为空")
             return False
@@ -116,25 +141,27 @@ class gui_qcpage:
             if module_name is None:
                 module_name = self.module_name
 
-            self.module_index = next((i for i, m in self.dt.settings['qcmodule'].items() if m['name'] == module_name), None)
+            controller = self._ensure_controller()
+            self.module_index = controller.module_index_by_name(self._runtime_settings(), module_name)
             if self.module_index is None:
                 log_error(f"找不到模块: {module_name}")
                 messagebox.showerror("错误", f"找不到模块: {module_name}")
                 return False
             
-            module = self.dt.settings['qcmodule'][self.module_index]
+            module = self.current_module()
             if module['name'] != module_name:
                 log_error(f"模块名不一致: {module['name']} != {module_name}")
                 messagebox.showerror("错误", f"模块名不一致: {module['name']} != {module_name}")
                 return False
             
             # 检查评分人设置
-            if module['rater'] is None or module['rater'] == '':
+            rater = controller.module_rater(module)
+            if rater is None or rater == '':
                 log_error("评分人未设置")
                 messagebox.showerror("错误", "请先设置评分人")
                 return False
             
-            log_debug(f"评分人: {module['rater']}")
+            log_debug(f"评分人: {rater}")
 
             # 检查scores字段
             if 'scores' in module:
@@ -192,19 +219,19 @@ class gui_qcpage:
             self.module = module
             self.rater = rater
             self.ezqcid = ezqcid
-            self.dt.dir_module_rater = os.path.join(self.dt.output_dir, 'RatingFiles', module, rater)
+            self._set_module_rater_dir(module, rater)
             
-            print(f"project: {project}, module: {module}, rater: {rater}, ezqcid: {ezqcid}")
+            log_info(f"project: {project}, module: {module}, rater: {rater}, ezqcid: {ezqcid}", "QCPage")
             log_info(f"self.module_index: {self.module_index}")
             
             # 获取模块配置
-            module_config = self.dt.settings['qcmodule'][self.module_index]
+            module_config = self.current_module()
             log_info(f"获取模块配置成功: {module_config.get('name', 'Unknown')}")
             
             # 创建QC页面窗口
             log_info("开始创建QC页面窗口")
             self.watch_mode_ = True
-            self.qcpage_widgets(module=module_config, watch_mode=self.watch_mode_, shell=True)
+            self.qcpage_widgets(module=module_config, watch_mode=self.watch_mode_)
             log_info("QC页面窗口创建完成")
             
             # 加载评分数据
@@ -214,7 +241,7 @@ class gui_qcpage:
             
             # 填充列表
             log_info("开始填充列表")
-            module_config = self.dt.settings['qcmodule'][self.module_index]
+            module_config = self.current_module()
             self.populate_listbox(module=module_config)
             log_info("列表填充完成")
             
@@ -228,25 +255,22 @@ class gui_qcpage:
             
         except Exception as e:
             log_exception(f"打开QC页面时发生错误: {e}")
-            print(f"错误：打开QC页面失败 - {e}")
+            log_error(f"错误：打开QC页面失败 - {e}", "QCPage")
             return False
 
         # self.gui_qcpage.mainloop()
 
-    def qcpage_widgets(self, module=None, watch_mode=None, shell=False):
+    def qcpage_widgets(self, module=None, watch_mode=None):
         """设置4个qc页面的评分页面（相同代码部分）"""
         try:
             
             if watch_mode is None:
                 watch_mode = self.watch_mode_
             if module is None:
-                module = self.dt.settings['qcmodule'][self.module_index]
+                module = self.current_module()
             log_debug(f"开始创建QC页面组件，模块: {module['name']}")
 
-            if shell:
-                self.gui_qcpage = tk.Tk()
-            else:
-                self.gui_qcpage = tk.Toplevel()
+            self.gui_qcpage = tk.Toplevel()
 
             self.gui_qcpage.geometry('510x500')
             self.gui_qcpage.resizable(True, True)
@@ -312,10 +336,7 @@ class gui_qcpage:
                 ezqcid = values[1]
                 self.TablD.show_right_menu(ezqcid, event)
         # 绑定右键菜单
-        if platform.system() in ["Linux", "Windows"]:
-            self.listbox.bind("<Button-3>", show_right_menu)
-        elif platform.system() == "Darwin":
-            self.listbox.bind("<Button-2>", show_right_menu)
+        bind_context_menu(self.listbox, show_right_menu)
 
         # 第三部分：底部的按钮
         frame_buttons = ttk.Frame(frame_middle)
@@ -355,7 +376,7 @@ class gui_qcpage:
                 
                 # 创建StringVar并设置初始值
                 def on_score_change(i=i):
-                    self.dt.settings['qcmodule'][self.module_index]['scores'][i].update({'value':self.score_vars[i].get()})
+                    self._ensure_controller().set_score_value(self.current_module(), i, self.score_vars[i].get())
                     if i == '1':
                         self.update_listbox_row()
                     self.save_rating()
@@ -378,7 +399,7 @@ class gui_qcpage:
             tag_frame.place(x=0, y=255+height_1, width=800, height=40)
             
             def on_tag_change(tag_key):
-                self.dt.settings['qcmodule'][self.module_index]['tags'][tag_key].update({'value': self.tag_vars[tag_key].get()})
+                self._ensure_controller().set_tag_value(self.current_module(), tag_key, self.tag_vars[tag_key].get())
                 if tag_key == '1':
                     self.update_listbox_row()
                 self.save_rating()
@@ -412,7 +433,7 @@ class gui_qcpage:
         
         # 绑定文本变化事件以更新self.present['notes']
         def on_text_change(event):
-            self.dt.settings['qcmodule'][self.module_index]['notes'] = self.notes_text.get('1.0', 'end-1c')
+            self._ensure_controller().set_notes(self.current_module(), self.notes_text.get('1.0', 'end-1c'))
             self.notes_text.edit_modified(False)
             self.save_rating()
         self.notes_text.bind('<<Modified>>', on_text_change)
@@ -426,13 +447,10 @@ class gui_qcpage:
         Button(main_frame, text="删除", command=lambda: self.notes_text.delete('1.0', 'end'), style = 'TButton').place(x=355, y=300+height_1, width=65, height=30)
         Button(main_frame, text="清空", command=lambda: self.notes_text.delete('1.0', 'end'), style = 'TButton').place(x=425, y=300+height_1, width=65, height=30)
 
-        
-        self.load_keyboard()
-
     def load_present_to_gui(self, module=None):
 
         if module is None:
-            module = self.dt.settings['qcmodule'][self.module_index]
+            module = self.current_module()
 
         # 加载scores
         for i in module['scores']:
@@ -459,11 +477,11 @@ class gui_qcpage:
         try:
             
             if module is None:
-                module = self.dt.settings['qcmodule'][self.module_index]
+                module = self.current_module()
             log_debug(f"开始填充表格数据，模块: {module['name']}")
 
 
-            dir_module_rater = self.dt.dir_module_rater
+            dir_module_rater = self._module_rater_dir()
             # 清空现有数据
             for item in self.listbox.get_children():
                 self.listbox.delete(item)
@@ -472,23 +490,23 @@ class gui_qcpage:
             self.ezqcid_to_index = {}
             self.index_to_ezqcid = {}
             
-            if hasattr(self.dt, 'tab') and module['name'] in self.dt.tab:
-                data = self.dt.tab[module['name']].copy()
-                data = data[['ezqcid']].drop_duplicates().sort_values('ezqcid')
+            if self._runtime_tables():
+                data = self._ensure_controller().module_subject_rows(self._runtime_tables(), module['name'])
                 log_debug(f"找到数据表，行数: {len(data)}")
                 
                 for row_num, (index, row) in enumerate(data.iterrows(), 1):
 
                     ezqcid = row.get('ezqcid', '')
-                    prefix = f"{module['name']}._.{ezqcid}._.{module['rater']}"
-                    matching_files = glob.glob(os.path.join(dir_module_rater, f"{prefix}*"))
-                    rating_filenames = [os.path.basename(f) for f in matching_files]
-                    if len(rating_filenames) > 0:
-                        selected_file = os.path.join(dir_module_rater, rating_filenames[0])
-                        with open(selected_file, 'r') as f:
-                            rating = json.load(f)
-                            score1 = rating['scores']['1'].get('value','')
-                            tag1 = rating['tags']['1'].get('value','')
+                    controller = self._ensure_controller()
+                    rating_files, rating = controller.load_first_legacy_module_rating(
+                        module,
+                        dir_module_rater,
+                        ezqcid,
+                        controller.module_rater(module),
+                    )
+                    if rating_files and rating is not None:
+                        score1 = rating['scores']['1'].get('value','')
+                        tag1 = rating['tags']['1'].get('value','')
                     else:
                         score1 = ''
                         tag1 = ''
@@ -497,7 +515,8 @@ class gui_qcpage:
                     self.ezqcid_to_index[ezqcid] = row_num
                     self.index_to_ezqcid[row_num] = ezqcid
                 
-                self.ezqcid_index = self.ezqcid_to_index[self.ezqcid]
+                if self.ezqcid in self.ezqcid_to_index:
+                    self.ezqcid_index = self.ezqcid_to_index[self.ezqcid]
 
                 log_info(f"表格数据填充完成，共 {len(data)} 行")
             else:
@@ -532,7 +551,7 @@ class gui_qcpage:
                 elif self.ezqcid_index > len(self.listbox.get_children()):
                     self.ezqcid_index = 1 
                 self.ezqcid = self.index_to_ezqcid[self.ezqcid_index]
-                print(f"导航到主题，事件: {event}，ezqcid: {self.ezqcid}")
+                log_debug(f"导航到主题，事件: {event}，ezqcid: {self.ezqcid}", "QCPage")
 
             else:
                 self.ezqcid = event
@@ -545,50 +564,22 @@ class gui_qcpage:
             log_exception(f"导航主题失败: {str(e)}")
             messagebox.showerror("错误", f"导航主题失败: {str(e)}")
 
-
-    def load_keyboard(self):
-        """
-        加载键盘事件
-        """
-        try:
-            log_debug("加载键盘事件")
-            # TODO: 实现键盘事件加载逻辑
-            pass
-        except Exception as e:
-            log_exception(f"加载键盘事件失败: {str(e)}")
-
     def save_rating(self):
         """
         保存评分
         """
         try:
             log_debug("开始保存评分")
-            if not os.path.exists(self.dt.dir_module_rater):
-                os.makedirs(self.dt.dir_module_rater)
+            module_rater_dir = self._module_rater_dir()
+            if not os.path.exists(module_rater_dir):
+                os.makedirs(module_rater_dir)
 
             if self.watch_mode.get():
                 log_info(f"观察模式，不保存文件")
                 return
-            module = self.dt.settings['qcmodule'][self.module_index]
-            score1 = module['scores']['1'].get('value', 'None')
-            tag1 = module['tags']['1'].get('value', False)
-            module['time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            # 构建文件名前缀和完整文件名
-            prefix = f"{self.module_name}._.{module['ezqcid']}._.{module['rater']}"
-            filename = f"{prefix}._.{score1}._.{tag1}.json"
-            file_path = os.path.join(self.dt.dir_module_rater, filename)
-            
-            matching_files = glob.glob(os.path.join(self.dt.dir_module_rater, f"{prefix}*"))
-            for file_to_delete in matching_files:
-                try:
-                    os.remove(file_to_delete)
-                    log_debug(f"删除旧的评分文件: {os.path.basename(file_to_delete)}")
-                except Exception as e:
-                    log_warning(f"删除文件 {os.path.basename(file_to_delete)} 失败: {str(e)}")
+            module = self.current_module()
+            file_path = self._ensure_controller().save_legacy_module_rating(module, module_rater_dir)
 
-            # 保存新的评分文件
-            with open(file_path, 'w') as f:
-                json.dump(module, f, indent=4)
             log_info(f"评分保存完成，文件: {file_path}")
         except Exception as e:
             log_exception(f"保存评分失败: {str(e)}")
@@ -603,49 +594,50 @@ class gui_qcpage:
             if ezqcid is None:
                 ezqcid = self.ezqcid
             if module is None:
-                module = self.dt.settings['qcmodule'][self.module_index]
+                module = self.current_module()
             if rater is None:
                 rater = module['rater']
-            # 构建文件名前缀
-            file_prefix = f"{module['name']}._.{ezqcid}._.{rater}"
-            print(f"file_prefix: {file_prefix}")
-            print(f"self.dt.dir_module_rater: {self.dt.dir_module_rater}")
-            rating_files = glob.glob(os.path.join(self.dt.dir_module_rater, f"{file_prefix}*"))
+            module_rater_dir = self._module_rater_dir()
+            log_debug(f"module_rater_dir: {module_rater_dir}", "QCPage")
+            controller = self._ensure_controller()
+            rating_files, new_module = controller.load_first_legacy_module_rating(
+                module,
+                module_rater_dir,
+                ezqcid,
+                rater,
+            )
+            rating_filenames = [path.name for path in rating_files]
             
-            if len(rating_files) == 1:
-                # 提取文件名进行排序，保持原有的排序逻辑
-                rating_filenames = [os.path.basename(f) for f in rating_files]
-                selected_file = os.path.join(self.dt.dir_module_rater, rating_filenames[0])
-                with open(selected_file, 'r') as f:
-                    scores = self.dt.settings['qcmodule'][self.module_index]['scores']
-                    tags = self.dt.settings['qcmodule'][self.module_index]['tags']
-                    code = self.dt.settings['qcmodule'][self.module_index]['code']
-                    select_filter = self.dt.settings['qcmodule'][self.module_index]['select_filter']
-                    new_module = json.load(f)
-                    for key in scores.keys():
-                        if scores[key]['num_'] != new_module['scores'][key]['num_']:
-                            self.watch_mode_ = True
-                            messagebox.showerror("错误", f"评分文件 {rating_filenames[0]} 中的评分与当前模块的评分不一致，观看模式。")
-
-                    for key in tags.keys():
-                        if tags[key]['label'] != new_module['tags'][key]['label']:
-                            self.watch_mode_ = True
-                            messagebox.showerror("错误", f"评分文件 {rating_filenames[0]} 中的标签与当前模块的标签不一致，观看模式。")
-                    self.dt.settings['qcmodule'][self.module_index] = new_module
-                    self.dt.settings['qcmodule'][self.module_index]['code'] = code
-                    self.dt.settings['qcmodule'][self.module_index]['select_filter'] = select_filter
+            if rating_files and new_module is not None:
+                if len(rating_files) > 1:
+                    log_warning(f"评分文件多于1个，ezqcid: {ezqcid}，加载第一条: {rating_filenames[0]}")
+                current_module = self.current_module()
+                compatibility_issues = controller.find_rating_compatibility_issues(current_module, new_module)
+                if compatibility_issues:
+                    self.watch_mode_ = True
+                    if hasattr(self, "watch_mode") and hasattr(self.watch_mode, "set"):
+                        self.watch_mode.set(True)
+                    issue_labels = ", ".join(issue_type for issue_type, _key in compatibility_issues)
+                    log_warning(
+                        f"评分文件 {rating_filenames[0]} 与当前模块配置不一致({issue_labels})，已进入观察模式"
+                    )
+                self.apply_rating_state(current_module, new_module)
 
                 log_debug(f"成功加载评分文件: {rating_filenames[0]}")
 
             elif len(rating_files) == 0:
                 log_info(f"未找到评分文件，产生新的ezqcid: {ezqcid}")
                 self.init_present(module, ezqcid)
-            else:
-                messagebox.showinfo("提示", f"评分文件多于1个，ezqcid: {ezqcid}")
 
         except Exception as e:
             log_exception(f"加载评分失败: {str(e)}")
             messagebox.showerror("错误", f"加载评分失败: {str(e)}")
+
+    def apply_rating_state(self, current_module, rating_module):
+        """
+        只把评分状态应用到当前模块，避免评分文件覆盖模块配置。
+        """
+        self._ensure_controller().apply_rating_state(current_module, rating_module)
 
     def update_listbox_row(self, module=None):
         """更新listbox中特定行的数据"""
@@ -656,7 +648,7 @@ class gui_qcpage:
                 return
 
             if module is None:
-                module = self.dt.settings['qcmodule'][self.module_index]
+                module = self.current_module()
 
             ezqcid = module['ezqcid']
             row_index = self.ezqcid_to_index[ezqcid]
@@ -682,15 +674,9 @@ class gui_qcpage:
         初始化演示数据
         """
         log_debug(f"初始化演示数据，模块: {module['name']}, ezqcid: {ezqcid}")
-        for key in  module['scores'].keys():
-            module['scores'][key]['value'] = None
-        for key in module['tags'].keys():
-            module['tags'][key]['value'] = False
-        module['code_exe'] = None
-        module['ezqcid'] = ezqcid
-        module['time'] = None
-        module['notes'] = None
-        self.dt.settings['qcmodule'][self.module_index] = module
+        controller = self._ensure_controller()
+        controller.reset_rating_state(module, ezqcid)
+        controller.set_current_module(self._runtime_settings(), self.module_index, module)
 
 
     def gen_present(self, module=None):
@@ -700,22 +686,22 @@ class gui_qcpage:
         try:
             log_debug(f"开始生成演示数据，模块索引: {self.module_index}")
             if module is None:
-                module = self.dt.settings['qcmodule'][self.module_index]
+                module = self.current_module()
                 
             if module['ezqcid'] is None:
                 log_debug(f"为模块 {module['name']} 创建演示配置")
 
-                if len(self.dt.tab[module['name']]) > 0:
-                    self.ezqcid = self.dt.tab[module['name']]['ezqcid'].tolist()[0]
-                    if os.path.exists(self.dt.dir_module_rater):
+                first_ezqcid = self._ensure_controller().first_subject_id(self._runtime_tables(), module['name'])
+                if first_ezqcid is not None:
+                    self.ezqcid = first_ezqcid
+                    if os.path.exists(self._module_rater_dir()):
                         self.load_rating()
                     else:
                         self.init_present(module, self.ezqcid) 
             else:
                 current_ezqcid = module['ezqcid']
-                find = current_ezqcid in self.dt.tab[module['name']]['ezqcid'].values
-                if not find:
-                    self.dt.settings['qcmodule'][self.module_index]['ezqcid'] = None
+                if not self._ensure_controller().subject_exists(self._runtime_tables(), module['name'], current_ezqcid):
+                    self._ensure_controller().set_subject(self.current_module(), None)
                     self.gen_present(module)
                 else:
                     self.ezqcid = current_ezqcid
@@ -738,7 +724,7 @@ class gui_qcpage:
 
             log_debug(f"开始打开图片，ID: {ezqcid}")
             code, code_exe = self.gen_code(ezqcid)
-            self.dt.settings['qcmodule'][self.module_index]['code_exe'] = code_exe
+            self._ensure_controller().set_code_execution(self.current_module(), code_exe)
 
             self.exe_code(code_exe)
             log_info(f"图片 {ezqcid} 打开完成")
@@ -750,44 +736,15 @@ class gui_qcpage:
     def gen_code(self,ezqcid, settings=None, module=None, table=None):
 
         if settings is None:
-            settings = self.dt.settings
+            settings = self._runtime_settings()
 
         if module is None:
-            module = settings['qcmodule'][self.module_index]
+            module = self.current_module(settings)
 
         if table is None:
-            table = self.dt.tab[module['name']]
+            table = self._ensure_controller().module_table(self._runtime_tables(), module['name'])
 
-        # 获取指定ezqcid的行数据,转换为字典格式
-        code_vars = table.loc[table['ezqcid'] == ezqcid].to_dict('records')[0]
-        code_vars = {**code_vars, **settings['constants']}
-        # 获取代码并替换变量
-        code = module['code']
-        for var_name, var_value in code_vars.items():
-            code = code.replace(f"${var_name}", str(var_value)) 
-            code = code.replace(f"${{{var_name}}}", str(var_value))   # shell脚本风格
-            code = code.replace(f"{{{var_name}}}", str(var_value)) 
-
-        if code.startswith('MULTICMD'):
-            code_exe = {}
-            code = code.replace('MULTICMD', '', 1).strip()
-            commands = [cmd.strip() for cmd in code.split(';|') if cmd.strip()]
-            code_exe = {i: cmd for i, cmd in enumerate(commands)}
-
-        elif 'MULTICMD' in code:
-            code_exe = {}
-            # 将code根据MULTICMD分成两部分
-            code_parts = code.split('MULTICMD', 1)
-            code_pre = code_parts[0].strip()
-            if not code_pre.endswith(';'):
-                code_pre += ';'
-            code_pos = code_parts[1].strip() if len(code_parts) > 1 else ''
-            commands = [cmd.strip() for cmd in code_pos.split(';|') if cmd.strip()]
-            code_exe = {i: code_pre + cmd for i, cmd in enumerate(commands)}
-        else:
-            code_exe = {0: code}
-
-        return (code, code_exe)
+        return self._ensure_controller().generate_code(ezqcid, settings, module, table)
 
 
     def exe_code(self, code_exe, control=None):
@@ -795,25 +752,19 @@ class gui_qcpage:
         执行代码
         """
         if control is None:
-            control = self.dt.settings['qcmodule'][self.module_index].get('control', False)
+            control = self.current_module().get('control', False)
         
-        # 初始化进程列表（如果不存在）
-        if not hasattr(self, 'current_processes'):
-            self.current_processes = []
-        
-        if control:
-            self.close_current_process()
+        if not hasattr(self, 'code_executor'):
+            self.code_executor = CodeExecutor()
 
-        # 分别执行每个命令
-        for i, cmd in code_exe.items():
-            if platform.system() != 'Windows':
-                process = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            else:
-                process = subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
-            self.current_processes.append(process)
-            log_info(f"命令 {i+1}/{len(code_exe)} 已启动，进程ID: {process.pid}")
-            log_info(f"执行命令{'带控制' if control else '不带控制'}: {cmd}")
+        try:
+            processes = self.code_executor.start_commands(code_exe, control=control)
+            self.current_processes = self.code_executor.current_processes
+            for i, (cmd, process) in enumerate(zip(code_exe.values(), processes), 1):
+                log_info(f"命令 {i}/{len(code_exe)} 已启动，进程ID: {process.pid}")
+                log_info(f"执行命令{'带控制' if control else '不带控制'}: {cmd}")
+        except CodeExecutorError as e:
+            log_error(f"命令执行被拒绝: {str(e)}")
         
         
         
@@ -822,47 +773,8 @@ class gui_qcpage:
         """
         关闭当前运行的进程
         """
-        if not hasattr(self, 'current_processes'):
+        if not hasattr(self, 'code_executor'):
             return
-            
-        processes_to_remove = []
-        for i, current_process in enumerate(self.current_processes):
-            if current_process and current_process.poll() is None:
-                try:
-                    # 获取进程组ID
-                    pgid = os.getpgid(current_process.pid)
-                    log_info(f"正在关闭进程组 {pgid}")
-                    
-                    # 先尝试优雅地终止整个进程组
-                    if platform.system() != 'Windows':
-                        os.killpg(pgid, 15)  # SIGTERM
-                    else:
-                        current_process.terminate()
-                    
-                    # 等待进程结束，最多等待5秒
-                    try:
-                        current_process.wait(timeout=5)
-                        log_info("进程已正常终止")
-                    except subprocess.TimeoutExpired:
-                        log_warning("进程未在5秒内终止，强制杀死")
-                        # 如果进程没有在5秒内结束，强制杀死整个进程组
-                        if platform.system() != 'Windows':
-                            os.killpg(pgid, 9)  # SIGKILL
-                        else:
-                            current_process.kill()
-                        current_process.wait()
-                        log_info("进程已强制终止")
-                        
-                except ProcessLookupError:
-                    log_info("进程已不存在")
-                except Exception as e:
-                    log_warning(f"关闭进程时出错: {str(e)}")
-                finally:
-                    processes_to_remove.append(i)
-            else:
-                # 进程已结束，标记为需要移除
-                processes_to_remove.append(i)
-        
-        # 从列表中移除已关闭的进程（从后往前移除以避免索引问题）
-        for i in reversed(processes_to_remove):
-            self.current_processes.pop(i)
+
+        self.code_executor.close_current_processes()
+        self.current_processes = self.code_executor.current_processes
