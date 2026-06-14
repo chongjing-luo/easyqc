@@ -302,6 +302,8 @@ easyqc/
 │   ├── validators.py           # 输入验证（score 解析、名称校验）
 │   └── logger.py               # 统一日志系统
 │
+├── easyqc.spec                 # PyInstaller 打包配置
+├── build.py                    # 一键打包脚本 (Linux/macOS/Windows)
 ├── tests/                      # pytest 自动化测试（234 个测试函数）
 │   ├── test_core/              # 核心服务测试
 │   ├── test_models/            # 数据模型测试
@@ -329,6 +331,44 @@ easyqc/
 ```
 
 测试覆盖：核心服务（项目 CRUD、评分聚合、命令执行、表格转换）、数据模型序列化/反序列化、输入验证、GUI 状态适配、旧版数据兼容性。
+
+---
+
+## 打包为独立可执行文件
+
+EasyQC 支持通过 PyInstaller 打包为**零依赖的独立可执行文件**，用户无需安装 Python 或任何依赖。
+
+### 打包流程
+
+```bash
+# 1. 安装依赖
+pip install -r requirements.txt
+pip install pyinstaller
+
+# 2. 一键打包（所有平台通用）
+python build.py                    # 打包当前平台
+python build.py --clean            # 清理后重新打包
+python build.py --version 1.0.0    # 指定版本号
+```
+
+> PyInstaller 只能为**当前平台**打包。要获得 Linux/macOS/Windows 的包，请在各自平台上分别运行 `python build.py`。
+
+### 输出
+
+| 平台 | 产物 | 大小 |
+|---|---|---|
+| **Linux** | `dist/EasyQC-v1.0.0-linux-x86_64/EasyQC` | ~300 MB |
+| **macOS** | `dist/EasyQC-v1.0.0-macos-arm64/EasyQC.app` | ~300 MB |
+| **Windows** | `dist/EasyQC-v1.0.0-windows-AMD64/EasyQC.exe` | ~300 MB |
+
+产物目录**可直接复制**到同平台其他机器运行，无需安装 Python 或任何依赖。打包自包含 Python 解释器、pandas 和 numpy。
+
+### 技术说明
+
+- **打包模式**：目录模式 (`COLLECT`)，启动速度快，方便调试。如需单文件可改用 `--onefile`
+- **GUI 应用**：`console=False`，Windows 下双击启动不显示命令行窗口
+- **外部查看器**：需用户单独安装（FreeSurfer freeview、wb_view 等），打包文件不包含它们
+- **项目文件**：`projects.json`、项目目录、日志等运行时数据不打包在内，由用户运行时动态创建
 
 ---
 

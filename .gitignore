@@ -48,3 +48,7 @@ test_*.py
 *_test.py
 debug_*.py
 !tests/**/*.py
+
+# 其他
+.understand-anything/
+.pytest_cache/
