@@ -83,9 +83,16 @@ class ProjectDialog(DialogBase):
 
     def import_project(self):
         path = filedialog.askdirectory(title="选择要导入的项目路径")
-        if path:
+        if not path:
+            return
+        try:
             self.gui_state.import_project_from_dir(path)
             self._refresh_project_combo()
+        except Exception as e:
+            messagebox.showerror(
+                "错误",
+                f"导入项目失败，路径可能非法（需含 settings_*.json）：\n{e}",
+            )
 
     def remove_project(self):
         dialog = tk.Toplevel(self.app.root)
@@ -215,9 +222,10 @@ class ConstantDialog(DialogBase):
                 self.refresh_constant_table()
                 dialog.destroy()
 
-        ttk.Button(button_frame, text="修改", command=update_constant, style="Project.TButton").pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="删除", command=delete_constant, style="Project.TButton").pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="取消", command=dialog.destroy, style="Project.TButton").pack(side=tk.RIGHT, padx=5)
+        button_pack_options = {"padx": 5, "pady": 10, "ipadx": 10, "ipady": 4}
+        ttk.Button(button_frame, text="修改", command=update_constant).pack(side=tk.LEFT, **button_pack_options)
+        ttk.Button(button_frame, text="删除", command=delete_constant).pack(side=tk.LEFT, **button_pack_options)
+        ttk.Button(button_frame, text="取消", command=dialog.destroy).pack(side=tk.RIGHT, **button_pack_options)
 
 
 class VariableDialog(DialogBase):
@@ -329,7 +337,24 @@ class VariableDialog(DialogBase):
         ttk.Button(self.dialog2, text="查看", command=show_tmp_df).place(x=20, y=200)
 
         def set_var_():
-            self.gui_state.set_filtered_variable_table(set_var())
+            df_to_merge = set_var()
+            if df_to_merge is None:
+                return
+            # G2 fix: warn if a new column name collides with an existing
+            # constant name. generate_code merges {row, **constants}, so a
+            # same-named column would shadow the constant and break template
+            # substitution silently.
+            constant_names = set(self.gui_state.constants().keys())
+            conflicts = [str(c) for c in df_to_merge.columns if str(c) in constant_names]
+            if conflicts:
+                if not messagebox.askyesno(
+                    "警告",
+                    "以下列名与常量名冲突，可能导致代码模板替换异常：\n"
+                    + ", ".join(conflicts)
+                    + "\n是否仍要合并？",
+                ):
+                    return
+            self.gui_state.set_filtered_variable_table(df_to_merge)
             self.dialog2.destroy()
             self.new_merge()
 

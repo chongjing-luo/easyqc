@@ -70,10 +70,13 @@ def test_setup_verifies_only_required_dependencies(easyqc_root: Path) -> None:
 
 
 def test_requirements_and_readme_document_structured_table_transform(easyqc_root: Path) -> None:
-    requirements = (easyqc_root / "requirements.txt").read_text(encoding="utf-8")
+    # NOTE: this test previously asserted requirements.txt contained
+    # 'scikit-learn>=1.0.0', but the codebase never imports sklearn — ADR-006
+    # replaced the external SQL/pandasql query engine with the built-in
+    # TableTransformEngine + ExpressionParser (AST whitelist), so sklearn is not
+    # a dependency. The assertion was stale and is removed (T-INFRA-1).
     readme = (easyqc_root / "README.md").read_text(encoding="utf-8")
 
-    assert "scikit-learn>=1.0.0" in requirements
     assert "内置 JSON 结构化操作" in readme
     assert "easyqc_back/" in readme
     assert "不作为日常启动目标" in readme
@@ -85,3 +88,19 @@ def test_easyqc_back_is_marked_as_reference_only(easyqc_root: Path) -> None:
     assert "old EasyQC implementation" in deprecated
     assert "Do not use this directory as the daily application entry point" in deprecated
     assert "Do not add features or bug fixes here" in deprecated
+
+
+def test_flat_layout_imports_work_from_easyqc_root(easyqc_root: Path) -> None:
+    """P3-F: this project uses a flat layout (no package __init__.py at root;
+    easyqc.py injects the project root onto sys.path and imports siblings as
+    `from core.X`, `from utils.X`, `from models.X`). This test pins that the
+    flat-layout import contract holds, so a future restructure to a real
+    package does not silently break the documented run mode (`python easyqc.py`).
+    The documented layout decision lives in README.md."""
+    # easyqc.py must exist at the root and reference the flat import path
+    entry = (easyqc_root / "easyqc.py").read_text(encoding="utf-8")
+    assert "sys.path" in entry, "easyqc.py should inject sys.path for flat imports"
+    # the three sibling packages exist as flat directories
+    assert (easyqc_root / "core").is_dir()
+    assert (easyqc_root / "utils").is_dir()
+    assert (easyqc_root / "models").is_dir()

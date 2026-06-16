@@ -92,6 +92,11 @@ class TableDisplay:
 
         # 创建右键菜单
         menu = tk.Menu(self.app.root if hasattr(self, 'app') and hasattr(self.app, 'root') else None, tearoff=0)
+
+        def dismiss_menu(event=None):
+            menu.unpost()
+            return "break"
+
         for module in self.module_names_for_menu():
             label = f'打开图像: {module}'
             menu.add_command(
@@ -106,6 +111,10 @@ class TableDisplay:
                 label=item['label'],
                 command=lambda ezqcid=ezqcid, name=item['name'], rater=item['rater']: self.open_gui(ezqcid, name, rater)
             )
+
+        menu.add_separator()
+        menu.add_command(label="取消", command=dismiss_menu)
+        menu.bind("<Escape>", dismiss_menu)
             
         # 在鼠标位置显示菜单
         try:

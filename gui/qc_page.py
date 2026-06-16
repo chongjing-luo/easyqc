@@ -36,6 +36,23 @@ class QCPageRuntimeContext:
     def from_gui_state(cls, gui_state: Any) -> "QCPageRuntimeContext":
         return cls.from_legacy_dt(getattr(gui_state, "dt", None))
 
+    @classmethod
+    def from_project_service(
+        cls, project_service: Any, tables: dict[str, Any] | None = None
+    ) -> "QCPageRuntimeContext":
+        """P2-CLI: build a runtime context directly from ProjectService (no
+        ProjectManager / LegacyGUIStateAdapter / DataContainer). Used by the
+        CLI 4-arg path. ``tables`` is the session-state result dict (may be
+        empty for CLI, which only needs settings + output_dir)."""
+        current = project_service.current_project
+        return cls(
+            settings=project_service.settings,
+            tables=tables or {},
+            output_dir=str(current.path) if current is not None else None,
+            module_rater_dir=None,
+            legacy_dt=None,
+        )
+
     def set_module_rater_dir(self, path: str | Path) -> str:
         self.module_rater_dir = str(path)
         if self.legacy_dt is not None:
@@ -141,13 +158,30 @@ class QCPageController:
         return current_module
 
     def find_rating_compatibility_issues(self, current_module: dict, rating_module: dict) -> list[tuple[str, str]]:
-        issues = []
-        for key, score in current_module["scores"].items():
-            if score["num_"] != rating_module["scores"][key]["num_"]:
+        """Surface schema drift between the current module and a saved rating.
+
+        Never raises KeyError: a saved rating that lacks (or has extra) score/tag
+        keys vs the current module is reported as an explicit issue, so load-time
+        drift does not crash the GUI (BUG-2, F-RAT-7, F-SET-7).
+
+        Issue kinds: ("score", key) / ("score_missing", key) /
+                     ("tag", key) / ("tag_missing", key).
+        """
+        issues: list[tuple[str, str]] = []
+        rating_scores = rating_module.get("scores", {}) or {}
+        for key, score in (current_module.get("scores", {}) or {}).items():
+            rating_score = rating_scores.get(key)
+            if not isinstance(rating_score, dict):
+                issues.append(("score_missing", key))
+            elif score.get("num_") != rating_score.get("num_"):
                 issues.append(("score", key))
 
-        for key, tag in current_module["tags"].items():
-            if tag["label"] != rating_module["tags"][key]["label"]:
+        rating_tags = rating_module.get("tags", {}) or {}
+        for key, tag in (current_module.get("tags", {}) or {}).items():
+            rating_tag = rating_tags.get(key)
+            if not isinstance(rating_tag, dict):
+                issues.append(("tag_missing", key))
+            elif tag.get("label") != rating_tag.get("label"):
                 issues.append(("tag", key))
 
         return issues

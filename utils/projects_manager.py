@@ -124,12 +124,13 @@ class ProjectManager:
         """加载项目"""
 
         if output_dir is not None:
+            pt_json = None
             for file in os.listdir(output_dir):
                 if file.startswith("settings_") and file.endswith(".json"):
                     project = file[9:-5]
                     pt_json = os.path.join(output_dir, file)
                     break
-            if os.path.exists(pt_json):
+            if pt_json and os.path.exists(pt_json):
                 self.dt.projects[project] = output_dir
                 self.dt.projects_info['last_project'] = project
                 self.dt.project = project
@@ -138,6 +139,9 @@ class ProjectManager:
                 self.load_project(project)
             else:
                 log_error("未找到设置文件", "ProjectManager")
+                raise FileNotFoundError(
+                    f"目录 {output_dir} 不是合法项目路径（缺少 settings_*.json）"
+                )
         else:
             self.dt.project = project
             self.dt.projects_info['last_project'] = project
@@ -467,14 +471,19 @@ class ProjectManager:
             log_error(f"模块 '{module_name}' 不存在", "ProjectManager")
             return
 
-        # 将module中的rater字段和ezqcid字段设置为None
-        module['rater'] = None
-        module['ezqcid'] = None
+        # G3 fix: export must not mutate the live in-memory module. The old code
+        # set rater/ezqcid to None directly on `module` (a reference into
+        # dt.settings), so exporting a module wiped its rater from the running
+        # project. Deep-copy first, sanitize the copy only.
+        from copy import deepcopy
+        export_copy = deepcopy(module)
+        export_copy['rater'] = None
+        export_copy['ezqcid'] = None
         dir = os.path.dirname(path)
         if not os.path.exists(dir):
             os.makedirs(dir, exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
-            json.dump(module, f, indent=4, ensure_ascii=False)
+            json.dump(export_copy, f, indent=4, ensure_ascii=False)
         log_info(f"模块 '{module_name}' 导出成功", "ProjectManager")
 
 

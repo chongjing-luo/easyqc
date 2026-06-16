@@ -19,6 +19,7 @@ sys.path.insert(0, str(project_root))
 from utils.logger import log_info, log_error, log_warning, log_exception, log_debug, LogContext, log_function
 
 from core.table_service import TABLE_QCTABLE
+from core.event_bus import EventBus, EventType
 from utils.file_utils import FileUtils
 from utils.projects_manager import ProjectManager
 from utils.data_manager import DataManager
@@ -80,6 +81,14 @@ class EasyQCApp:
                 self.setup_window()
                 self.load_project_to_gui()
                 log_info("用户界面设置完成", "EasyQCApp")
+
+                # P1-D (AC-10, ADR-002): subscribe to typed service events on the
+                # shared EventBus. Handlers are kept lightweight — the GUI today
+                # is pull-based (dialogs re-call load_*_to_gui after each op),
+                # so these handlers only log + flag staleness; they do NOT force
+                # a second refresh (that would double-render). P2 will migrate
+                # the pull-based refresh to be event-driven.
+                self._subscribe_event_bus()
                 
         except Exception as e:
             log_exception("EasyQC应用程序初始化失败", "EasyQCApp")
@@ -472,16 +481,20 @@ class EasyQCApp:
             
             
             # 添加验证跟踪 - 仅在失去焦点时验证
-            def validate_score_on_focus_out(event, key=score_key):
-                result = None
+            # G4 fix: capture score_entry_name via default arg (closure late-binding
+            # bug) and use StringVar.set("") to actually clear the Entry widget
+            # (the old setattr(...,"") replaced the StringVar attribute with a
+            # plain string, so the Entry never cleared).
+            def validate_score_on_focus_out(event, key=score_key, name=score_entry_name):
                 num = event.widget.get().strip()
                 result = self.DialM.validate_score(num)
                 if result is None:
-                    setattr(self, f"{score_entry_name}_var", "")
+                    getattr(self, f"{name}_var").set("")
+                    event.widget.delete(0, tk.END)
                     self.gui_state.update_score_fields(qcidx, key, num=None, num_=None)
                 else:
                     self.gui_state.update_score_fields(qcidx, key, num=num, num_=result)
-            
+
             # 绑定失去焦点事件
             score_entry.bind("<FocusOut>", lambda event, key=score_key: validate_score_on_focus_out(event, key))
             
@@ -729,20 +742,78 @@ class EasyQCApp:
 
     def load_module_to_gui(self):
         """加载模块到GUI"""
+        # G9: preserve scroll position across the full rebuild so adding/removing
+        # a score/tag doesn't snap the view back to the top.
+        canvas = getattr(self.scroll_area, "canvas", None)
+        scroll_y = canvas.yview()[0] if canvas else 0.0
+
         # 清空当前的卡片
         for widget in self.scroll_area.scrollable_frame.winfo_children():
             widget.destroy()
-        
+
         # 按照排序后的数字key顺序创建卡片
         for qcindex in self.gui_state.module_keys():
             card = self.create_collapsible_card(qcidx=qcindex)
             card.pack(fill="x", padx=5, pady=5)
 
+        # restore scroll position after the new widgets are laid out
+        if canvas:
+            self.root.update_idletasks()
+            canvas.yview_moveto(scroll_y)
+
 
 
     def quit_app(self):
         """退出应用"""
+        self.teardown_event_bus()
         self.gui_state.save_project_state()
         # self.ProjM.save_ratings()
         self.root.destroy()
         log_info("应用退出", "EasyQCApp")
+
+    # ---- P1-D: EventBus subscription (AC-10, ADR-002) ----
+
+    def _subscribe_event_bus(self) -> None:
+        """Subscribe to typed service events. Stores handler references so
+        ``teardown_event_bus`` can unsubscribe the exact same callables.
+        Safe to call when no services/event_bus are wired (CLI/standalone)."""
+        bus = getattr(self, "services", None)
+        bus = getattr(bus, "event_bus", None)
+        if bus is None:
+            bus = getattr(getattr(self, "project_service", None), "event_bus", None)
+        if bus is None:
+            log_debug("未发现 EventBus,跳过订阅", "EasyQCApp")
+            return
+        self.event_bus = bus
+        # bind handlers as instance attributes for stable identity (unsubscribe)
+        self._project_changed_handler = self._on_project_changed
+        self._modules_changed_handler = self._on_modules_changed
+        bus.subscribe(EventType.PROJECT_CHANGED, self._project_changed_handler)
+        bus.subscribe(EventType.MODULES_CHANGED, self._modules_changed_handler)
+        log_debug("已订阅 PROJECT_CHANGED / MODULES_CHANGED 事件", "EasyQCApp")
+
+    def teardown_event_bus(self) -> None:
+        """Unsubscribe handlers. Idempotent — safe to call multiple times
+        (tkinter destroy may re-enter)."""
+        bus = getattr(self, "event_bus", None)
+        if bus is None:
+            return
+        handler = getattr(self, "_project_changed_handler", None)
+        if handler is not None:
+            bus.unsubscribe(EventType.PROJECT_CHANGED, handler)
+            self._project_changed_handler = None
+        handler = getattr(self, "_modules_changed_handler", None)
+        if handler is not None:
+            bus.unsubscribe(EventType.MODULES_CHANGED, handler)
+            self._modules_changed_handler = None
+        log_debug("已退订 EventBus 处理器", "EasyQCApp")
+
+    def _on_project_changed(self, _event=None) -> None:
+        """Handle PROJECT_CHANGED. Lightweight: log staleness. The actual
+        re-render stays pull-based (dialogs call load_project_to_gui) to avoid
+        double-rendering until P2 migrates refresh to be event-driven."""
+        log_debug("收到 PROJECT_CHANGED 事件,标记项目视图为待刷新", "EasyQCApp")
+
+    def _on_modules_changed(self, _event=None) -> None:
+        """Handle MODULES_CHANGED. Lightweight: log staleness."""
+        log_debug("收到 MODULES_CHANGED 事件,标记模块视图为待刷新", "EasyQCApp")

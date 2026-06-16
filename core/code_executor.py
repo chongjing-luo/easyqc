@@ -10,6 +10,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from utils.logger import log_error
+
 
 DEFAULT_ALLOWED_COMMANDS = (
     "python",
@@ -52,13 +54,52 @@ class CodeExecutor:
         self._pending_temp_files: list[Path] = []
         self._process_temp_files: dict[int, list[Path]] = {}
 
+    # P3-B: placeholders are ${name} and {name} (the two explicit forms in real
+    # settings). Bare $name is ALSO substituted for backward compat, but it is
+    # NOT subject to unresolved-rejection (because $TMP / $(mktemp) / $HOME are
+    # shell constructs, not template vars — F-VIEW-4 MRIcroGL compatibility).
+    _BRACE_PLACEHOLDER = re.compile(r"\$\{(\w+)\}|\{(\w+)\}")
+    _BARE_DOLLAR = re.compile(r"\$(\w+)")
+
     def parse_template(self, template: str, variables: Mapping[str, Any]) -> str:
-        result = template
-        for name, value in variables.items():
-            value_text = str(value)
-            result = result.replace(f"${{{name}}}", value_text)
-            result = result.replace(f"${name}", value_text)
-            result = result.replace(f"{{{name}}}", value_text)
+        var_lookup = dict(variables)
+
+        # Detect unresolved placeholders from the ORIGINAL template (a variable
+        # VALUE that happens to contain {x} must not be flagged as unresolved —
+        # only placeholders the author wrote in the template are checked).
+        unresolved: set[str] = set()
+        for match in self._BRACE_PLACEHOLDER.finditer(template):
+            name = match.group(1) or match.group(2)
+            if name and name not in var_lookup:
+                unresolved.add(name)
+
+        # Pass 1 — ${var} and {var}: single-pass via re.sub callback, so a
+        # variable VALUE containing $ or { is never re-interpreted by a later
+        # variable (the old multi-pass str.replace bug).
+        def _brace_sub(match: re.Match) -> str:
+            name = match.group(1) or match.group(2)
+            if name in var_lookup:
+                return str(var_lookup[name])
+            return match.group(0)  # leave in place
+
+        result = self._BRACE_PLACEHOLDER.sub(_brace_sub, template)
+
+        # Pass 2 — bare $var: backward-compat substitution. Only replaces names
+        # that ARE variables; $TMP / $(...) pass through untouched.
+        def _dollar_sub(match: re.Match) -> str:
+            name = match.group(1)
+            if name in var_lookup:
+                return str(var_lookup[name])
+            return match.group(0)
+
+        result = self._BARE_DOLLAR.sub(_dollar_sub, result)
+
+        # Fail loud on author-intended placeholders that have no variable.
+        # Bare $word (shell vars like $TMP) is NOT checked — F-VIEW-4.
+        if unresolved:
+            raise CodeExecutorError(
+                f"模板含未解析的占位符(变量不存在): {sorted(unresolved)}"
+            )
         return result
 
     def split_command(self, command: str | Sequence[str]) -> list[str]:
@@ -156,6 +197,7 @@ class CodeExecutor:
                 timeout=self.timeout if timeout is None else timeout,
             )
         except OSError as exc:
+            log_error(f"命令运行失败: {args[0]}: {exc}", "CodeExecutor", show_popup=False)
             raise CodeExecutorError(f"命令启动失败: {args[0]}: {exc}") from exc
         except subprocess.TimeoutExpired as exc:
             raise CommandTimeoutError(f"命令超时: {args[0]}") from exc
@@ -185,6 +227,7 @@ class CodeExecutor:
             process = subprocess.Popen(args, **popen_kwargs)
         except OSError as exc:
             self._cleanup_temp_files(temp_files)
+            log_error(f"viewer 启动失败: {args[0]}: {exc}", "CodeExecutor", show_popup=False)
             raise CodeExecutorError(f"命令启动失败: {args[0]}: {exc}") from exc
         self.current_processes.append(process)
         if temp_files:
@@ -235,3 +278,25 @@ class CodeExecutor:
                 remaining.append(process)
 
         self.current_processes = remaining
+
+
+def validate_template_columns(code: str, available_columns: set[str]) -> list[str]:
+    """P3-B / F-IMP-6: return placeholder names referenced in ``code`` that are
+    NOT in ``available_columns`` (sorted, unique). Detects a module code that
+    references a removed/renamed subject column BEFORE viewer launch fails.
+
+    ``available_columns`` should be the union of ezqc_all columns and constants
+    keys — i.e. everything generate_code would inject as template variables.
+    Shell constructs ($TMP, $(mktemp)) are ignored (only ${var}/{var}/$var with
+    identifier names are considered placeholders).
+    """
+    referenced: set[str] = set()
+    for match in CodeExecutor._BRACE_PLACEHOLDER.finditer(code):
+        name = match.group(1) or match.group(2)
+        if name:
+            referenced.add(name)
+    for match in CodeExecutor._BARE_DOLLAR.finditer(code):
+        referenced.add(match.group(1))
+
+    missing = referenced - set(available_columns)
+    return sorted(missing)

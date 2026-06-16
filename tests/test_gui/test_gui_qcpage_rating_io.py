@@ -110,6 +110,44 @@ def test_save_rating_keeps_old_file_if_atomic_write_fails(monkeypatch, tmp_path)
     assert not (tmp_path / "example._.SUB001._.rater1._.Good._.True.json").exists()
 
 
+def test_set_module_rater_dir_without_rater_enters_watch_mode(tmp_path) -> None:
+    module = _module()
+    module["rater"] = None
+    page = _page(tmp_path, module=module)
+
+    path = page._set_module_rater_dir("example", None)
+
+    assert page.watch_mode_ is True
+    assert page.watch_mode.get() is True
+    assert path == str(tmp_path / "__observation_no_rater__")
+    assert not (tmp_path / "__observation_no_rater__").exists()
+
+
+def test_check_module_without_rater_enters_watch_mode_without_popup(monkeypatch, tmp_path) -> None:
+    module = _module()
+    module["rater"] = " "
+    page = _page(tmp_path, module=module)
+    monkeypatch.setattr(gui_qcpage_module.messagebox, "showerror", lambda *args, **kwargs: pytest.fail("unexpected popup"))
+
+    result = page.check_module()
+
+    assert not result
+    assert page.watch_mode_ is True
+    assert page.watch_mode.get() is True
+
+
+def test_save_rating_without_rater_enters_watch_mode_and_writes_nothing(tmp_path) -> None:
+    module = _module()
+    module["rater"] = ""
+    page = _page(tmp_path, module=module)
+
+    page.save_rating()
+
+    assert page.watch_mode_ is True
+    assert page.watch_mode.get() is True
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_load_rating_only_applies_rating_state_not_module_configuration(tmp_path) -> None:
     page = _page(tmp_path, module=_module(score=None, tag=False))
     rating_payload = _module(score="Good", tag=True)
@@ -153,6 +191,22 @@ def test_load_rating_with_duplicate_files_loads_first_without_popup(monkeypatch,
     assert module["tags"]["1"]["value"] is False
 
 
+def test_load_rating_without_rater_enters_watch_mode_without_popup(monkeypatch, tmp_path) -> None:
+    module = _module(score="Good", tag=True)
+    module["rater"] = None
+    page = _page(tmp_path, module=module)
+    monkeypatch.setattr(gui_qcpage_module.messagebox, "showerror", lambda *args, **kwargs: pytest.fail("unexpected popup"))
+
+    page.load_rating(ezqcid="SUB002")
+
+    current_module = page.dt.settings["qcmodule"]["1"]
+    assert page.watch_mode_ is True
+    assert page.watch_mode.get() is True
+    assert current_module["ezqcid"] == "SUB002"
+    assert current_module["scores"]["1"]["value"] is None
+    assert current_module["tags"]["1"]["value"] is False
+
+
 def test_load_rating_incompatible_file_enters_watch_mode_without_popup(monkeypatch, tmp_path) -> None:
     page = _page(tmp_path, module=_module(score=None, tag=False))
     rating_payload = _module(score="Good", tag=True)
@@ -184,6 +238,20 @@ def test_load_present_to_gui_without_module_uses_current_module(tmp_path) -> Non
     assert page.score_vars["1"].value == "Good"
     assert page.tag_vars["1"].value is True
     assert page.notes_text.content == "saved note"
+
+
+def test_previous_note_delete_span_deletes_back_to_previous_space() -> None:
+    content = "alpha beta gamma"
+    start, end = gui_qcpage._previous_note_delete_span(content, len(content))
+
+    assert content[:start] + content[end:] == "alpha beta "
+
+
+def test_previous_note_delete_span_includes_trailing_space() -> None:
+    content = "alpha beta "
+    start, end = gui_qcpage._previous_note_delete_span(content, len(content))
+
+    assert content[:start] + content[end:] == "alpha "
 
 
 def test_gen_code_respects_passed_settings_for_current_module(tmp_path) -> None:

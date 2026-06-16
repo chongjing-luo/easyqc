@@ -58,3 +58,65 @@ def test_safe_json_load_reads_json(tmp_path) -> None:
     path.write_text('{"ok": true}', encoding="utf-8")
 
     assert FileUtils.safe_json_load(path) == {"ok": True}
+
+
+# AC-6 regression: atomic persistence must never leave a truncated/half-written
+# file. BUG-3 was already fixed before this test landed (atomic_write shipped in
+# phase 0), but the contract is load-bearing for settings/registry/rating/CSV
+# writes, so it gets an explicit gate.
+
+
+def test_atomic_write_produces_complete_new_content_and_no_partial_file(tmp_path) -> None:
+    """On success the target is byte-for-byte the new content and no temp
+    fragment remains in the directory."""
+    path = tmp_path / "settings.json"
+    path.write_text('{"old": true}', encoding="utf-8")
+    new_content = '{"schema_version": 1, "qcmodule": {}}'
+
+    FileUtils.atomic_write(path, new_content)
+
+    assert path.read_text(encoding="utf-8") == new_content
+    # no temp fragments
+    assert [p.name for p in tmp_path.iterdir()] == ["settings.json"]
+
+
+def test_atomic_write_never_leaves_truncated_file_on_failure(tmp_path) -> None:
+    """AC-6: if os.replace fails (simulating crash/power-loss at the rename
+    step), the target file must be either the pre-save content or absent —
+    never a truncated half-write. The temp file must also be cleaned up."""
+    path = tmp_path / "projects.json"
+    original = '{"projects": {"X": "/x"}, "last_project": "X"}'
+    path.write_text(original, encoding="utf-8")
+
+    import utils.file_utils as fu
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full during replace")
+
+    # simulate failure at the final rename step
+    monkeypatch_target = fu.os
+    original_replace = monkeypatch_target.replace
+    monkeypatch_target.replace = boom  # type: ignore[method-assign]
+
+    raised = False
+    try:
+        FileUtils.atomic_write(path, '{"projects": {}, "last_project": null}')
+    except OSError:
+        raised = True
+    finally:
+        monkeypatch_target.replace = original_replace  # type: ignore[method-assign]
+
+    assert raised, "atomic_write should propagate the OSError"
+    # target is intact (old content), NOT truncated
+    assert path.read_text(encoding="utf-8") == original
+    # no leftover temp fragment
+    assert [p.name for p in tmp_path.iterdir()] == ["projects.json"]
+
+
+def test_atomic_write_to_missing_parent_creates_dirs(tmp_path) -> None:
+    """atomic_write must mkdir parents (ratings live in nested
+    RatingFiles/<module>/<rater>/ that may not exist yet)."""
+    path = tmp_path / "RatingFiles" / "Anat" / "r1" / "rating.json"
+    FileUtils.atomic_write(path, '{"ok": true}')
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"ok": True}

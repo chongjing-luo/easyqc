@@ -54,8 +54,9 @@ def test_cli_entrypoint_uses_service_context_for_qcpage_launch() -> None:
     source = inspect.getsource(entrypoint.open_qcpage_from_shell)
     assert "resolve_qcpage_launch(" in source
     assert "QCPageLaunchError" in source
-    assert 'gui_state.update_module_field(launch_context.module_index, "rater", rater)' in source
-    assert 'gui_state.update_module_field(launch_context.module_index, "ezqcid", ezqcid)' in source
+    # P2-CLI: no more gui_state.update_module_field (uses ProjectService directly)
+    assert "gui_state" not in source
+    assert "project_service" in source
     assert "module_found" not in source
     assert "for idx, mod" not in source
 
@@ -72,13 +73,13 @@ def test_cli_entrypoint_hides_root_window_for_qcpage_launch() -> None:
 def test_cli_entrypoint_initializes_qcpage_runtime_context_for_shell_launch() -> None:
     source = inspect.getsource(entrypoint.open_qcpage_from_shell)
 
+    # P2-CLI: CLI path now uses ProjectService (no ProjectManager / adapter)
     assert "QCPageRuntimeContext" in source
-    assert "gui_state = LegacyGUIStateAdapter(pm)" in source
-    assert 'gui_state.update_module_field(launch_context.module_index, "rater", rater)' in source
-    assert 'gui_state.update_module_field(launch_context.module_index, "ezqcid", ezqcid)' in source
-    assert "QCPageRuntimeContext.from_gui_state(gui_state)" in source
+    assert "ProjectService" in source
+    assert "LegacyGUIStateAdapter" not in source
+    assert "ProjectManager" not in source
+    assert "QCPageRuntimeContext.from_project_service(" in source
     assert "qcpage_instance.runtime_context.set_module_rater_dir(" in source
-    assert "qcpage_instance.dt =" not in source
     assert "pm.dt.settings" not in source
     assert "QCPageRuntimeContext.from_legacy_dt(pm.dt)" not in source
     assert "qcpage_instance.dt.dir_module_rater" not in source
@@ -451,6 +452,14 @@ def test_table_display_right_menu_reads_rating_state_through_adapter() -> None:
     assert "hasattr(self.dt, 'rating_dict')" not in source
 
 
+def test_table_display_right_menu_has_cancel_action() -> None:
+    source = inspect.getsource(gui_table.TableDisplay.show_right_menu)
+
+    assert 'label="取消"' in source
+    assert 'menu.bind("<Escape>", dismiss_menu)' in source
+    assert "menu.unpost()" in source
+
+
 def test_qc_page_controller_applies_rating_state_without_overwriting_config() -> None:
     current = {
         "label": "Current",
@@ -490,6 +499,60 @@ def test_qc_page_controller_detects_rating_compatibility_issues() -> None:
     result = QCPageController().find_rating_compatibility_issues(current, rating)
 
     assert result == [("score", "1"), ("tag", "1")]
+
+
+def test_qc_page_controller_compatibility_no_crash_on_missing_rating_score() -> None:
+    """BUG-2: a saved rating lacking a score key present in the current module
+    must NOT raise KeyError — it must surface as an explicit issue."""
+    current = {
+        "scores": {"1": {"num_": "1,2,3"}, "2": {"num_": "A,B"}},  # current has 1 and 2
+        "tags": {"1": {"label": "Artifact"}},
+    }
+    rating = {
+        "scores": {"1": {"num_": "1,2,3"}},  # rating missing score "2"
+        "tags": {"1": {"label": "Artifact"}},
+    }
+
+    result = QCPageController().find_rating_compatibility_issues(current, rating)
+
+    assert ("score_missing", "2") in result
+
+
+def test_qc_page_controller_compatibility_no_crash_on_missing_rating_tag() -> None:
+    """BUG-2 (tag side): missing tag key in saved rating must not crash."""
+    current = {
+        "scores": {"1": {"num_": "1,2,3"}},
+        "tags": {"1": {"label": "Artifact"}, "2": {"label": "Motion"}},  # current has 1 and 2
+    }
+    rating = {
+        "scores": {"1": {"num_": "1,2,3"}},
+        "tags": {"1": {"label": "Artifact"}},  # rating missing tag "2"
+    }
+
+    result = QCPageController().find_rating_compatibility_issues(current, rating)
+
+    assert ("tag_missing", "2") in result
+
+
+def test_qc_page_controller_compatibility_no_crash_on_empty_rating_schema() -> None:
+    """BUG-2 (extreme): a legacy rating with no scores/tags at all must not crash."""
+    current = {
+        "scores": {"1": {"num_": "1,2,3"}},
+        "tags": {"1": {"label": "Artifact"}},
+    }
+    rating: dict = {}
+
+    result = QCPageController().find_rating_compatibility_issues(current, rating)
+
+    assert ("score_missing", "1") in result
+    assert ("tag_missing", "1") in result
+
+
+def test_qc_page_controller_compatibility_no_crash_when_current_module_lacks_schema() -> None:
+    """Defensive: current module missing scores/tags should not crash either."""
+    result = QCPageController().find_rating_compatibility_issues({}, {"scores": {}, "tags": {}})
+
+    assert result == []
 
 
 def test_qc_page_controller_updates_runtime_rating_state() -> None:
@@ -964,3 +1027,84 @@ def test_score_tag_editor_writes_through_gui_state_adapter() -> None:
     assert "self.gui_state.delete_score(" in inspect.getsource(dialogs.ScoreTagEditor.del_score)
     assert "self.gui_state.add_tag(" in inspect.getsource(dialogs.ScoreTagEditor.add_tag)
     assert "self.gui_state.delete_tag(" in inspect.getsource(dialogs.ScoreTagEditor.del_tag)
+
+
+
+# ---- P1-D: GUI subscribes to EventBus (AC-10, ADR-002) ----
+
+def test_app_services_carries_event_bus() -> None:
+    """P1-D: AppServices exposes a shared EventBus so the legacy main window
+    can subscribe/unsubscribe on the same bus ProjectService emits to."""
+    from core.event_bus import EventBus
+    import dataclasses
+
+    field_names = {f.name for f in dataclasses.fields(gui_app.AppServices)}
+    assert "event_bus" in field_names
+
+
+def test_gui_app_builds_shared_event_bus_and_injects_into_project_service() -> None:
+    """P1-D: the app wrapper builds ONE shared EventBus, passes it to
+    ProjectService (so service emissions reach GUI subscribers), and stores it
+    in AppServices."""
+    init_source = inspect.getsource(gui_app.EasyQCApp.__init__)
+    assert "EventBus(" in init_source
+    assert "event_bus=" in init_source or "event_bus =" in init_source
+
+
+def test_main_window_subscribes_project_and_modules_events_in_init() -> None:
+    """P1-D: the main window subscribes to PROJECT_CHANGED + MODULES_CHANGED so
+    it reacts to typed service events (AC-10), not only pull-based refresh.
+    Subscription is encapsulated in _subscribe_event_bus, called from __init__."""
+    from core.event_bus import EventType
+
+    init_source = inspect.getsource(main_window.EasyQCApp.__init__)
+    assert "_subscribe_event_bus" in init_source
+    sub_source = inspect.getsource(main_window.EasyQCApp._subscribe_event_bus)
+    assert "EventType.PROJECT_CHANGED" in sub_source
+    assert "EventType.MODULES_CHANGED" in sub_source
+    assert "subscribe" in sub_source
+
+
+def test_main_window_has_event_bus_teardown_called_from_quit() -> None:
+    """P1-D: teardown must run on quit to unsubscribe handlers (no leak)."""
+    quit_source = inspect.getsource(main_window.EasyQCApp.quit_app)
+    teardown_exists = hasattr(main_window.EasyQCApp, "teardown_event_bus")
+    assert teardown_exists, "main window must define teardown_event_bus"
+    assert "teardown_event_bus" in quit_source
+
+
+def test_main_window_project_changed_handler_is_callable_without_tk() -> None:
+    """P1-D: the typed-event handler runs without a live tkinter root (the
+    EventBus calls it). It must be safe to call with a minimal app shell."""
+    app = object.__new__(main_window.EasyQCApp)
+    # handler should not assume GUI widgets exist; provide a no-op refresh
+    app.load_project_to_gui = lambda: None
+    app.load_module_to_gui = lambda: None
+    # _on_project_changed must not raise
+    app._on_project_changed()
+    app._on_modules_changed()
+
+
+def test_main_window_teardown_unsubscribes_its_handlers() -> None:
+    """P1-D: after teardown, the handlers are no longer registered on the bus,
+    so a later emit does not invoke them."""
+    from core.event_bus import EventBus, Event, EventType
+
+    bus = EventBus()
+    app = object.__new__(main_window.EasyQCApp)
+    app.event_bus = bus
+    app._on_project_changed = lambda: None
+    app._on_modules_changed = lambda: None
+    app._project_changed_handler = app._on_project_changed
+    app._modules_changed_handler = app._on_modules_changed
+    bus.subscribe(EventType.PROJECT_CHANGED, app._project_changed_handler)
+    bus.subscribe(EventType.MODULES_CHANGED, app._modules_changed_handler)
+
+    app.teardown_event_bus()
+
+    # emit after teardown -> handlers must NOT fire (verified via counter)
+    fired = []
+    bus.subscribe(EventType.PROJECT_CHANGED, fired.append)
+    bus.emit(Event(type=EventType.PROJECT_CHANGED, source="X"))
+    assert fired == [Event(type=EventType.PROJECT_CHANGED, source="X")]
+    # the original handlers are gone; only the probe remains

@@ -59,6 +59,17 @@ pip install -r requirements.txt
 - tkinter 随官方 Python 一起安装，无需额外操作
 - 启动方式：`python easyqc.py`
 
+### 项目布局说明（flat layout）
+
+EasyQC 采用 **flat layout**：`easyqc/` 目录本身**不是**可安装的 Python 包（根目录没有 `__init__.py`），而是包含一个同名启动脚本 `easyqc.py`。该脚本在运行时把项目根注入 `sys.path`，并以扁平方式导入兄弟目录（`from core.X`、`from utils.X`、`from models.X`）。
+
+- **运行方式**：始终在项目根目录执行 `python easyqc.py`（或 `./start.sh`，后者会自动 `cd` 到正确目录）。不要从其他目录直接 `import easyqc`。
+- **不支持 `pip install`**：本项目不打包为可安装包。如需在新机器部署，使用上面的安装脚本或手动创建虚拟环境 + `pip install -r requirements.txt`。
+- **测试配置**：`pytest.ini` 的 `pythonpath = .` 同样依赖 flat layout（pytest 从项目根发现 `core/`/`utils/`/`models/`）。
+- **打包分发**：如需零依赖可执行文件，使用 PyInstaller（见下方「打包为独立可执行文件」），而非 `pip install`。
+
+这一布局是有意的工程取舍：避免 `easyqc/` 目录与 `easyqc.py` 脚本同名引发的打包冲突，保持运行入口最简。重构为标准 src-layout 包属于未来可选改进，当前 flat layout 已稳定且有测试守卫（`tests/test_scripts/test_startup_scripts.py::test_flat_layout_imports_work_from_easyqc_root`）。
+
 ---
 
 ## 启动

@@ -77,8 +77,36 @@ class gui_qcpage:
     def _module_rater_dir(self):
         return self._ensure_runtime_context().module_rater_dir
 
+    @staticmethod
+    def _normalize_rater(rater):
+        if isinstance(rater, str):
+            rater = rater.strip()
+        return rater or None
+
+    def _enter_watch_mode(self, reason):
+        self.watch_mode_ = True
+        if hasattr(self, "watch_mode") and hasattr(self.watch_mode, "set"):
+            self.watch_mode.set(True)
+        log_info(f"{reason}，进入观察模式")
+
+    def _is_watch_mode(self):
+        if hasattr(self, "watch_mode") and hasattr(self.watch_mode, "get"):
+            return bool(self.watch_mode.get())
+        return bool(getattr(self, "watch_mode_", False))
+
+    def _watch_mode_rater_dir(self, context, module_name):
+        if context.output_dir is not None:
+            return os.path.join(str(context.output_dir), "RatingFiles", module_name, "__observation_no_rater__")
+        if context.module_rater_dir:
+            return os.path.join(str(context.module_rater_dir), "__observation_no_rater__")
+        return os.path.join("RatingFiles", module_name, "__observation_no_rater__")
+
     def _set_module_rater_dir(self, module_name, rater):
         context = self._ensure_runtime_context()
+        rater = self._normalize_rater(rater)
+        if rater is None:
+            self._enter_watch_mode("评分人未设置")
+            return context.set_module_rater_dir(self._watch_mode_rater_dir(context, module_name))
         path = self._ensure_controller().module_rater_dir(context.output_dir, module_name, rater)
         return context.set_module_rater_dir(path)
 
@@ -86,6 +114,40 @@ class gui_qcpage:
         if settings is None:
             settings = self._runtime_settings()
         return self._ensure_controller().current_module(settings, self.module_index)
+
+    @staticmethod
+    def _previous_note_delete_span(content, cursor_offset):
+        cursor_offset = max(0, min(cursor_offset, len(content)))
+        start = cursor_offset
+        while start > 0 and content[start - 1].isspace():
+            start -= 1
+        while start > 0 and not content[start - 1].isspace():
+            start -= 1
+        return start, cursor_offset
+
+    def delete_note_to_previous_space(self):
+        if not hasattr(self, 'notes_text'):
+            return
+
+        try:
+            if self.notes_text.tag_ranges(tk.SEL):
+                self.notes_text.delete(tk.SEL_FIRST, tk.SEL_LAST)
+                return
+        except tk.TclError:
+            pass
+
+        cursor_index = self.notes_text.index(tk.INSERT)
+        content_before_cursor = self.notes_text.get('1.0', cursor_index)
+        start_offset, end_offset = self._previous_note_delete_span(
+            content_before_cursor,
+            len(content_before_cursor),
+        )
+        delete_chars = end_offset - start_offset
+        if delete_chars <= 0:
+            return
+
+        start_index = self.notes_text.index(f"{cursor_index} - {delete_chars} chars")
+        self.notes_text.delete(start_index, cursor_index)
 
     def open_qcpage_from_main(self, app, module_name):
         """
@@ -126,14 +188,18 @@ class gui_qcpage:
             raise
 
     def check_table(self):
-        # 检查和准备数据表
+        """Return True if there is an error (caller should abort); False if OK.
+        (G5/G6/G7 fix: the old code returned False on failure / None on success,
+        but callers used `if check_table(): return` expecting a truthy = abort.
+        Now inverted so abort returns True.)"""
         log_debug(f"检查模块 {self.module_name} 数据")
         table = self._ensure_controller().ensure_module_table(self._runtime_tables(), self.module_name)
 
         if not self._ensure_controller().table_has_rows(table):
             log_error("数据为空")
             messagebox.showerror("错误", "数据为空")
-            return False
+            return True
+        return False
 
     def check_module(self,module_name=None):
         try:
@@ -146,22 +212,20 @@ class gui_qcpage:
             if self.module_index is None:
                 log_error(f"找不到模块: {module_name}")
                 messagebox.showerror("错误", f"找不到模块: {module_name}")
-                return False
+                return True
             
             module = self.current_module()
             if module['name'] != module_name:
                 log_error(f"模块名不一致: {module['name']} != {module_name}")
                 messagebox.showerror("错误", f"模块名不一致: {module['name']} != {module_name}")
-                return False
+                return True
             
             # 检查评分人设置
-            rater = controller.module_rater(module)
-            if rater is None or rater == '':
-                log_error("评分人未设置")
-                messagebox.showerror("错误", "请先设置评分人")
-                return False
-            
-            log_debug(f"评分人: {rater}")
+            rater = self._normalize_rater(controller.module_rater(module))
+            if rater is None:
+                self._enter_watch_mode("评分人未设置")
+            else:
+                log_debug(f"评分人: {rater}")
 
             # 检查scores字段
             if 'scores' in module:
@@ -171,13 +235,13 @@ class gui_qcpage:
                         if isinstance(item, dict) and (not item.get('label') or not item.get('num_')):
                             log_error(f"scores项 {key} 配置不完整: {item}")
                             messagebox.showerror("错误", "请先设置评分项")
-                            return False 
+                            return True
                 elif isinstance(module['scores'], list):
                     for idx, item in enumerate(module['scores']):
                         if isinstance(item, dict) and (not item.get('label') or not item.get('num_')):
                             log_error(f"scores项 {idx} 配置不完整: {item}")
                             messagebox.showerror("错误", "请先设置评分项")
-                            return False
+                            return True
                 log_debug("scores字段检查通过")
             
             # 检查tags字段
@@ -188,16 +252,17 @@ class gui_qcpage:
                         if isinstance(item, dict) and not item.get('label'):
                             log_error(f"tags项 {key} 配置不完整: {item}")
                             messagebox.showerror("错误", "请先设置标签项")
-                            return
+                            return True
                 elif isinstance(module['tags'], list):
                     for idx, item in enumerate(module['tags']):
                         if isinstance(item, dict) and not item.get('label'):
                             log_error(f"tags项 {idx} 配置不完整: {item}")
                             messagebox.showerror("错误", "请先设置标签项")
-                            return False
+                            return True
                 log_debug("tags字段检查通过")
             
             log_info("qcpage_prep执行完成")
+            return False
 
         except Exception as e:
             log_exception(f"qcpage_prep执行失败: {str(e)}")
@@ -279,7 +344,8 @@ class gui_qcpage:
             # 设置窗口标题
             module_name = module['name']
             module_label = module.get('label', '未知标签')
-            window_title = f"{module_name} - {module_label} - {module['rater']}"
+            rater_label = self._normalize_rater(module.get('rater')) or "观察模式"
+            window_title = f"{module_name} - {module_label} - {rater_label}"
             self.gui_qcpage.title(window_title)
             log_debug(f"QC页面窗口创建成功，标题: {window_title}")
         except Exception as e:
@@ -431,12 +497,29 @@ class gui_qcpage:
         self.notes_text = tk.Text(notes_frame, wrap='word', width=40, height=4)
         self.notes_text.place(x=0, y=0, width=290, height=45)
         
-        # 绑定文本变化事件以更新self.present['notes']
-        def on_text_change(event):
-            self._ensure_controller().set_notes(self.current_module(), self.notes_text.get('1.0', 'end-1c'))
-            self.notes_text.edit_modified(False)
+        # G8 fix: <<Modified>> + edit_modified(False) fires on EVERY keystroke,
+        # causing a full rating JSON write per character. Debounce with `after`
+        # (800ms idle) and force-save on FocusOut so edits are never lost.
+        self._notes_save_after_id = None
+
+        def _do_notes_save():
+            self._notes_save_after_id = None
+            win = getattr(self, "gui_qcpage", None)
+            if win is None or not win.winfo_exists():
+                return
+            self._ensure_controller().set_notes(
+                self.current_module(), self.notes_text.get('1.0', 'end-1c')
+            )
             self.save_rating()
-        self.notes_text.bind('<<Modified>>', on_text_change)
+
+        def _schedule_notes_save(event):
+            self.notes_text.edit_modified(False)
+            if self._notes_save_after_id is not None:
+                self.gui_qcpage.after_cancel(self._notes_save_after_id)
+            self._notes_save_after_id = self.gui_qcpage.after(800, _do_notes_save)
+
+        self.notes_text.bind('<<Modified>>', _schedule_notes_save)
+        self.notes_text.bind('<FocusOut>', lambda e: _do_notes_save())
         
         notes_scrollbar = Scrollbar(notes_frame, orient='vertical', command=self.notes_text.yview)
         notes_scrollbar.place(x=288, y=0, width=12, height=45)
@@ -444,7 +527,7 @@ class gui_qcpage:
         
 
         # 两个按钮，删除和清空
-        Button(main_frame, text="删除", command=lambda: self.notes_text.delete('1.0', 'end'), style = 'TButton').place(x=355, y=300+height_1, width=65, height=30)
+        Button(main_frame, text="删除", command=self.delete_note_to_previous_space, style = 'TButton').place(x=355, y=300+height_1, width=65, height=30)
         Button(main_frame, text="清空", command=lambda: self.notes_text.delete('1.0', 'end'), style = 'TButton').place(x=425, y=300+height_1, width=65, height=30)
 
     def load_present_to_gui(self, module=None):
@@ -481,6 +564,10 @@ class gui_qcpage:
             log_debug(f"开始填充表格数据，模块: {module['name']}")
 
 
+            controller = self._ensure_controller()
+            rater = self._normalize_rater(controller.module_rater(module))
+            if rater is None:
+                self._enter_watch_mode("评分人未设置")
             dir_module_rater = self._module_rater_dir()
             # 清空现有数据
             for item in self.listbox.get_children():
@@ -497,13 +584,16 @@ class gui_qcpage:
                 for row_num, (index, row) in enumerate(data.iterrows(), 1):
 
                     ezqcid = row.get('ezqcid', '')
-                    controller = self._ensure_controller()
-                    rating_files, rating = controller.load_first_legacy_module_rating(
-                        module,
-                        dir_module_rater,
-                        ezqcid,
-                        controller.module_rater(module),
-                    )
+                    if rater is None:
+                        rating_files = []
+                        rating = None
+                    else:
+                        rating_files, rating = controller.load_first_legacy_module_rating(
+                            module,
+                            dir_module_rater,
+                            ezqcid,
+                            rater,
+                        )
                     if rating_files and rating is not None:
                         score1 = rating['scores']['1'].get('value','')
                         tag1 = rating['tags']['1'].get('value','')
@@ -570,14 +660,20 @@ class gui_qcpage:
         """
         try:
             log_debug("开始保存评分")
-            module_rater_dir = self._module_rater_dir()
-            if not os.path.exists(module_rater_dir):
-                os.makedirs(module_rater_dir)
-
-            if self.watch_mode.get():
+            module = self.current_module()
+            rater = self._normalize_rater(self._ensure_controller().module_rater(module))
+            if rater is None:
+                self._enter_watch_mode("评分人未设置")
+                log_info("评分人未设置，观察模式不保存文件")
+                return
+            if self._is_watch_mode():
                 log_info(f"观察模式，不保存文件")
                 return
-            module = self.current_module()
+            module_rater_dir = self._module_rater_dir()
+            if module_rater_dir is None:
+                module_rater_dir = self._set_module_rater_dir(module['name'], rater)
+            if not os.path.exists(module_rater_dir):
+                os.makedirs(module_rater_dir)
             file_path = self._ensure_controller().save_legacy_module_rating(module, module_rater_dir)
 
             log_info(f"评分保存完成，文件: {file_path}")
@@ -596,8 +692,16 @@ class gui_qcpage:
             if module is None:
                 module = self.current_module()
             if rater is None:
-                rater = module['rater']
+                rater = self._ensure_controller().module_rater(module)
+            rater = self._normalize_rater(rater)
+            if rater is None:
+                self._enter_watch_mode("评分人未设置")
+                log_info("评分人未设置，观察模式不加载评分文件")
+                self.init_present(module, ezqcid)
+                return
             module_rater_dir = self._module_rater_dir()
+            if module_rater_dir is None:
+                module_rater_dir = self._set_module_rater_dir(module['name'], rater)
             log_debug(f"module_rater_dir: {module_rater_dir}", "QCPage")
             controller = self._ensure_controller()
             rating_files, new_module = controller.load_first_legacy_module_rating(
@@ -694,7 +798,8 @@ class gui_qcpage:
                 first_ezqcid = self._ensure_controller().first_subject_id(self._runtime_tables(), module['name'])
                 if first_ezqcid is not None:
                     self.ezqcid = first_ezqcid
-                    if os.path.exists(self._module_rater_dir()):
+                    module_rater_dir = self._module_rater_dir()
+                    if module_rater_dir and os.path.exists(module_rater_dir):
                         self.load_rating()
                     else:
                         self.init_present(module, self.ezqcid) 

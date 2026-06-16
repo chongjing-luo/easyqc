@@ -186,3 +186,100 @@ def test_rating_service_saved_json_is_readable_by_legacy_loader(tmp_path, fixtur
 
     assert result.loc[0, "module_name"] == "example"
     assert result.loc[0, "score1"] == "Good"
+
+
+def test_merge_subjects_with_rating_wide_coerces_numeric_ezqcid_on_both_sides() -> None:
+    """BUG-4: subjects.ezqcid that pandas reads as integer (common for
+    numeric-looking IDs like 1, 2, 3) must still join the str-typed rating
+    side. Previously only the rating/wide side was str-coerced, so the left
+    merge silently dropped all rating values to NaN."""
+    service = RatingService(_project(Path("/tmp/nonexistent")))  # service unused for merge
+    rating_wide = pd.DataFrame(
+        {
+            "ezqcid": ["1", "2", "3"],  # str (rating side is always str)
+            "Anat.r1.score1": ["Good", "Fair", "Poor"],
+            "Anat.r1.tag1": [False, True, False],
+        }
+    )
+    # subjects read from CSV with numeric IDs become int64 — the latent bug
+    subjects = pd.DataFrame(
+        {
+            "ezqcid": pd.array([1, 2, 3], dtype="int64"),
+            "site": ["a", "b", "c"],
+        }
+    )
+
+    result = service.merge_subjects_with_rating_wide(rating_wide, subjects)
+
+    assert list(result["ezqcid"]) == ["1", "2", "3"]
+    assert list(result["Anat.r1.score1"]) == ["Good", "Fair", "Poor"]
+    assert not result["Anat.r1.score1"].isna().any(), "rating values must not be NaN after join"
+
+
+def test_merge_subjects_with_rating_wide_result_ezqcid_is_string_typed() -> None:
+    """The merged result's ezqcid column must be string-typed (downstream
+    consumers and re-merges rely on str identity)."""
+    service = RatingService(_project(Path("/tmp/nonexistent")))
+    rating_wide = pd.DataFrame({"ezqcid": ["10", "20"], "M.r.score1": ["1", "2"]})
+    subjects = pd.DataFrame({"ezqcid": pd.array([10, 20], dtype="int64")})
+
+    result = service.merge_subjects_with_rating_wide(rating_wide, subjects)
+
+    assert result["ezqcid"].dtype == object
+    assert all(isinstance(v, str) for v in result["ezqcid"])
+
+
+def test_rating_save_writes_schema_version(tmp_path) -> None:
+    """P0-E / AC-11: a saved rating JSON carries schema_version=1 (current
+    stable schema after the P0 data-safety wave). schema_version is metadata
+    layered on top of the module snapshot, NOT a module field; the module
+    fields the input carried are preserved unchanged (snapshot semantics)."""
+    project = Project("SAMPLE", tmp_path / "easyqc_SAMPLE")
+    service = RatingService(project)
+    rating = _synthetic_legacy_rating("example", "r1", "SUB001", "Good", "1", True)
+
+    saved_path = service.save_rating(rating)
+
+    payload = json.loads(saved_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    # module identity + the fields the input carried are preserved
+    assert payload["name"] == "example"
+    assert payload["rater"] == "r1"
+    assert payload["ezqcid"] == "SUB001"
+    assert payload["scores"]["1"]["value"] == "Good"
+
+
+def test_long_table_to_wide_rejects_duplicate_identity() -> None:
+    """P3-A / F-AGG-4: aggfunc='first' silently collapses duplicate
+    (ezqcid, module, rater) tuples. F-RAT-3 guarantees one file per identity,
+    so a duplicate means the invariant is broken (filesystem dirty, bug, etc).
+    Fail loud instead of silently dropping data."""
+    service = RatingService(_project(Path("/tmp/nonexistent")))
+    long_df = pd.DataFrame({
+        "ezqcid": ["SUB001", "SUB001"],   # same subject
+        "module_name": ["Anat", "Anat"],   # same module
+        "rater": ["r1", "r1"],             # same rater -> duplicate identity
+        "score1": ["Good", "Poor"],
+    })
+
+    import pytest
+    with pytest.raises(ValueError) as exc:
+        service.long_table_to_wide(long_df)
+    assert "SUB001" in str(exc.value)
+
+
+def test_long_table_to_wide_allows_distinct_raters_same_subject() -> None:
+    """P3-A: same subject + module but different raters is legitimate (two
+    raters score the same image). Must NOT raise."""
+    service = RatingService(_project(Path("/tmp/nonexistent")))
+    long_df = pd.DataFrame({
+        "ezqcid": ["SUB001", "SUB001"],
+        "module_name": ["Anat", "Anat"],
+        "rater": ["r1", "r2"],   # different raters -> distinct identities
+        "score1": ["Good", "Poor"],
+    })
+
+    wide = service.long_table_to_wide(long_df)
+
+    assert "Anat.r1.score1" in wide.columns
+    assert "Anat.r2.score1" in wide.columns

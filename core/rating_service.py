@@ -10,6 +10,7 @@ import pandas as pd
 from models.project import Project
 from models.qcmodule import QCModule
 from models.rating import Rating
+from utils.file_utils import FileUtils
 
 
 @dataclass
@@ -100,7 +101,15 @@ class RatingService:
         prefix = f"{rating.module_name}._.{rating.ezqcid}._.{rating.rater}"
         old_files = list(target_dir.glob(f"{prefix}*"))
 
-        rating.to_json_file(target_path, legacy_module)
+        # P0-E: stamp the current schema version onto the outbound rating
+        # payload (metadata layered on the 16-key module snapshot; NOT a module
+        # field). Inject at the service layer to keep models/rating.py pure.
+        # Never downgrade an existing higher version (forward-compat).
+        payload = rating.to_legacy_dict(legacy_module)
+        current = payload.get("schema_version")
+        if not isinstance(current, int) or current < 1:
+            payload["schema_version"] = 1
+        FileUtils.safe_json_save(target_path, payload)
 
         for old_file in old_files:
             if old_file.resolve() != target_path.resolve():
@@ -156,6 +165,23 @@ class RatingService:
         if long_df.empty:
             return pd.DataFrame()
 
+        # P3-A / F-AGG-4: assert identity uniqueness BEFORE pivot. pivot_table
+        # with aggfunc='first' would silently collapse duplicate
+        # (ezqcid, module_name, rater) tuples, hiding a broken F-RAT-3 invariant
+        # (one file per identity). Fail loud with the offending identities.
+        dup_keys = ["ezqcid", "module_name", "rater"]
+        duplicates = long_df[long_df.duplicated(subset=dup_keys, keep=False)]
+        if not duplicates.empty:
+            offenders = (
+                duplicates[dup_keys].drop_duplicates()
+                .astype(str)
+                .agg("/".join, axis=1)
+                .tolist()
+            )
+            raise ValueError(
+                f"重复的评分身份(ezqcid/module/rater),F-RAT-3 不变量被破坏: {offenders[:5]}"
+            )
+
         wide = long_df.pivot_table(index="ezqcid", columns=["module_name", "rater"], aggfunc="first").reset_index()
         new_columns = []
         for col in wide.columns:
@@ -170,6 +196,18 @@ class RatingService:
     def merge_subjects_with_rating_wide(self, rating_wide: pd.DataFrame, subjects: pd.DataFrame) -> pd.DataFrame:
         if rating_wide.empty:
             return subjects.copy()
+
+        # BUG-4 / F-IMP-5: ezqcid is THE join key and must be string on BOTH
+        # sides. The rating side is already coerced in long_table_to_wide, but
+        # subjects read from CSV can carry numeric-looking IDs as int64, which
+        # makes pandas raise (or silently NaN) on the merge. Coerce here so the
+        # join is identity-stable regardless of how each side was loaded.
+        subjects = subjects.copy()
+        if "ezqcid" in subjects.columns:
+            subjects["ezqcid"] = subjects["ezqcid"].astype(str)
+        if "ezqcid" in rating_wide.columns:
+            rating_wide = rating_wide.copy()
+            rating_wide["ezqcid"] = rating_wide["ezqcid"].astype(str)
 
         result = pd.merge(subjects, rating_wide, on="ezqcid", how="left")
         result = result.drop(columns=[col for col in result.columns if ".code" in col or ".code_exe" in col])

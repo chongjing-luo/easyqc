@@ -61,9 +61,10 @@ def open_qcpage_from_shell(project, module, rater, ezqcid):
         # 导入必要的模块
         import tkinter as tk
         from core.cli_service import QCPageLaunchError, resolve_qcpage_launch
-        from utils.projects_manager import ProjectManager
+        from core.project_service import ProjectService
+        from core.table_service import TableService
+        from core.session_state import SessionState
         from gui.gui_qcpage import gui_qcpage
-        from gui.state_adapter import LegacyGUIStateAdapter
         from gui.qc_page import QCPageRuntimeContext
         launch_context = resolve_qcpage_launch(
             project,
@@ -72,32 +73,45 @@ def open_qcpage_from_shell(project, module, rater, ezqcid):
             ezqcid,
             project_root / "projects.json",
         )
-        
-        # 初始化项目管理器
-        pm = ProjectManager()
-        pm.init_projects()
-        
-        # 加载指定项目（兼容旧版 QCPage 仍需要 DataContainer）
-        pm.load_project(project, fresh_gui=False)
-        gui_state = LegacyGUIStateAdapter(pm)
+
+        # P2-CLI: use ProjectService directly (no legacy manager / DataContainer).
+        # Load settings + subject/result tables via the service layer, then build
+        # a runtime context from_project_service.
+        project_service = ProjectService(project_root / "projects.json")
+        project_service.load(project)
+        table_service = TableService()
+        session_state = SessionState()
+        loaded_tables = table_service.load_legacy_state_tables(project_service.current_project)
+        if loaded_tables is not None:
+            session_state.apply_loaded_tables(loaded_tables)
+        # merge variables + results into a single tables dict for the controller
+        cli_tables = {**session_state._variables, **session_state._results}
         log_info(f"成功加载项目: {project}")
         log_info(f"找到模块: {module} (索引: {launch_context.module_index})")
-        gui_state.update_module_field(launch_context.module_index, "rater", rater)
-        gui_state.update_module_field(launch_context.module_index, "ezqcid", ezqcid)
+        # CLI sets runtime fields (rater/ezqcid) directly on the in-memory module
+        # dict. These are runtime state, not module config, so update_module
+        # (which rejects ezqcid as a runtime key) is not used. CLI is watch-mode
+        # (read-only) so settings are never persisted from here.
+        qcidx = next((k for k, m in project_service.settings["qcmodule"].items()
+                      if m.get("name") == module), None)
+        if qcidx is not None:
+            project_service.settings["qcmodule"][qcidx]["rater"] = rater
+            project_service.settings["qcmodule"][qcidx]["ezqcid"] = ezqcid
 
         # CLI 模式没有主窗口；显式创建并隐藏 root，避免 Toplevel 触发 tkinter 隐式空白根窗口。
         cli_root = tk.Tk()
         cli_root.withdraw()
-        
+
         # 创建QC页面实例
         qcpage_instance = gui_qcpage()
-        qcpage_instance.gui_state = gui_state
-        qcpage_instance.runtime_context = QCPageRuntimeContext.from_gui_state(gui_state)
+        qcpage_instance.runtime_context = QCPageRuntimeContext.from_project_service(
+            project_service, tables=cli_tables
+        )
         qcpage_instance.module_index = launch_context.module_index
         qcpage_instance.ezqcid = ezqcid
         qcpage_instance.module_name = module
         qcpage_instance.rater = rater
-        
+
         # 设置输出目录
         qcpage_instance.runtime_context.set_module_rater_dir(launch_context.module_rater_dir)
         
