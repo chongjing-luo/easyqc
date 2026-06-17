@@ -1,0 +1,40 @@
+{
+    "name": "hcpall",
+    "label": "hcpall",
+    "ezqcid": "CCNPPEK0023_01_rest02",
+    "rater": "lcj",
+    "watch_mode": false,
+    "interper": "shell",
+    "code": "wb_view \\\n${hcp_dir}/${group}/${sublist}/MNINonLinear/Results/${moddir}/${moddir}.nii.gz \\\n${hcp_dir}/${group}/${sublist}/MNINonLinear/T1w.nii.gz \\\n${hcp_dir}/${group}/${sublist}/MNINonLinear/${sublist}.L.pial.164k_fs_LR.surf.gii \\\n${hcp_dir}/${group}/${sublist}/MNINonLinear/${sublist}.R.pial.164k_fs_LR.surf.gii \\\n${hcp_dir}/${group}/${sublist}/MNINonLinear/${sublist}.L.white.164k_fs_LR.surf.gii \\\n${hcp_dir}/${group}/${sublist}/MNINonLinear/${sublist}.R.white.164k_fs_LR.surf.gii",
+    "code_exe": {
+        "0": "wb_view \\\n/home/ubuntu/disc_luo/ProjectLCJ/stage1Prep/HCP_DIRs/CCNPPEKI/CCNPPEK0023_01/MNINonLinear/Results/rest02/rest02.nii.gz \\\n/home/ubuntu/disc_luo/ProjectLCJ/stage1Prep/HCP_DIRs/CCNPPEKI/CCNPPEK0023_01/MNINonLinear/T1w.nii.gz \\\n/home/ubuntu/disc_luo/ProjectLCJ/stage1Prep/HCP_DIRs/CCNPPEKI/CCNPPEK0023_01/MNINonLinear/CCNPPEK0023_01.L.pial.164k_fs_LR.surf.gii \\\n/home/ubuntu/disc_luo/ProjectLCJ/stage1Prep/HCP_DIRs/CCNPPEKI/CCNPPEK0023_01/MNINonLinear/CCNPPEK0023_01.R.pial.164k_fs_LR.surf.gii \\\n/home/ubuntu/disc_luo/ProjectLCJ/stage1Prep/HCP_DIRs/CCNPPEKI/CCNPPEK0023_01/MNINonLinear/CCNPPEK0023_01.L.white.164k_fs_LR.surf.gii \\\n/home/ubuntu/disc_luo/ProjectLCJ/stage1Prep/HCP_DIRs/CCNPPEKI/CCNPPEK0023_01/MNINonLinear/CCNPPEK0023_01.R.white.164k_fs_LR.surf.gii"
+    },
+    "tags": {
+        "1": {
+            "label": "checkdone",
+            "value": false
+        },
+        "2": {
+            "label": "anatfailed",
+            "value": false
+        },
+        "3": {
+            "label": "restfailed",
+            "value": false
+        }
+    },
+    "scores": {
+        "1": {
+            "label": "hcpcoregistration",
+            "num": "0-4",
+            "num_": "0,1,2,3,4",
+            "value": "3"
+        }
+    },
+    "notes": null,
+    "time": "2025-11-19 00:06:22",
+    "control": false,
+    "showing": true,
+    "select_filter": "SELECT * FROM df WHERE mod = 'rest'",
+    "button": {}
+}

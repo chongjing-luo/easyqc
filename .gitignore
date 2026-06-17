@@ -39,9 +39,9 @@ start.sh
 !start.sh
 
 # 数据文件（如果包含敏感数据）
-DataAndTable/
-RatingFiles/
-Table/
+# DataAndTable/
+# RatingFiles/
+# Table/
 
 # 测试和临时文件
 test_*.py

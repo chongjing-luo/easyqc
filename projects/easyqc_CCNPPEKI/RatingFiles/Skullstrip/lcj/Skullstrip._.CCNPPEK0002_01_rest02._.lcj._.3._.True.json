@@ -1,0 +1,32 @@
+{
+    "name": "Skullstrip",
+    "label": "Skullstrip",
+    "ezqcid": "CCNPPEK0002_01_rest02",
+    "rater": "lcj",
+    "watch_mode": false,
+    "interper": "shell",
+    "code": "TMP=$(mktemp /tmp/mgl.XXXXXX); TMP=\"$TMP.py\"; printf 'import gl\\ngl.windowposition(0,0,1400,1000)\\ngl.loadimage(\"{subjects_dir}/{fsrecon_dir}/mri/orig/001.mgz\")\\ngl.overlayload(\"{subjects_dir}/{fsrecon_dir}/mri/mask.nii.gz\")\\ngl.opacity(1,30)\\n' > \"$TMP\"; ${mricrogl_dir} \"$TMP\"; rm -f \"$TMP\"",
+    "code_exe": {
+        "0": "TMP=$(mktemp /tmp/mgl.XXXXXX); TMP=\"$TMP.py\"; printf 'import gl\\ngl.windowposition(0,0,1400,1000)\\ngl.loadimage(\"/home/ubuntu/disc_luo/ProjectLCJ/stage1Prep/SUBJECTS_DIRs/CCNPPEKI/CCNPPEK0002_01/mri/orig/001.mgz\")\\ngl.overlayload(\"/home/ubuntu/disc_luo/ProjectLCJ/stage1Prep/SUBJECTS_DIRs/CCNPPEKI/CCNPPEK0002_01/mri/mask.nii.gz\")\\ngl.opacity(1,30)\\n' > \"$TMP\"; /home/ubuntu/Softwares/MRIcroGL/MRIcroGL \"$TMP\"; rm -f \"$TMP\""
+    },
+    "tags": {
+        "1": {
+            "label": "checkdone",
+            "value": true
+        }
+    },
+    "scores": {
+        "1": {
+            "label": "skullstrip",
+            "num": "0-4",
+            "num_": "0,1,2,3,4",
+            "value": "3"
+        }
+    },
+    "notes": null,
+    "time": "2026-06-03 15:45:26",
+    "control": false,
+    "showing": true,
+    "select_filter": "SELECT * FROM df",
+    "button": {}
+}

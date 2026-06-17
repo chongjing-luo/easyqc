@@ -1,7 +1,0 @@
-# .understandignore
-.venv/
-.git/
-logs/
-*.log
-code.template
-template/

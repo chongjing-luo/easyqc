@@ -1,0 +1,30 @@
+{
+    "name": "Skullstrip",
+    "label": "Skullstrip",
+    "ezqcid": "CCNPPEK0001_02_rest02",
+    "rater": "lcj",
+    "watch_mode": false,
+    "interper": "shell",
+    "code": "TMP=$(mktemp /tmp/mgl.XXXXXX); TMP=\"$TMP.py\"; printf 'import gl\\ngl.windowposition(0,0,1400,1000)\\ngl.loadimage(\"{subjects_dir}/{fsrecon_dir}/mri/orig/001.mgz\")\\ngl.overlayload(\"{subjects_dir}/{fsrecon_dir}/mri/mask.nii.gz\")\\ngl.opacity(1,30)\\n' > \"$TMP\"; ${mricrogl_dir} \"$TMP\"; rm -f \"$TMP\"",
+    "code_exe": null,
+    "tags": {
+        "1": {
+            "label": "checkdone",
+            "value": false
+        }
+    },
+    "scores": {
+        "1": {
+            "label": "skullstrip",
+            "num": "0-4",
+            "num_": "0,1,2,3,4",
+            "value": null
+        }
+    },
+    "notes": null,
+    "time": "2026-06-03 14:31:39",
+    "control": false,
+    "showing": true,
+    "select_filter": "SELECT * FROM df",
+    "button": {}
+}

@@ -1,0 +1,30 @@
+{
+  "name": "openHCP_DIR",
+  "label": "openHCP_DIR",
+  "ezqcid": "CCNPPEK0001_01_anat",
+  "rater": "lcj",
+  "watch_mode": false,
+  "interper": "shell",
+  "code": "open ${hcp_dir}/${group}/${sublist}",
+  "code_exe": null,
+  "tags": {
+    "1": {
+      "label": "open",
+      "value": false
+    }
+  },
+  "scores": {
+    "1": {
+      "label": "open",
+      "num": "0-4",
+      "num_": "0,1,2,3,4",
+      "value": null
+    }
+  },
+  "notes": null,
+  "time": "2026-06-02 21:42:19",
+  "control": false,
+  "showing": true,
+  "select_filter": null,
+  "button": {}
+}
