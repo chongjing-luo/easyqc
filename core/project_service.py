@@ -236,6 +236,103 @@ class ProjectService:
                 return
         raise KeyError(name)
 
+    # ---- P2-A gap: project lifecycle + module CRUD helpers (for dialogs migration) ----
+
+    def current_project_name(self) -> str | None:
+        current = self.current_project
+        return current.name if current is not None else None
+
+    def has_project(self, name: str) -> bool:
+        return name in self.registry.projects
+
+    def project_display_rows(self) -> list:
+        """Rows for the project combo/list: (name,) tuples."""
+        return [(name,) for name in self.registry.projects]
+
+    def import_project_from_dir(self, output_dir) -> None:
+        """Import a project from a directory containing settings_<name>.json.
+        Registers it in the registry and loads it (no copy)."""
+        output_dir = Path(output_dir)
+        settings_file = None
+        for f in output_dir.iterdir():
+            if f.name.startswith("settings_") and f.name.endswith(".json"):
+                project_name = f.name[9:-5]
+                settings_file = f
+                break
+        if settings_file is None or not settings_file.exists():
+            raise FileNotFoundError(
+                f"目录 {output_dir} 不是合法项目路径（缺少 settings_*.json）"
+            )
+        project = Project(name=project_name, path=output_dir)
+        self.registry.projects[project_name] = project
+        self.registry.last_project = project_name
+        self._save_registry()
+        self.load(project_name)
+        self._notify("project_changed")
+
+    def constants(self) -> dict[str, Any]:
+        """Return the constants dict (mutable view for read checks)."""
+        return self._settings.setdefault("constants", {})
+
+    def module_name_exists(self, name: str, exclude_name: str | None = None) -> bool:
+        modules = self._settings.get("qcmodule", {})
+        return any(
+            m.get("name") == name and name != exclude_name
+            for m in modules.values()
+        )
+
+    def module_index_by_name(self, name: str) -> str | None:
+        """Public lookup; returns None if absent (does NOT raise)."""
+        modules = self._settings.get("qcmodule", {})
+        return next((k for k, m in modules.items() if m.get("name") == name), None)
+
+    def next_module_index(self) -> int:
+        modules = self._settings.get("qcmodule", {})
+        return max([int(k) for k in modules.keys()] or [0]) + 1
+
+    def module_table_rows(self) -> list[tuple]:
+        """Rows for the module list: (index, name, label) tuples."""
+        modules = self._settings.get("qcmodule", {})
+        return [
+            (int(k), m.get("name", ""), m.get("label", ""))
+            for k, m in sorted(modules.items(), key=lambda x: int(x[0]))
+        ]
+
+    def can_delete_module(self) -> bool:
+        return len(self._settings.get("qcmodule", {})) > 1
+
+    def delete_module(self, index: int) -> None:
+        """Delete by numeric index (dialogs passes index). Reindexes remaining."""
+        self._require_current_project()
+        modules = self._settings.get("qcmodule", {})
+        if len(modules) <= 1:
+            raise ValueError("至少保留一个 QC 模块")
+        key = str(index)
+        if key not in modules:
+            raise KeyError(index)
+        self._settings["qcmodule"] = self.add_key(modules, int(index))
+        self._notify("modules_changed")
+
+    def insert_module(self, index: int, module: dict) -> None:
+        """Insert an external module dict at position index (import path)."""
+        self._require_current_project()
+        modules = self._settings.setdefault("qcmodule", {})
+        self._settings["qcmodule"] = self.add_key(modules, int(index), module)
+        self._notify("modules_changed")
+
+    def export_module(self, module_name: str, path) -> None:
+        """Write a sanitized module copy (rater/ezqcid=None) to path."""
+        import json
+        from copy import deepcopy
+        idx = self._module_index_by_name(module_name)
+        module = self._settings["qcmodule"][idx]
+        export_copy = deepcopy(module)
+        export_copy["rater"] = None
+        export_copy["ezqcid"] = None
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(export_copy, f, indent=4, ensure_ascii=False)
+
     def save(self) -> None:
         self._save_registry()
         if self.current is not None:

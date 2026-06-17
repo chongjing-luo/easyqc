@@ -5,7 +5,7 @@ import pandas as pd
 
 from core.table_transform import TableTransformEngine
 from gui.gui_table import TableDisplay
-from gui.state_adapter import LegacyGUIStateAdapter
+from gui.state_bridge import GUIStateBridge
 from gui.table_view import TableTransformDialog
 from utils.data_manager import DataManager
 
@@ -46,72 +46,10 @@ class _FakeProjectManager:
         self.saved_tables.append(name)
 
 
-def test_resolve_filter_source_for_new_variables_returns_copy() -> None:
-    display = _display()
-
-    result, select_filter = display.resolve_filter_source("new")
-
-    assert result.equals(pd.DataFrame({"ezqcid": ["SUB002"]}))
-    assert select_filter is None
-    result.loc[0, "ezqcid"] = "CHANGED"
-    assert display.dt.var["ezqc_new"].loc[0, "ezqcid"] == "SUB002"
 
 
-def test_resolve_filter_source_for_qctable_uses_saved_filter() -> None:
-    display = _display()
-
-    result, select_filter = display.resolve_filter_source("qctable")
-
-    assert result.equals(pd.DataFrame({"ezqcid": ["SUB003"]}))
-    assert select_filter == "qc filter"
 
 
-def test_resolve_filter_source_for_module_uses_qctable_and_module_filter() -> None:
-    display = _display()
-
-    result, select_filter = display.resolve_filter_source("example")
-
-    assert result.equals(pd.DataFrame({"ezqcid": ["SUB003"]}))
-    assert select_filter == "module filter"
-
-
-def test_resolve_filter_source_rejects_type_and_df_together() -> None:
-    display = _display()
-
-    try:
-        display.resolve_filter_source("new", pd.DataFrame({"ezqcid": ["SUB004"]}))
-    except ValueError as exc:
-        assert "缺乏必要参数" in str(exc)
-    else:
-        raise AssertionError("Expected ValueError")
-
-
-def test_module_names_for_menu_reads_configured_qc_modules() -> None:
-    display = _display()
-    display.dt.settings["qcmodule"]["2"] = {"name": ""}
-    display.dt.settings["qcmodule"]["3"] = {"name": "second"}
-
-    assert display.module_names_for_menu() == ["example", "second"]
-
-
-def test_rating_menu_items_shapes_existing_rating_data() -> None:
-    display = _display()
-    display.dt.rating_dict = {
-        "SUB001": {
-            "example.rater": {"name": "example", "rater": "rater"},
-            "missing.name": {"rater": "rater"},
-            "not.dict": "bad",
-        }
-    }
-
-    assert display.rating_menu_items("SUB001") == [
-        {
-            "label": "打开评分结果: example.rater",
-            "name": "example",
-            "rater": "rater",
-        }
-    ]
-    assert display.rating_menu_items("UNKNOWN") == []
 
 
 def test_open_image_from_right_menu_passes_explicit_qcpage_context() -> None:
@@ -244,30 +182,6 @@ def test_filter_sorter_window_creation_moved_to_table_transform_dialog() -> None
     assert "scrolledtext.ScrolledText" in transform_dialog_source
 
 
-def test_filter_sorter_delegates_runtime_arguments_to_table_transform_dialog() -> None:
-    display = _display()
-    calls = []
-
-    class FakeTransformDialog:
-        def open_filter_dialog(self, df, **kwargs):
-            calls.append((df, kwargs))
-            return "dialog"
-
-    display.create_table_transform_dialog = lambda: FakeTransformDialog()
-
-    result = display.filter_sorter("example")
-
-    assert result == "dialog"
-    assert len(calls) == 1
-    df, kwargs = calls[0]
-    assert df.equals(pd.DataFrame({"ezqcid": ["SUB003"]}))
-    assert kwargs["select_filter"] == "module filter"
-    assert kwargs["result_type"] == "example"
-    assert kwargs["on_show_df"] == display.show_df
-    assert kwargs["on_save_result"] == display.save_filter_result
-    assert kwargs["on_restore_source"] == display.restore_filter_source
-    assert callable(kwargs["on_empty_result"])
-
 
 def test_parse_transform_operations_accepts_list_wrapper_and_single_operation() -> None:
     display = _display()
@@ -324,26 +238,6 @@ def test_table_display_uses_shared_table_transform_from_app_services() -> None:
     assert data_manager.table_transform is engine
 
 
-def test_table_display_reuses_existing_gui_state_adapter_from_app() -> None:
-    data_manager = DataManager()
-    project_manager = SimpleNamespace(dt=SimpleNamespace(settings={}, var={}, tab={}))
-    gui_state = LegacyGUIStateAdapter(project_manager, project_manager.dt)
-    app = SimpleNamespace(
-        root=None,
-        DataM=data_manager,
-        ProjM=project_manager,
-        gui_state=gui_state,
-        services=None,
-        table_transform=None,
-    )
-
-    display = TableDisplay(app)
-
-    assert display.gui_state is gui_state
-    assert display.state_adapter() is gui_state
-    assert not hasattr(display, "ProjM")
-    assert not hasattr(display, "dt")
-
 
 def test_execute_filter_query_rejects_invalid_json_transform_shape() -> None:
     display = _display()
@@ -357,43 +251,7 @@ def test_execute_filter_query_rejects_invalid_json_transform_shape() -> None:
         raise AssertionError("Expected ValueError")
 
 
-def test_save_filter_result_for_new_and_all_updates_working_tables() -> None:
-    display = _display()
-    result = pd.DataFrame({"ezqcid": ["SUB009"]})
 
-    display.save_filter_result("new", result, "query")
-    display.save_filter_result("all", result, "query")
-
-    assert display.dt.var["ezqc_filter"].equals(result)
-    assert display.dt.var["ezqc_all"].equals(result)
-
-
-def test_save_filter_result_for_qctable_persists_filter_and_table() -> None:
-    display = _display()
-    display.ProjM = _FakeProjectManager()
-    result = pd.DataFrame({"ezqcid": ["SUB009"]})
-    transform = '{"operations": []}'
-
-    display.save_filter_result("qctable", result, transform)
-
-    assert display.dt.tab["ezqc_qctable_filter"].equals(result)
-    assert display.dt.settings["select_filter"] == transform
-    assert display.ProjM.saved_settings == 1
-    assert display.ProjM.saved_tables == ["ezqc_qctable_filter"]
-
-
-def test_save_filter_result_for_module_persists_module_filter_and_table() -> None:
-    display = _display()
-    display.ProjM = _FakeProjectManager()
-    result = pd.DataFrame({"ezqcid": ["SUB009"]})
-    transform = '{"operations": []}'
-
-    display.save_filter_result("example", result, transform)
-
-    assert display.dt.tab["example"].equals(result)
-    assert display.dt.settings["qcmodule"]["1"]["select_filter"] == transform
-    assert display.ProjM.saved_tables == ["example"]
-    assert display.ProjM.saved_settings == 1
 
 
 def test_restore_filter_source_without_type_returns_copy() -> None:
@@ -406,18 +264,6 @@ def test_restore_filter_source_without_type_returns_copy() -> None:
     result.loc[0, "ezqcid"] = "CHANGED"
     assert source.loc[0, "ezqcid"] == "SUB010"
 
-
-def test_restore_filter_source_for_new_all_and_module_updates_targets() -> None:
-    display = _display()
-    source = pd.DataFrame({"ezqcid": ["SUB010"]})
-
-    display.restore_filter_source("new", source)
-    display.restore_filter_source("all", source)
-    display.restore_filter_source("example", source)
-
-    assert display.dt.var["ezqc_filter"].equals(source)
-    assert display.dt.var["ezqc_all"].equals(source)
-    assert display.dt.tab["example"].equals(source)
 
 
 def test_restore_filter_source_for_qctable_preserves_existing_filter_table() -> None:

@@ -7,6 +7,18 @@ EasyQC 对话框主要功能模块
 """
 
 import tkinter as tk
+# === GUI i18n: 本文件用户可见文字中英文对照 ===
+# 切换语言: 改 gui/i18n.py 的 LANG = "zh" / "en"
+from gui.i18n import tr as _tr
+
+_T = {
+    "选择文件夹":             {"zh": "选择文件夹",           "en": "Select Folder"},
+    "选择文件":               {"zh": "选择文件",             "en": "Select File"},
+    "错误":                   {"zh": "错误",                 "en": "Error"},
+    "选择文件夹时发生错误":   {"zh": "选择文件夹时发生错误", "en": "Error selecting folder"},
+    "选择文件时发生错误":     {"zh": "选择文件时发生错误",   "en": "Error selecting file"},
+}
+
 from tkinter import filedialog, messagebox
 import os
 import sys
@@ -49,7 +61,7 @@ class DialogMain:
             # 打开文件夹选择对话框
             directory = filedialog.askdirectory(
                 parent=self.app.root,
-                title='选择文件夹',
+                title=_tr(_T, '选择文件夹'),
                 initialdir=os.path.expanduser("~")  # 从用户主目录开始
             )
             
@@ -59,7 +71,7 @@ class DialogMain:
                 self.app.path_entry.insert(0, directory)
                 
         except Exception as e:
-            messagebox.showerror("错误", f"选择文件夹时发生错误: {str(e)}")
+            messagebox.showerror(_tr(_T, "错误"), _tr(_T, "选择文件夹时发生错误") + f": {str(e)}")
             log_error(f"文件夹选择对话框错误: {str(e)}", "EasyQCApp")
             
             
@@ -76,7 +88,7 @@ class DialogMain:
             # 使用元组而不是列表来定义filetypes
             filename = filedialog.askopenfilename(
                 parent=self.app.root,
-                title='选择文件',
+                title=_tr(_T, '选择文件'),
                 filetypes=filetypes,
                 initialdir=os.path.expanduser("~")  # 从用户主目录开始
             )
@@ -87,7 +99,7 @@ class DialogMain:
                 self.app.path_entry2.insert(0, filename)
                 
         except Exception as e:
-            messagebox.showerror("错误", f"选择文件时发生错误: {str(e)}")
+            messagebox.showerror(_tr(_T, "错误"), _tr(_T, "选择文件时发生错误") + f": {str(e)}")
             log_error(f"文件选择对话框错误: {str(e)}", "EasyQCApp")
 
     def create_project(self):

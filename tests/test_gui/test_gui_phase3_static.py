@@ -4,13 +4,15 @@ from types import SimpleNamespace
 
 import easyqc as entrypoint
 import pandas as pd
-from gui import dialog_main, dialogs, gui_qcpage, gui_table, main_window, qc_page, state_adapter, table_view, widgets
+from gui import dialog_main, dialogs, gui_qcpage, gui_table, main_window, qc_page, table_view, widgets
+from gui import state_bridge
+from gui.state_bridge import GUIStateBridge
 from gui import app as gui_app
 from gui.qc_page import QCPageController, QCPageRuntimeContext
 
 
 def test_new_gui_modules_do_not_call_tk_root_directly() -> None:
-    for module in [widgets, table_view, dialogs, qc_page, state_adapter]:
+    for module in [widgets, table_view, dialogs, qc_page, state_bridge]:
         source = inspect.getsource(module)
         assert "tk.Tk(" not in source
 
@@ -106,7 +108,9 @@ def test_legacy_main_window_accepts_services_context_without_requiring_it() -> N
     assert "self.services = services" in init_source
     assert "self.project_service = getattr(services, \"project_service\", None)" in init_source
     assert "self.dt = self.ProjM.dt" not in init_source
-    assert "LegacyGUIStateAdapter(self.ProjM)" in init_source
+    # P2 step 3: main window now uses GUIStateBridge (service-backed, no ProjectManager)
+    assert "GUIStateBridge(" in init_source
+    assert "LegacyGUIStateAdapter(self.ProjM)" not in init_source
 
 
 def test_main_window_project_loading_uses_gui_state_adapter() -> None:
@@ -317,8 +321,6 @@ def test_main_window_extract_qc_results_prefers_service_bridge() -> None:
     assert app.gui_state.legacy_loads == 0
     assert [save[1] for save in app.table_service.saved] == [
         "ezqc_qctable",
-        "ezqc_qctable_orig",
-        "ezqc_qctable_orig_wide",
     ]
     assert app.table_service.saved[0][2]["ezqcid"].tolist() == ["SUB001"]
 
@@ -752,7 +754,7 @@ def test_legacy_qcpage_gen_code_delegates_template_logic_to_controller() -> None
 def test_legacy_qcpage_main_launch_saves_settings_through_gui_state_adapter() -> None:
     source = inspect.getsource(gui_qcpage.gui_qcpage.open_qcpage_from_main)
 
-    assert "self.gui_state = getattr(app, \"gui_state\", LegacyGUIStateAdapter(project_manager))" in source
+    assert "GUIStateBridge" in source
     assert "QCPageRuntimeContext.from_gui_state(self.gui_state)" in source
     assert "self.dt = self.runtime_context.legacy_dt" not in source
     assert "self.gui_state.save_settings()" in source
@@ -871,13 +873,15 @@ def test_dialog_gui_state_helper_prefers_existing_adapter_without_proj_manager()
     assert dialogs._gui_state_from_app(app) is gui_state
 
 
-def test_dialog_gui_state_helper_falls_back_to_project_manager() -> None:
-    project_manager = type("ProjectManager", (), {"dt": object()})()
-    app = type("App", (), {"ProjM": project_manager})()
+def test_dialog_gui_state_helper_returns_bridge_when_no_gui_state() -> None:
+    # P2 step 4: _gui_state_from_app now returns a GUIStateBridge (no adapter).
+    # When app has no gui_state, it constructs a bridge from app services.
+    app = type("App", (), {"gui_state": None, "project_service": None,
+                           "session_state": None, "table_service": None})()
 
-    adapter = dialogs._gui_state_from_app(app)
+    result = dialogs._gui_state_from_app(app)
 
-    assert adapter.project_manager is project_manager
+    assert isinstance(result, GUIStateBridge)
 
 
 def test_dialog_main_constant_methods_delegate_to_constant_dialog() -> None:

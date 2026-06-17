@@ -1,11 +1,97 @@
 from __future__ import annotations
+# === GUI i18n: 本文件用户可见文字中英文对照 ===
+from gui.i18n import tr as _tr
+
+_T = {
+    "新建项目":     {"zh": "新建项目",     "en": "New Project"},
+    "项目名:":      {"zh": "项目名: ",     "en": "Project Name: "},
+    "项目路径:":    {"zh": "项目路径: ",   "en": "Project Path: "},
+    "选择项目路径": {"zh": "选择项目路径", "en": "Select project path"},
+    "浏览路径":     {"zh": "浏览",         "en": "Browse"},
+    "警告":         {"zh": "警告",         "en": "Warning"},
+    "请输入项目名称": {"zh": "请输入项目名称", "en": "Please enter a project name"},
+    "请选择项目路径": {"zh": "请选择项目路径", "en": "Please select a project path"},
+    "项目名称已存在": {"zh": "项目名称已存在", "en": "Project name already exists"},
+    "错误":         {"zh": "错误",         "en": "Error"},
+    "创建项目失败": {"zh": "创建项目失败", "en": "Failed to create project"},
+    "确定":         {"zh": "确定",         "en": "OK"},
+    "取消":         {"zh": "取消",         "en": "Cancel"},
+    "选择要导入的项目路径": {"zh": "选择要导入的项目路径", "en": "Select project directory to import"},
+    "导入项目失败": {"zh": "导入项目失败", "en": "Import failed"},
+    "移除项目":     {"zh": "移除项目",     "en": "Remove Project"},
+    "双击条目移除项目": {"zh": "双击条目移除项目", "en": "Double-click to remove"},
+    "移除项目吗":   {"zh": "确定要移除项目吗?", "en": "Remove this project?"},
+    "请输入常量名和值": {"zh": "请输入常量名和值", "en": "Please enter name and value"},
+    "常量名已存在": {"zh": "常量名已存在", "en": "Constant name already exists"},
+    "常量名不能包含特殊字符": {"zh": "常量名不能包含特殊字符", "en": "Name must be a valid identifier"},
+    "编辑常量":     {"zh": "编辑常量",     "en": "Edit Constant"},
+    "常量名：":     {"zh": "常量名: ",     "en": "Name: "},
+    "值：":         {"zh": "值: ",         "en": "Value: "},
+    "常量名和值不能为空": {"zh": "常量名和值不能为空", "en": "Name and value cannot be empty"},
+    "删除常量吗":   {"zh": "确定要删除这个常量吗?", "en": "Delete this constant?"},
+    "修改":         {"zh": "修改",         "en": "Edit"},
+    "删除":         {"zh": "删除",         "en": "Delete"},
+    "设置变量名":   {"zh": "设置变量名",   "en": "Set Variable Name"},
+    "请设置变量名:":{"zh": "请设置变量名: ", "en": "Set the variable name: "},
+    "请先选择文件": {"zh": "请先选择文件", "en": "Please select a file first"},
+    "请选择文件类型": {"zh": "请选择csv、excel、txt、list文件", "en": "Please select CSV/Excel/TXT/LIST"},
+    "请输入文本":   {"zh": "请输入文本",   "en": "Please enter text"},
+    "已有ezqcid列": {"zh": "表格中已有ezqcid列，无需设置", "en": "ezqcid column already exists"},
+    "设置ezqcid列": {"zh": "请选择要设置为ezqcid的列:", "en": "Select column for ezqcid:"},
+    "已有ezqcbatch列": {"zh": "表格中已有ezqcbatch列，无需设置", "en": "ezqcbatch column already exists"},
+    "设置批次:":    {"zh": "请设置批次: ", "en": "Set batch: "},
+    "变量名不能为空": {"zh": "变量名不能为空", "en": "Variable name cannot be empty"},
+    "批次不能为空": {"zh": "批次不能为空", "en": "Batch cannot be empty"},
+    "查看":         {"zh": "查看",         "en": "View"},
+    "列名冲突警告": {"zh": "以下列名与常量名冲突，可能导致代码模板替换异常", "en": "Column names conflict with constants"},
+    "是否仍要合并": {"zh": "是否仍要合并？", "en": "Merge anyway?"},
+    "没有可显示的数据": {"zh": "没有可显示的数据", "en": "No data to display"},
+    "合并完成":     {"zh": "合并完成",     "en": "Merge complete"},
+    "合并变量":     {"zh": "合并变量",     "en": "Merge Variables"},
+    "主变量表已存在": {"zh": "主变量表已存在，是否合并?", "en": "Master variables exist. Merge?"},
+    "合并成新行":   {"zh": "合并成新行",   "en": "Merge as Rows"},
+    "合并成新列":   {"zh": "合并成新列",   "en": "Merge as Columns"},
+    "替换":         {"zh": "替换",         "en": "Replace"},
+    "添加新模块":   {"zh": "添加新模块",   "en": "Add New Module"},
+    "修改模块":     {"zh": "修改模块",     "en": "Edit Module"},
+    "模块名:":      {"zh": "模块名: ",     "en": "Module Name: "},
+    "显示名称:":    {"zh": "显示名称: ",   "en": "Display Label: "},
+    "模块序号:":    {"zh": "模块序号: ",   "en": "Module Index: "},
+    "所有字段都必须填写": {"zh": "所有字段都必须填写", "en": "All fields are required"},
+    "序号必须是正整数": {"zh": "序号必须是正整数", "en": "Index must be a positive integer"},
+    "模块名规则":   {"zh": "模块名称必须以字母或下划线开头", "en": "Name must start with letter or underscore"},
+    "模块名称已存在": {"zh": "模块名称已存在", "en": "Module name already exists"},
+    "创建":         {"zh": "创建",         "en": "Create"},
+    "修改模块信息": {"zh": "修改模块信息", "en": "Edit Module Info"},
+    "模块名重复":   {"zh": "模块名称已存在,请修改模块名称", "en": "Module name exists; please rename"},
+    "请选择模块文件": {"zh": "请选择qcmodule模块文件", "en": "Select a qcmodule JSON file"},
+    "JSON文件":     {"zh": "JSON文件",     "en": "JSON Files"},
+    "所有文件":     {"zh": "所有文件",     "en": "All Files"},
+    "模块文件不合法": {"zh": "模块文件不合法", "en": "Invalid module file"},
+    "放弃导入":     {"zh": "放弃导入",     "en": "Import Aborted"},
+    "模块导入成功": {"zh": "模块导入成功", "en": "Module imported successfully"},
+    "导入模块失败": {"zh": "导入模块失败", "en": "Failed to import module"},
+    "请选择导出路径": {"zh": "请选择导出路径", "en": "Select export directory"},
+    "管理模块":     {"zh": "管理模块",     "en": "Manage Modules"},
+    "模块操作提示": {"zh": "左键双击修改模块设置，右键单击删除模块", "en": "Double-click to edit; right-click to delete"},
+    "序号":         {"zh": "序号",         "en": "Index"},
+    "名称":         {"zh": "名称",         "en": "Name"},
+    "显示名":       {"zh": "显示名",       "en": "Label"},
+    "不可删最后模块": {"zh": "只剩下1个模块，不可删除", "en": "Cannot delete: at least one module required"},
+    "删除模块吗":   {"zh": "是否删除该模块?", "en": "Delete this module?"},
+    "完成":         {"zh": "完成",         "en": "Done"},
+    "无法打开质控": {"zh": "无法打开质控页面", "en": "Cannot open QC page"},
+    "信息":         {"zh": "信息",         "en": "Info"},
+    "提示":         {"zh": "提示",         "en": "Notice"},
+}
+
 
 import os
 import re
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from gui.state_adapter import LegacyGUIStateAdapter
+from gui.state_bridge import GUIStateBridge
 from gui.widgets import DialogBase, bind_context_menu
 from utils.file_utils import FileUtils
 from utils.logger import log_debug, log_error, log_info
@@ -16,7 +102,12 @@ def _gui_state_from_app(app):
     gui_state = getattr(app, "gui_state", None)
     if gui_state is not None:
         return gui_state
-    return LegacyGUIStateAdapter(getattr(app, "ProjM", None))
+    # bridge needs project_service + session_state + table_service from app
+    return getattr(app, "gui_state", None) or GUIStateBridge(
+        getattr(app, "project_service", None),
+        getattr(app, "session_state", None),
+        getattr(app, "table_service", None),
+    )
 
 
 class ProjectDialog(DialogBase):
@@ -36,37 +127,37 @@ class ProjectDialog(DialogBase):
         dialog.title("新建项目")
         dialog.geometry("500x200")
 
-        ttk.Label(dialog, text="项目名称:").grid(row=0, column=0, padx=10, pady=10, sticky=tk.W)
+        ttk.Label(dialog, text=_tr(_T, "项目名:")).grid(row=0, column=0, padx=10, pady=10, sticky=tk.W)
         name_var = tk.StringVar()
         name_entry = ttk.Entry(dialog, textvariable=name_var, width=30)
         name_entry.grid(row=0, column=1, padx=10, pady=10)
 
-        ttk.Label(dialog, text="项目路径:").grid(row=1, column=0, padx=10, pady=10, sticky=tk.W)
+        ttk.Label(dialog, text=_tr(_T, "项目路径:")).grid(row=1, column=0, padx=10, pady=10, sticky=tk.W)
         path_var = tk.StringVar()
         path_entry = ttk.Entry(dialog, textvariable=path_var, width=30)
         path_entry.grid(row=1, column=1, padx=10, pady=10)
 
         def browse_path():
-            path = filedialog.askdirectory(title="选择项目路径")
+            path = filedialog.askdirectory(title=_tr(_T, "选择项目路径"))
             if path:
                 path_entry.delete(0, tk.END)
                 path_entry.insert(0, path)
                 path_var.set(path)
 
-        ttk.Button(dialog, text="浏览路径", command=browse_path).grid(row=1, column=2, padx=5, pady=10)
+        ttk.Button(dialog, text=_tr(_T, "浏览路径"), command=browse_path).grid(row=1, column=2, padx=5, pady=10)
 
         def confirm():
             name = name_entry.get().strip()
             path = path_entry.get().strip()
 
             if not name:
-                messagebox.showwarning("警告", "请输入项目名称")
+                messagebox.showwarning(_tr(_T, "警告"), _tr(_T, "请输入项目名称"))
                 return
             if not path:
-                messagebox.showwarning("警告", "请选择项目路径")
+                messagebox.showwarning(_tr(_T, "警告"), _tr(_T, "请选择项目路径"))
                 return
             if self.gui_state.has_project(name):
-                messagebox.showwarning("警告", "项目名称已存在")
+                messagebox.showwarning(_tr(_T, "警告"), _tr(_T, "项目名称已存在"))
                 return
 
             try:
@@ -79,10 +170,10 @@ class ProjectDialog(DialogBase):
         button_frame = ttk.Frame(dialog)
         button_frame.grid(row=2, column=0, columnspan=3, pady=20)
         ttk.Button(button_frame, text="确认", command=confirm).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="取消", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text=_tr(_T, "取消"), command=dialog.destroy).pack(side=tk.LEFT, padx=5)
 
     def import_project(self):
-        path = filedialog.askdirectory(title="选择要导入的项目路径")
+        path = filedialog.askdirectory(title=_tr(_T, "选择要导入的项目路径"))
         if not path:
             return
         try:
@@ -102,7 +193,7 @@ class ProjectDialog(DialogBase):
         dialog.grab_set()
         dialog.columnconfigure(0, weight=1)
         dialog.rowconfigure(1, weight=1)
-        ttk.Label(dialog, text="双击条目移除项目", padding=10).pack()
+        ttk.Label(dialog, text=_tr(_T, "双击条目移除项目"), padding=10).pack()
 
         scrollbar = ttk.Scrollbar(dialog)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -223,9 +314,9 @@ class ConstantDialog(DialogBase):
                 dialog.destroy()
 
         button_pack_options = {"padx": 5, "pady": 10, "ipadx": 10, "ipady": 4}
-        ttk.Button(button_frame, text="修改", command=update_constant).pack(side=tk.LEFT, **button_pack_options)
-        ttk.Button(button_frame, text="删除", command=delete_constant).pack(side=tk.LEFT, **button_pack_options)
-        ttk.Button(button_frame, text="取消", command=dialog.destroy).pack(side=tk.RIGHT, **button_pack_options)
+        ttk.Button(button_frame, text=_tr(_T, "修改"), command=update_constant).pack(side=tk.LEFT, **button_pack_options)
+        ttk.Button(button_frame, text=_tr(_T, "删除"), command=delete_constant).pack(side=tk.LEFT, **button_pack_options)
+        ttk.Button(button_frame, text=_tr(_T, "取消"), command=dialog.destroy).pack(side=tk.RIGHT, **button_pack_options)
 
 
 class VariableDialog(DialogBase):
@@ -257,8 +348,8 @@ class VariableDialog(DialogBase):
                 self.TablD.show_df(df)
                 self.dialog.destroy()
 
-        ttk.Button(self.dialog, text="确定", command=set_varname).place(x=120, y=150)
-        ttk.Button(self.dialog, text="取消", command=self.dialog.destroy).place(x=220, y=150)
+        ttk.Button(self.dialog, text=_tr(_T, "确定"), command=set_varname).place(x=120, y=150)
+        ttk.Button(self.dialog, text=_tr(_T, "取消"), command=self.dialog.destroy).place(x=220, y=150)
 
     def extract_file(self):
         if not self.app.path_entry2.get():
@@ -334,7 +425,7 @@ class VariableDialog(DialogBase):
             df_tmp = set_var()
             self.TablD.show_df(df_tmp)
 
-        ttk.Button(self.dialog2, text="查看", command=show_tmp_df).place(x=20, y=200)
+        ttk.Button(self.dialog2, text=_tr(_T, "查看"), command=show_tmp_df).place(x=20, y=200)
 
         def set_var_():
             df_to_merge = set_var()
@@ -358,8 +449,8 @@ class VariableDialog(DialogBase):
             self.dialog2.destroy()
             self.new_merge()
 
-        ttk.Button(self.dialog2, text="确定", command=set_var_).place(x=120, y=200)
-        ttk.Button(self.dialog2, text="取消", command=self.dialog2.destroy).place(x=220, y=200)
+        ttk.Button(self.dialog2, text=_tr(_T, "确定"), command=set_var_).place(x=120, y=200)
+        ttk.Button(self.dialog2, text=_tr(_T, "取消"), command=self.dialog2.destroy).place(x=220, y=200)
 
     def new_merge(self):
         if not self.gui_state.has_all_variable_rows():
@@ -394,20 +485,20 @@ class VariableDialog(DialogBase):
             messagebox.showinfo("信息", "合并完成")
             fresh_tables()
 
-        ttk.Button(button_frame, text="合并成新行", command=merge_as_rows).pack(pady=5)
+        ttk.Button(button_frame, text=_tr(_T, "合并成新行"), command=merge_as_rows).pack(pady=5)
 
         def merge_as_columns():
             self.gui_state.merge_all_variables_as_columns(self.df_tmp)
             fresh_tables()
 
-        ttk.Button(button_frame, text="合并成新列", command=merge_as_columns).pack(pady=5)
+        ttk.Button(button_frame, text=_tr(_T, "合并成新列"), command=merge_as_columns).pack(pady=5)
 
         def replace():
             self.gui_state.set_all_variable_table(self.df_tmp)
             fresh_tables()
 
-        ttk.Button(button_frame, text="替换", command=replace).pack(pady=5)
-        ttk.Button(button_frame, text="取消", command=merge_dialog.destroy).pack(pady=5)
+        ttk.Button(button_frame, text=_tr(_T, "替换"), command=replace).pack(pady=5)
+        ttk.Button(button_frame, text=_tr(_T, "取消"), command=merge_dialog.destroy).pack(pady=5)
 
     def show_all_variable(self):
         df = self.gui_state.all_variable_table()
@@ -494,7 +585,7 @@ class ModuleDialog(DialogBase):
 
         text = "创建" if name is None else "修改"
         ttk.Button(dialog, text=text, command=create_module).place(x=120, y=200, width=80)
-        ttk.Button(dialog, text="取消", command=dialog.destroy).place(x=220, y=200, width=80)
+        ttk.Button(dialog, text=_tr(_T, "取消"), command=dialog.destroy).place(x=220, y=200, width=80)
 
     def change_module_index(self, index, module):
         frame = tk.Toplevel(self.app.root)
@@ -545,8 +636,8 @@ class ModuleDialog(DialogBase):
             result["success"] = True
             close_dialog()
 
-        ttk.Button(frame, text="确定", command=change_module).place(x=120, y=170, width=80)
-        ttk.Button(frame, text="取消", command=close_dialog).place(x=220, y=170, width=80)
+        ttk.Button(frame, text=_tr(_T, "确定"), command=change_module).place(x=120, y=170, width=80)
+        ttk.Button(frame, text=_tr(_T, "取消"), command=close_dialog).place(x=220, y=170, width=80)
 
         frame.wait_window()
         return result["success"]
@@ -656,8 +747,8 @@ class ModuleDialog(DialogBase):
 
         button_frame = ttk.Frame(dialog)
         button_frame.pack(pady=5)
-        ttk.Button(button_frame, text="增加模块", command=add_module).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="完成", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text=_tr(_T, "添加新模块"), command=add_module).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text=_tr(_T, "完成"), command=dialog.destroy).pack(side=tk.LEFT, padx=5)
 
     def start_qc(self, module):
         try:

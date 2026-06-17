@@ -512,3 +512,32 @@ def test_project_service_module_index_by_name_returns_none_if_absent(tmp_path) -
     service.create("SAMPLE", tmp_path)
     assert service.module_index_by_name("nonexistent") is None
     assert service.module_index_by_name("example") == "1"
+
+
+def test_project_service_import_project_from_dir(tmp_path) -> None:
+    """import_project_from_dir scans settings_*.json, registers, loads."""
+    # create a project first, then import its dir into a fresh service
+    s1 = ProjectService(tmp_path / "projects1.json")
+    s1.create("SAMPLE", tmp_path)
+    project_dir = s1.current_project.path
+
+    s2 = ProjectService(tmp_path / "projects2.json")
+    s2.import_project_from_dir(project_dir)
+    assert s2.has_project("SAMPLE")
+    assert s2.current_project_name() == "SAMPLE"
+
+
+def test_project_service_import_invalid_dir_raises(tmp_path) -> None:
+    import pytest
+    s = ProjectService(tmp_path / "projects.json")
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+    with pytest.raises(FileNotFoundError):
+        s.import_project_from_dir(empty_dir)
+
+
+def test_project_service_constants_returns_dict(tmp_path) -> None:
+    s = ProjectService(tmp_path / "projects.json")
+    s.create("SAMPLE", tmp_path)
+    s.set_constant("K", "V")
+    assert s.constants()["K"] == "V"

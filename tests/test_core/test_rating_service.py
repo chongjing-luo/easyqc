@@ -7,7 +7,6 @@ from core.rating_service import RatingService
 from models.project import Project
 from models.qcmodule import QCModule
 from models.rating import Rating
-from utils.projects_manager import ProjectManager
 
 
 def _project(project_dir: Path) -> Project:
@@ -182,10 +181,14 @@ def test_rating_service_saved_json_is_readable_by_legacy_loader(tmp_path, fixtur
     rating = Rating.from_module(module)
     saved_path = RatingService(Project("SAMPLE", tmp_path / "easyqc_SAMPLE")).save_rating(rating)
 
-    result = ProjectManager().load_rating_json(str(saved_path))
-
-    assert result.loc[0, "module_name"] == "example"
-    assert result.loc[0, "score1"] == "Good"
+    # P2-D: ProjectManager removed; verify the saved JSON is readable via the
+    # service model path (Rating.from_json_file).
+    reloaded = Rating.from_json_file(saved_path)
+    assert reloaded.module_name == "example"
+    # scores values are stored as raw strings in the legacy payload
+    score1 = reloaded.scores.get("1") or reloaded.legacy_payload.get("scores", {}).get("1", {})
+    val = score1.get("value") if isinstance(score1, dict) else score1
+    assert val == "Good"
 
 
 def test_merge_subjects_with_rating_wide_coerces_numeric_ezqcid_on_both_sides() -> None:

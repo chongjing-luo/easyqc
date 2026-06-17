@@ -7,6 +7,32 @@ EasyQC 对话框主要功能模块
 """
 
 import tkinter as tk
+# === GUI i18n: 本文件用户可见文字中英文对照 ===
+from gui.i18n import tr as _tr
+
+_T = {
+    "错误":               {"zh": "错误",               "en": "Error"},
+    "数据为空":           {"zh": "数据为空",           "en": "No data"},
+    "请先设置评分项":     {"zh": "请先设置评分项",     "en": "Please configure score items first"},
+    "请先设置标记项":     {"zh": "请先配置标记项",     "en": "Please configure tag items first"},
+    "只读模式":           {"zh": "只读模式",           "en": "Read-only Mode"},
+    "刷新":               {"zh": "刷新",               "en": "Refresh"},
+    "数据筛选":           {"zh": "数据筛选",           "en": "Filter & Sort"},
+    "备注:":              {"zh": "备注:",              "en": "Notes:"},
+    "清空":               {"zh": "清空",               "en": "Clear"},
+    "警告":               {"zh": "警告",               "en": "Warning"},
+    "打开QC页面失败":     {"zh": "打开QC页面失败",     "en": "Failed to open QC page"},
+    "找不到模块":         {"zh": "找不到模块",         "en": "Module not found"},
+    "模块名不一致":       {"zh": "模块名不一致",       "en": "Module name mismatch"},
+    "QC页面准备失败":     {"zh": "QC页面准备失败",     "en": "QC page setup failed"},
+    "创建QC页面窗口失败": {"zh": "创建QC页面窗口失败", "en": "Failed to create QC window"},
+    "保存评分失败":       {"zh": "保存评分失败",       "en": "Failed to save rating"},
+    "加载评分失败":       {"zh": "加载评分失败",       "en": "Failed to load rating"},
+    "启动查看器失败":     {"zh": "启动查看器失败",     "en": "Failed to launch viewer"},
+    "评分人未设置":       {"zh": "评分者未设置",       "en": "Rater not set"},
+    "删除":               {"zh": "删除",               "en": "Delete"},
+}
+
 from tkinter import ttk
 from tkinter.ttk import Button,  Label,  Treeview, Checkbutton, Radiobutton
 from tkinter import StringVar, BooleanVar,  Scrollbar
@@ -18,7 +44,7 @@ from utils.logger import log_info, log_error, log_warning, log_exception, log_de
 from core.code_executor import CodeExecutor, CodeExecutorError
 
 from gui.qc_page import QCPageController, QCPageRuntimeContext
-from gui.state_adapter import LegacyGUIStateAdapter
+from gui.state_bridge import GUIStateBridge
 from gui.widgets import bind_context_menu
 
 
@@ -105,7 +131,7 @@ class gui_qcpage:
         context = self._ensure_runtime_context()
         rater = self._normalize_rater(rater)
         if rater is None:
-            self._enter_watch_mode("评分人未设置")
+            self._enter_watch_mode(_tr(_T, "评分人未设置"))
             return context.set_module_rater_dir(self._watch_mode_rater_dir(context, module_name))
         path = self._ensure_controller().module_rater_dir(context.output_dir, module_name, rater)
         return context.set_module_rater_dir(path)
@@ -159,7 +185,7 @@ class gui_qcpage:
             log_info(f"开始打开QC页面，模块: {module_name}")
             self.TablD = app.TablD
             project_manager = getattr(app, "ProjM", None)
-            self.gui_state = getattr(app, "gui_state", LegacyGUIStateAdapter(project_manager))
+            self.gui_state = getattr(app, "gui_state", None) or GUIStateBridge(getattr(app, "project_service", None), getattr(app, "session_state", None), getattr(app, "table_service", None))
             self.runtime_context = QCPageRuntimeContext.from_gui_state(self.gui_state)
             self.module_name = module_name
             self.ezqcid_index = None
@@ -184,7 +210,7 @@ class gui_qcpage:
 
         except Exception as e:
             log_exception(f"打开QC页面失败，模块: {module_name}, 错误: {str(e)}")
-            messagebox.showerror("错误", f"打开QC页面失败: {str(e)}")
+            messagebox.showerror(_tr(_T, "错误"), _tr(_T, "打开QC页面失败") + f": {str(e)}")
             raise
 
     def check_table(self):
@@ -197,7 +223,7 @@ class gui_qcpage:
 
         if not self._ensure_controller().table_has_rows(table):
             log_error("数据为空")
-            messagebox.showerror("错误", "数据为空")
+            messagebox.showerror(_tr(_T, "错误"), _tr(_T, "数据为空"))
             return True
         return False
 
@@ -211,19 +237,19 @@ class gui_qcpage:
             self.module_index = controller.module_index_by_name(self._runtime_settings(), module_name)
             if self.module_index is None:
                 log_error(f"找不到模块: {module_name}")
-                messagebox.showerror("错误", f"找不到模块: {module_name}")
+                messagebox.showerror(_tr(_T, "错误"), _tr(_T, "找不到模块") + f": {module_name}")
                 return True
             
             module = self.current_module()
             if module['name'] != module_name:
                 log_error(f"模块名不一致: {module['name']} != {module_name}")
-                messagebox.showerror("错误", f"模块名不一致: {module['name']} != {module_name}")
+                messagebox.showerror(_tr(_T, "错误"), _tr(_T, "模块名不一致") + f": {module['name']} != {module_name}")
                 return True
             
             # 检查评分人设置
             rater = self._normalize_rater(controller.module_rater(module))
             if rater is None:
-                self._enter_watch_mode("评分人未设置")
+                self._enter_watch_mode(_tr(_T, "评分人未设置"))
             else:
                 log_debug(f"评分人: {rater}")
 
@@ -234,13 +260,13 @@ class gui_qcpage:
                     for key, item in module['scores'].items():
                         if isinstance(item, dict) and (not item.get('label') or not item.get('num_')):
                             log_error(f"scores项 {key} 配置不完整: {item}")
-                            messagebox.showerror("错误", "请先设置评分项")
+                            messagebox.showerror(_tr(_T, "错误"), _tr(_T, "请先设置评分项"))
                             return True
                 elif isinstance(module['scores'], list):
                     for idx, item in enumerate(module['scores']):
                         if isinstance(item, dict) and (not item.get('label') or not item.get('num_')):
                             log_error(f"scores项 {idx} 配置不完整: {item}")
-                            messagebox.showerror("错误", "请先设置评分项")
+                            messagebox.showerror(_tr(_T, "错误"), _tr(_T, "请先设置评分项"))
                             return True
                 log_debug("scores字段检查通过")
             
@@ -251,13 +277,13 @@ class gui_qcpage:
                     for key, item in module['tags'].items():
                         if isinstance(item, dict) and not item.get('label'):
                             log_error(f"tags项 {key} 配置不完整: {item}")
-                            messagebox.showerror("错误", "请先设置标签项")
+                            messagebox.showerror(_tr(_T, "错误"), _tr(_T, "请先设置标记项"))
                             return True
                 elif isinstance(module['tags'], list):
                     for idx, item in enumerate(module['tags']):
                         if isinstance(item, dict) and not item.get('label'):
                             log_error(f"tags项 {idx} 配置不完整: {item}")
-                            messagebox.showerror("错误", "请先设置标签项")
+                            messagebox.showerror(_tr(_T, "错误"), _tr(_T, "请先设置标记项"))
                             return True
                 log_debug("tags字段检查通过")
             
@@ -266,7 +292,7 @@ class gui_qcpage:
 
         except Exception as e:
             log_exception(f"qcpage_prep执行失败: {str(e)}")
-            messagebox.showerror("错误", f"QC页面准备失败: {str(e)}")
+            messagebox.showerror(_tr(_T, "错误"), _tr(_T, "QC页面准备失败") + f": {str(e)}")
             raise 
 
 
@@ -344,13 +370,13 @@ class gui_qcpage:
             # 设置窗口标题
             module_name = module['name']
             module_label = module.get('label', '未知标签')
-            rater_label = self._normalize_rater(module.get('rater')) or "观察模式"
+            rater_label = self._normalize_rater(module.get('rater')) or "只读模式"
             window_title = f"{module_name} - {module_label} - {rater_label}"
             self.gui_qcpage.title(window_title)
             log_debug(f"QC页面窗口创建成功，标题: {window_title}")
         except Exception as e:
             log_exception(f"创建QC页面窗口失败: {str(e)}")
-            messagebox.showerror("错误", f"创建QC页面窗口失败: {str(e)}")
+            messagebox.showerror(_tr(_T, "错误"), _tr(_T, "创建QC页面窗口失败") + f": {str(e)}")
             raise
         
         # 创建主框架
@@ -410,15 +436,15 @@ class gui_qcpage:
 
         # 增加一个Checkbutton
         self.watch_mode = BooleanVar(value=watch_mode)  # 设置默认值为True(选中)
-        self.checkbutton = Checkbutton(frame_buttons, text="观察模式", variable=self.watch_mode, onvalue=True, offvalue=False)
+        self.checkbutton = Checkbutton(frame_buttons, text="只读模式", variable=self.watch_mode, onvalue=True, offvalue=False)
         self.checkbutton.place(x=0, y=0, width=120, height=30)
 
         def refresh_df_list():
             self.populate_listbox()
             self.load_present_to_gui()
-        Button(frame_buttons, text="刷新", command=refresh_df_list, style = 'TButton').place(x=0, y=35, width=120, height=30)
+        Button(frame_buttons, text=_tr(_T, "刷新"), command=refresh_df_list, style = 'TButton').place(x=0, y=35, width=120, height=30)
 
-        Button(frame_buttons, text="过滤和筛选", command=lambda: self.TablD.filter_sorter(module['name']),
+        Button(frame_buttons, text=_tr(_T, "数据筛选"), command=lambda: self.TablD.filter_sorter(module['name']),
                style = 'TButton').place(x=0, y=70, width=120, height=30)
         Button(frame_buttons, text="Previous", command=lambda: self.navigate_subject(-1),
                style="TButton").place(x=0, y=105, width=120, height=45)
@@ -489,7 +515,7 @@ class gui_qcpage:
             raise
 
 
-        Label(main_frame, text="备注:", style='TLabel').place(x=0, y=300+height_1, width=40, height=30)
+        Label(main_frame, text=_tr(_T, "备注:"), style='TLabel').place(x=0, y=300+height_1, width=40, height=30)
         # 增加一个多行文本框和滚动条
         notes_frame = ttk.Frame(main_frame)
         notes_frame.place(x=50, y=300+height_1, width=300, height=45)
@@ -527,8 +553,8 @@ class gui_qcpage:
         
 
         # 两个按钮，删除和清空
-        Button(main_frame, text="删除", command=self.delete_note_to_previous_space, style = 'TButton').place(x=355, y=300+height_1, width=65, height=30)
-        Button(main_frame, text="清空", command=lambda: self.notes_text.delete('1.0', 'end'), style = 'TButton').place(x=425, y=300+height_1, width=65, height=30)
+        Button(main_frame, text=_tr(_T, "删除"), command=self.delete_note_to_previous_space, style = 'TButton').place(x=355, y=300+height_1, width=65, height=30)
+        Button(main_frame, text=_tr(_T, "清空"), command=lambda: self.notes_text.delete('1.0', 'end'), style = 'TButton').place(x=425, y=300+height_1, width=65, height=30)
 
     def load_present_to_gui(self, module=None):
 
@@ -567,7 +593,7 @@ class gui_qcpage:
             controller = self._ensure_controller()
             rater = self._normalize_rater(controller.module_rater(module))
             if rater is None:
-                self._enter_watch_mode("评分人未设置")
+                self._enter_watch_mode(_tr(_T, "评分人未设置"))
             dir_module_rater = self._module_rater_dir()
             # 清空现有数据
             for item in self.listbox.get_children():
@@ -663,7 +689,7 @@ class gui_qcpage:
             module = self.current_module()
             rater = self._normalize_rater(self._ensure_controller().module_rater(module))
             if rater is None:
-                self._enter_watch_mode("评分人未设置")
+                self._enter_watch_mode(_tr(_T, "评分人未设置"))
                 log_info("评分人未设置，观察模式不保存文件")
                 return
             if self._is_watch_mode():
@@ -679,7 +705,7 @@ class gui_qcpage:
             log_info(f"评分保存完成，文件: {file_path}")
         except Exception as e:
             log_exception(f"保存评分失败: {str(e)}")
-            messagebox.showerror("错误", f"保存评分失败: {str(e)}")
+            messagebox.showerror(_tr(_T, "错误"), _tr(_T, "保存评分失败") + f": {str(e)}")
 
     def load_rating(self, ezqcid=None, module=None, rater=None):
         """
@@ -695,7 +721,7 @@ class gui_qcpage:
                 rater = self._ensure_controller().module_rater(module)
             rater = self._normalize_rater(rater)
             if rater is None:
-                self._enter_watch_mode("评分人未设置")
+                self._enter_watch_mode(_tr(_T, "评分人未设置"))
                 log_info("评分人未设置，观察模式不加载评分文件")
                 self.init_present(module, ezqcid)
                 return
@@ -735,7 +761,7 @@ class gui_qcpage:
 
         except Exception as e:
             log_exception(f"加载评分失败: {str(e)}")
-            messagebox.showerror("错误", f"加载评分失败: {str(e)}")
+            messagebox.showerror(_tr(_T, "错误"), _tr(_T, "加载评分失败") + f": {str(e)}")
 
     def apply_rating_state(self, current_module, rating_module):
         """
@@ -835,7 +861,7 @@ class gui_qcpage:
             log_info(f"图片 {ezqcid} 打开完成")
         except Exception as e:
             log_exception(f"打开图片失败: {str(e)}")
-            messagebox.showerror("错误", f"打开图片失败: {str(e)}")
+            messagebox.showerror(_tr(_T, "错误"), _tr(_T, "启动查看器失败") + f": {str(e)}")
 
 
     def gen_code(self,ezqcid, settings=None, module=None, table=None):

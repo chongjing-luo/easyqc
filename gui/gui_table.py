@@ -8,6 +8,18 @@ EasyQC GUI表格显示模块
 """
 
 import tkinter as tk
+# === GUI i18n: 本文件用户可见文字中英文对照 ===
+from gui.i18n import tr as _tr
+
+_T = {
+    "警告":           {"zh": "警告",           "en": "Warning"},
+    "信息":           {"zh": "信息",           "en": "Info"},
+    "评分数据未加载": {"zh": "评分数据未加载", "en": "Rating data not loaded"},
+    "缺乏必要参数":   {"zh": "参数错误",       "en": "Invalid parameters"},
+    "输入数据为空":   {"zh": "输入数据为空",   "en": "Input data is empty"},
+    "取消":           {"zh": "取消",           "en": "Cancel"},
+}
+
 from tkinter import messagebox
 import sys
 from pathlib import Path
@@ -19,9 +31,8 @@ sys.path.insert(0, str(project_root))
 # 导入日志系统
 from utils.logger import log_info, log_error, log_warning, log_exception, log_debug, LogContext, log_function
 
-from utils.projects_manager import ProjectManager
 from utils.data_manager import DataManager 
-from gui.state_adapter import LegacyGUIStateAdapter
+from gui.state_bridge import GUIStateBridge
 from gui.table_view import TableTransformDialog, TableView, open_qc_subprocess
 
 class TableDisplay:
@@ -38,16 +49,16 @@ class TableDisplay:
             project_manager = getattr(app, 'ProjM', None)
             self.gui_state = getattr(app, 'gui_state', None)
             if self.gui_state is None:
-                self.gui_state = LegacyGUIStateAdapter(project_manager)
+                self.gui_state = GUIStateBridge(getattr(self, 'project_service', None), getattr(self, 'session_state', None), getattr(self, 'table_service', None))
             self.DataM = self.app.DataM
             services = getattr(self.app, 'services', None)
             self.table_transform = getattr(services, 'table_transform', getattr(self.app, 'table_transform', None))
         else:
-            self.ProjM = ProjectManager()
+            self.ProjM = None  # P2-D: ProjectManager removed
             self.ProjM.init_projects()
             self.ProjM.load_project(self.ProjM.dt.project, fresh_gui=False)
             self.dt = self.ProjM.dt
-            self.gui_state = LegacyGUIStateAdapter(self.ProjM, self.dt)
+            self.gui_state = getattr(self.app, 'gui_state', None) or GUIStateBridge(getattr(self.app, 'project_service', None), getattr(self.app, 'session_state', None), getattr(self.app, 'table_service', None))
             self.DataM = DataManager()
             self.table_transform = None
         if self.table_transform is not None and hasattr(self.DataM, 'table_transform'):
@@ -77,7 +88,7 @@ class TableDisplay:
 
     def state_adapter(self):
         if not hasattr(self, 'gui_state'):
-            self.gui_state = LegacyGUIStateAdapter(getattr(self, 'ProjM', None), getattr(self, 'dt', None))
+            self.gui_state = getattr(self, 'gui_state', None) or GUIStateBridge(getattr(self, 'project_service', None), getattr(self, 'session_state', None), getattr(self, 'table_service', None))
         return self.gui_state
 
 
@@ -86,7 +97,7 @@ class TableDisplay:
         显示右键菜单，显示该ezqcid的所有质控结果
         """
         if not self.state_adapter().has_rating_data():
-            messagebox.showwarning("警告", "评分数据未加载")
+            messagebox.showwarning(_tr(_T, "警告"), _tr(_T, "评分数据未加载"))
             return
             
 
@@ -195,11 +206,11 @@ class TableDisplay:
         try:
             df, select_filter = self.resolve_filter_source(type, df)
         except ValueError:
-            messagebox.showinfo("信息", "缺乏必要参数")
+            messagebox.showinfo(_tr(_T, "信息"), _tr(_T, "缺乏必要参数"))
             return
                 
         if df is None or df.empty:
-            messagebox.showinfo("信息", "输入数据为空")
+            messagebox.showinfo(_tr(_T, "信息"), _tr(_T, "输入数据为空"))
             return
 
         return self.create_table_transform_dialog().open_filter_dialog(

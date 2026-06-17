@@ -6,6 +6,57 @@ EasyQC 主窗口模块
 """
 
 import tkinter as tk
+# === GUI i18n: 本文件用户可见文字中英文对照 ===
+from gui.i18n import tr as _tr
+
+_T = {
+    "EasyQC - 质量控制分析工具": {"zh": "EasyQC - 质量控制分析工具", "en": "EasyQC - Quality Control Analysis Tool"},
+    "项目管理":         {"zh": "项目管理",         "en": "Project Management"},
+    "新建项目":         {"zh": "新建项目",         "en": "New Project"},
+    "导入项目":         {"zh": "导入项目",         "en": "Import Project"},
+    "移除项目":         {"zh": "移除项目",         "en": "Remove Project"},
+    "常量设置":         {"zh": "常量设置",         "en": "Constants"},
+    "常量名:":          {"zh": "常量名: ",         "en": "Name: "},
+    "值:":              {"zh": "值: ",             "en": "Value: "},
+    "常量名":           {"zh": "常量名",           "en": "Name"},
+    "值":               {"zh": "值",               "en": "Value"},
+    "添加":             {"zh": "添加",             "en": "Add"},
+    "变量设置":         {"zh": "变量设置",         "en": "Variables"},
+    "导入受试者变量":   {"zh": "导入受试者变量",   "en": "Import Subject Variables"},
+    "查看受试者表":     {"zh": "查看受试者表",     "en": "View Subject Table"},
+    "聚合质控评分":     {"zh": "聚合质控评分",     "en": "Aggregate QC Ratings"},
+    "数据筛选":         {"zh": "数据筛选",         "en": "Filter & Sort"},
+    "查看质控结果表":   {"zh": "查看质控结果表",   "en": "View QC Results Table"},
+    "设置变量":         {"zh": "设置变量",         "en": "Set Variables"},
+    "方式1: 从文件夹导入": {"zh": "方式1: 从文件夹导入", "en": "Method 1: Import from Folder"},
+    "浏览":             {"zh": "浏览",             "en": "Browse"},
+    "读取文件夹":       {"zh": "读取文件夹",       "en": "Read Folder"},
+    "方式2: 从文件导入(CSV/Excel/TXT)": {"zh": "方式2: 从文件导入(CSV/Excel/TXT)", "en": "Method 2: Import from File (CSV/Excel/TXT)"},
+    "读取文件":         {"zh": "读取文件",         "en": "Read File"},
+    "方式3: 直接输入(空格/换行分隔)": {"zh": "方式3: 直接输入(空格/换行分隔)", "en": "Method 3: Direct Input (space/newline)"},
+    "确定":             {"zh": "确定",             "en": "OK"},
+    "查看待合并变量":   {"zh": "查看待合并变量",   "en": "View Pending Variables"},
+    "筛选待合并变量":   {"zh": "筛选待合并变量",   "en": "Filter Pending Variables"},
+    "合并":             {"zh": "新建/合并",        "en": "Merge"},
+    "筛选主变量表":     {"zh": "筛选主变量表",     "en": "Filter Master Variables"},
+    "查看主变量表":     {"zh": "查看主变量表",     "en": "View Master Variables"},
+    "展开▼":            {"zh": "展开▼",            "en": "Expand ▼"},
+    "收起▲":            {"zh": "收起▲",            "en": "Collapse ▲"},
+    "开始质控":         {"zh": "开始质控",         "en": "Start QC"},
+    "查看模块结果":     {"zh": "查看模块结果",     "en": "View Module Results"},
+    "评分者:":          {"zh": "评分者: ",         "en": "Rater: "},
+    "单实例模式":       {"zh": "单实例模式",       "en": "Single Instance"},
+    "评分尺度:":        {"zh": "评分尺度: ",       "en": "Score Scale: "},
+    "查看器命令":       {"zh": "查看器命令",       "en": "Viewer Command"},
+    "导出模块配置":     {"zh": "导出模块配置",     "en": "Export Module Config"},
+    "质控模块设置":     {"zh": "质控模块设置",     "en": "QC Modules"},
+    "添加模块":         {"zh": "添加模块",         "en": "Add Module"},
+    "导入模块":         {"zh": "导入模块",         "en": "Import Module"},
+    "模块管理":         {"zh": "模块管理",         "en": "Manage Modules"},
+    "取消":             {"zh": "取消",             "en": "Cancel"},
+    "代码设置":         {"zh": "代码设置",         "en": "Viewer Command"},
+}
+
 from tkinter import ttk, scrolledtext
 import sys
 from pathlib import Path
@@ -21,13 +72,12 @@ from utils.logger import log_info, log_error, log_warning, log_exception, log_de
 from core.table_service import TABLE_QCTABLE
 from core.event_bus import EventBus, EventType
 from utils.file_utils import FileUtils
-from utils.projects_manager import ProjectManager
 from utils.data_manager import DataManager
 
 # 导入对话框和表格显示功能类
 from gui.dialog_main import DialogMain
 from gui.gui_table import TableDisplay
-from gui.state_adapter import LegacyGUIStateAdapter
+from gui.state_bridge import GUIStateBridge
 
 
 class EasyQCApp:
@@ -54,19 +104,31 @@ class EasyQCApp:
                         self.DataM.table_transform = self.table_transform
                     self.FileU = FileUtils()
                     
-                    # 创建ProjectManager
-                    self.ProjM = None
-                    class Callback_ProjM:
-                        def __init__(self):
-                            self.load_project_to_gui = None
-                            
-                    Callback_ProjM = Callback_ProjM()
-                    # Callback_ProjM.setup_window = self.setup_window
-                    Callback_ProjM.load_project_to_gui = self.load_project_to_gui
-                    self.ProjM = ProjectManager()
-                    self.ProjM.init_projects(app=self, cbProjM=Callback_ProjM)
-                    self.ProjM.load_project(self.ProjM.dt.project, fresh_gui=False)
-                    self.gui_state = LegacyGUIStateAdapter(self.ProjM)
+                    # P2 step 3: use GUIStateBridge (service-backed, no ProjectManager).
+                    # The bridge delegates to project_service + session_state +
+                    # table_service. Project refresh on change is driven by the
+                    # PROJECT_CHANGED event (see _on_project_changed).
+                    self.session_state = getattr(services, "session_state", None) or __import__(
+                        "core.session_state", fromlist=["SessionState"]
+                    ).SessionState()
+                    self.gui_state = GUIStateBridge(
+                        project_service=self.project_service,
+                        session_state=self.session_state,
+                        table_service=self.table_service,
+                    )
+                    # load the last project into the service layer
+                    if self.project_service is not None:
+                        last = self.project_service.registry.last_project
+                        if last and last in self.project_service.registry.projects:
+                            self.project_service.load(last)
+                            # sync tables from service into session state
+                            if self.table_service is not None:
+                                loaded = self.table_service.load_legacy_state_tables(
+                                    self.project_service.current_project
+                                )
+                                if loaded is not None:
+                                    self.gui_state.apply_loaded_tables(loaded)
+                    self.ProjM = None  # legacy marker; no longer instantiated
                     
                     # 创建DialogMain（需要ProjM已存在）
                     self.DialM = DialogMain(self)
@@ -160,7 +222,7 @@ class EasyQCApp:
         self.inner_frame.place(x=10, y=0, width=580, height=100)
         
         # 在框架内部添加"项目管理"标签，使用绝对定位和全局样式
-        self.project_label = ttk.Label(self.inner_frame, text="项目管理", style='Title.TLabel')
+        self.project_label = ttk.Label(self.inner_frame, text=_tr(_T, "项目管理"), style='Title.TLabel')
         self.project_label.place(x=240, y=0, width=100, height=30)
         
         # 项目下拉列表，使用绝对定位和全局样式
@@ -173,15 +235,15 @@ class EasyQCApp:
         self.project_combo.bind("<<ComboboxSelected>>", lambda e: self.gui_state.change_project(self.project_combo.get()))
         
         # ---------------------------------   新建项目按钮   ---------------------------------
-        self.new_project_btn = ttk.Button(self.inner_frame, text="新建项目", command=self.DialM.create_project, style='Project.TButton')
+        self.new_project_btn = ttk.Button(self.inner_frame, text=_tr(_T, "新建项目"), command=self.DialM.create_project, style='Project.TButton')
         self.new_project_btn.place(x=250, y=30, width=100, height=35)
 
         # ---------------------------------   导入项目按钮   ---------------------------------
-        self.import_project_btn = ttk.Button(self.inner_frame, text="导入项目", command=self.DialM.import_project, style='Project.TButton')
+        self.import_project_btn = ttk.Button(self.inner_frame, text=_tr(_T, "导入项目"), command=self.DialM.import_project, style='Project.TButton')
         self.import_project_btn.place(x=355, y=30, width=100, height=35)
 
         # ---------------------------------   移除项目按钮   ---------------------------------
-        self.remove_project_btn = ttk.Button(self.inner_frame, text="移除项目", command=self.DialM.remove_project, style='Project.TButton')
+        self.remove_project_btn = ttk.Button(self.inner_frame, text=_tr(_T, "移除项目"), command=self.DialM.remove_project, style='Project.TButton')
         self.remove_project_btn.place(x=460, y=30, width=100, height=35)
     # ===================================================================================
 
@@ -200,23 +262,23 @@ class EasyQCApp:
         self.inner_frame.place(x=10, y=0, width=580, height=200)
         
         # 在框架内部添加"项目管理"标签，使用绝对定位
-        self.constant_label = ttk.Label(self.inner_frame, text="常量设置", font=self.font_14)
+        self.constant_label = ttk.Label(self.inner_frame, text=_tr(_T, "常量设置"), font=self.font_14)
         self.constant_label.place(x=240, y=0, width=100, height=30)
 
         # 常量名字文本，文本前有常量名"常量名："
-        self.constant_name_label = ttk.Label(self.inner_frame, text="常量名:", font=self.font_13)
+        self.constant_name_label = ttk.Label(self.inner_frame, text=_tr(_T, "常量名:"), font=self.font_13)
         self.constant_name_label.place(x=0, y=30, width=50, height=32)
         self.constant_name = ttk.Entry(self.inner_frame, font=self.font_12)
         self.constant_name.place(x=60, y=30, width=120, height=28)
 
         # 常量值文本，文本前有常量值"常量值："
-        self.constant_value_label = ttk.Label(self.inner_frame, text="值:", font=self.font_13)
+        self.constant_value_label = ttk.Label(self.inner_frame, text=_tr(_T, "值:"), font=self.font_13)
         self.constant_value_label.place(x=195, y=30, width=25, height=32)
         self.constant_value = ttk.Entry(self.inner_frame, font=self.font_12)
         self.constant_value.place(x=225, y=30, width=230, height=28)
 
         # 添加按钮
-        self.constant_btn = ttk.Button(self.inner_frame, text="添加", command=self.DialM.add_constant, style='Project.TButton')
+        self.constant_btn = ttk.Button(self.inner_frame, text=_tr(_T, "添加"), command=self.DialM.add_constant, style='Project.TButton')
         self.constant_btn.place(x=475, y=27, width=80, height=30)
 
 
@@ -261,30 +323,30 @@ class EasyQCApp:
         self.inner_frame_v.place(x=10, y=0, width=580, height=90)
 
         # 设置标题 变量设置，居中放置
-        self.variable_title = ttk.Label(self.inner_frame_v, text="变量设置", font=self.font_14)
+        self.variable_title = ttk.Label(self.inner_frame_v, text=_tr(_T, "变量设置"), font=self.font_14)
         self.variable_title.place(x=240, y=0, width=100, height=30)
 
 
         # 新建/增加 按钮
-        self.new_variable_btn = ttk.Button(self.inner_frame_v, text="设置初始变量", command=self.set_variable, style='Project.TButton')
+        self.new_variable_btn = ttk.Button(self.inner_frame_v, text=_tr(_T, "导入受试者变量"), command=self.set_variable, style='Project.TButton')
         self.new_variable_btn.place(x=5, y=25, width=100, height=35)
 
         # 显示初始变量 按钮
-        self.show_initial_table_btn = ttk.Button(self.inner_frame_v, text="显示初始表格", command=lambda:self.TablD.show_df(self.gui_state.all_variable_table()), style='Project.TButton')
+        self.show_initial_table_btn = ttk.Button(self.inner_frame_v, text=_tr(_T, "查看受试者表"), command=lambda:self.TablD.show_df(self.gui_state.all_variable_table()), style='Project.TButton')
         self.show_initial_table_btn.place(x=115, y=25, width=100, height=35)
 
         # 提取质控结果 按钮
-        self.extract_qc_btn = ttk.Button(self.inner_frame_v, text="提取质控结果", command=self.extract_qc_results, style='Project.TButton')
+        self.extract_qc_btn = ttk.Button(self.inner_frame_v, text=_tr(_T, "聚合质控评分"), command=self.extract_qc_results, style='Project.TButton')
         self.extract_qc_btn.place(x=225, y=25, width=100, height=35)
 
         # 过滤和筛选 按钮
-        self.filter_btn = ttk.Button(self.inner_frame_v, text="过滤和筛选", command=lambda: self.TablD.filter_sorter("qctable"), style='Project.TButton')
+        self.filter_btn = ttk.Button(self.inner_frame_v, text=_tr(_T, "数据筛选"), command=lambda: self.TablD.filter_sorter("qctable"), style='Project.TButton')
         self.filter_btn.place(x=335, y=25, width=100, height=35)
 
         # 显示当前变量 按钮
         def show_qctable():
             self.TablD.show_df(self.gui_state.qctable_for_display())
-        self.show_current_variable_btn = ttk.Button(self.inner_frame_v, text="显示质控表格", command=show_qctable, style='Project.TButton')
+        self.show_current_variable_btn = ttk.Button(self.inner_frame_v, text=_tr(_T, "查看质控结果表"), command=show_qctable, style='Project.TButton')
         self.show_current_variable_btn.place(x=445, y=25, width=100, height=35)
 
     def set_variable(self):
@@ -304,45 +366,45 @@ class EasyQCApp:
 
         # =========================    路径导入   =============================
         # 创建主Frame作为容器
-        main_frame = ttk.LabelFrame(self.dialog_setvar, text="方法1：通过路径导入")
+        main_frame = ttk.LabelFrame(self.dialog_setvar, text=_tr(_T, "方式1: 从文件夹导入"))
         main_frame.place(x=10, y=15, width=480, height=70)
 
         # 创建内部Frame用于放置控件
         inner_frame = ttk.Frame(main_frame)
         inner_frame.place(x=10, y=0, width=460, height=70)
 
-        self.browse_btn1 = ttk.Button(inner_frame, text="浏览", command=self.DialM.browse_path)
+        self.browse_btn1 = ttk.Button(inner_frame, text=_tr(_T, "浏览"), command=self.DialM.browse_path)
         self.browse_btn1.place(x=5, y=5, width=80, height=30)
 
         self.path_entry = ttk.Entry(inner_frame, font=self.font_12)
         self.path_entry.place(x=90, y=10, width=250, height=25)
 
         # 提取路径按钮
-        self.extract_btn = ttk.Button(inner_frame, text="提取路径", command=self.DialM.extract_path)
+        self.extract_btn = ttk.Button(inner_frame, text=_tr(_T, "读取文件夹"), command=self.DialM.extract_path)
         self.extract_btn.place(x=360, y=5, width=100, height=30)
 
         # ================================================================
         # 创建主Frame作为容器
-        main_frame2 = ttk.LabelFrame(self.dialog_setvar, text="方法2：通过文件csv、excel和txt文件导入")
+        main_frame2 = ttk.LabelFrame(self.dialog_setvar, text=_tr(_T, "方式2: 从文件导入(CSV/Excel/TXT)"))
         main_frame2.place(x=10, y=110, width=480, height=70)
 
         # 创建内部Frame用于放置控件
         inner_frame2 = ttk.Frame(main_frame2)
         inner_frame2.place(x=10, y=0, width=460, height=70)
 
-        self.browse_btn2 = ttk.Button(inner_frame2, text="浏览", command=self.DialM.browse_file)
+        self.browse_btn2 = ttk.Button(inner_frame2, text=_tr(_T, "浏览"), command=self.DialM.browse_file)
         self.browse_btn2.place(x=5, y=5, width=80, height=30)
         
         # 文件路径输入框
         self.path_entry2 = ttk.Entry(inner_frame2, font=self.font_12)
         self.path_entry2.place(x=90, y=10, width=250, height=25)
 
-        self.extract_btn = ttk.Button(inner_frame2, text="提取文件", command=self.DialM.extract_file)
+        self.extract_btn = ttk.Button(inner_frame2, text=_tr(_T, "读取文件"), command=self.DialM.extract_file)
         self.extract_btn.place(x=360, y=5, width=100, height=30)
 
         # ================================================================
         # 创建主Frame作为容器
-        main_frame3 = ttk.LabelFrame(self.dialog_setvar, text="方法3：直接输入，以空格分隔、换行符或者回车符分隔各个条目")
+        main_frame3 = ttk.LabelFrame(self.dialog_setvar, text=_tr(_T, "方式3: 直接输入(空格/换行分隔)"))
         main_frame3.place(x=10, y=210, width=480, height=140)
 
         # 创建内部Frame用于放置控件
@@ -355,7 +417,7 @@ class EasyQCApp:
         self.text_entry.tag_configure('left', justify='left')
 
         # 确认按钮
-        self.confirm_btn = ttk.Button(inner_frame3, text="确认", command=self.DialM.extract_words)
+        self.confirm_btn = ttk.Button(inner_frame3, text=_tr(_T, "确定"), command=self.DialM.extract_words)
         self.confirm_btn.place(x=185, y=85, width=100, height=30)
 
         # ================================================================
@@ -364,23 +426,23 @@ class EasyQCApp:
         button_frame.place(x=10, y=360, width=480, height=80)
 
         # 创建按钮并水平排列
-        self.show_variable_btn = ttk.Button(button_frame, text="查看新变量", command=lambda: self.TablD.show_df(self.gui_state.new_variable_table()))
+        self.show_variable_btn = ttk.Button(button_frame, text=_tr(_T, "查看待合并变量"), command=lambda: self.TablD.show_df(self.gui_state.new_variable_table()))
         self.show_variable_btn.place(x=10, y=10, width=225, height=30)
 
         # 筛选按钮
-        self.filter_btn = ttk.Button(button_frame, text="筛选新变量", command=lambda: self.TablD.filter_sorter("new"))
+        self.filter_btn = ttk.Button(button_frame, text=_tr(_T, "筛选待合并变量"), command=lambda: self.TablD.filter_sorter("new"))
         self.filter_btn.place(x=250, y=10, width=225, height=30)
 
         # 新建/合并 按钮
-        self.new_merge_btn = ttk.Button(button_frame, text="新建/合并", command=self.DialM.merge_newdata)
+        self.new_merge_btn = ttk.Button(button_frame, text=_tr(_T, "合并"), command=self.DialM.merge_newdata)
         self.new_merge_btn.place(x=10, y=40, width=140, height=30)
 
         # 新建/合并 按钮
-        self.filter_btn_all = ttk.Button(button_frame, text="筛选总变量", command=lambda: self.TablD.filter_sorter("all"))
+        self.filter_btn_all = ttk.Button(button_frame, text=_tr(_T, "筛选主变量表"), command=lambda: self.TablD.filter_sorter("all"))
         self.filter_btn_all.place(x=170, y=40, width=140, height=30)
 
         # 查看总变量表格
-        self.show_all_variable_btn = ttk.Button(button_frame, text="查看总变量", command=lambda: self.TablD.show_df(self.gui_state.all_variable_table()))
+        self.show_all_variable_btn = ttk.Button(button_frame, text=_tr(_T, "查看主变量表"), command=lambda: self.TablD.show_df(self.gui_state.all_variable_table()))
         self.show_all_variable_btn.place(x=330, y=40, width=140, height=30)
 
 
@@ -395,7 +457,7 @@ class EasyQCApp:
         header.pack(fill="x", pady=2)
 
         # 左侧按钮
-        toggle_btn = ttk.Button(header, text="展开▼", width=6)
+        toggle_btn = ttk.Button(header, text=_tr(_T, "展开▼"), width=6)
         toggle_btn.place(x=0, y=2, width=80, height=26)
 
         # 标题（居中）
@@ -404,7 +466,7 @@ class EasyQCApp:
         title_lbl.place(x=85, y=2, width=340, height=26)
 
         # 右侧按钮
-        startqc_btn = ttk.Button(header, text="开始质控", width=8, command=lambda: self.DialM.start_qc(module))
+        startqc_btn = ttk.Button(header, text=_tr(_T, "开始质控"), width=8, command=lambda: self.DialM.start_qc(module))
         startqc_btn.place(x=430, y=2, width=100, height=26)
 
         # 创建外层容器frame,设置固定高度
@@ -421,14 +483,14 @@ class EasyQCApp:
         content.place(x=0, y=0, width=520, height=height-15)
 
         # 过滤和筛选按钮
-        filter_btn = ttk.Button(content, text="过滤和筛选", style='Project.TButton', command=lambda: self.TablD.filter_sorter(module['name']))
+        filter_btn = ttk.Button(content, text=_tr(_T, "数据筛选"), style='Project.TButton', command=lambda: self.TablD.filter_sorter(module['name']))
         filter_btn.place(x=5, y=0, width=100, height=30)
 
-        filter_btn = ttk.Button(content, text="显示质控结果", style='Project.TButton', command=lambda: self.TablD.show_df(self.gui_state.result_table(module['name'])))
+        filter_btn = ttk.Button(content, text=_tr(_T, "查看模块结果"), style='Project.TButton', command=lambda: self.TablD.show_df(self.gui_state.result_table(module['name'])))
         filter_btn.place(x=115, y=0, width=110, height=30)
 
         # 创建评分人标签和输入框
-        label = ttk.Label(content, text="评分人:", style='TLabel')
+        label = ttk.Label(content, text=_tr(_T, "评分者:"), style='TLabel')
         label.place(x=235, y=0, width=50, height=30)
         # 创建StringVar来跟踪Entry的值
         rater_var = tk.StringVar(value=module['rater'])
@@ -439,7 +501,7 @@ class EasyQCApp:
         # 创建子进程控制复选框
         # subprocess_var = tk.BooleanVar()
         subprocess_var = tk.BooleanVar(value=module['control'])
-        subprocess_check = ttk.Checkbutton(content, text="子进程控制", variable=subprocess_var,
+        subprocess_check = ttk.Checkbutton(content, text=_tr(_T, "单实例模式"), variable=subprocess_var,
                                         command=lambda: self.gui_state.update_module_field(qcidx, 'control', subprocess_var.get()))
         subprocess_check.place(x=415, y=5, width=100)
         
@@ -468,7 +530,7 @@ class EasyQCApp:
             score_label_var.trace_add("write", update_label)
 
             # 分值
-            ttk.Label(content, text="分值:", style='TLabel').place(x=310, y=row_y)
+            ttk.Label(content, text=_tr(_T, "评分尺度:"), style='TLabel').place(x=310, y=row_y)
             score_entry_name = f"{module['name']}_{score_key}_num"
             # 创建Entry和StringVar来跟踪分数值
             score_var = tk.StringVar(value=tmp_score[score_key]['num'])
@@ -562,17 +624,17 @@ class EasyQCApp:
                 code_frame.destroy()
 
             # 直接用pack布局让按钮可见且居中
-            confirm_btn = ttk.Button(btn_frame, text="确认", command=confirm)
-            cancel_btn = ttk.Button(btn_frame, text="取消", command=code_frame.destroy)
+            confirm_btn = ttk.Button(btn_frame, text=_tr(_T, "确定"), command=confirm)
+            cancel_btn = ttk.Button(btn_frame, text=_tr(_T, "取消"), command=code_frame.destroy)
             confirm_btn.pack(side="left", padx=(0, 2), ipadx=20, ipady=5, expand=True)
             cancel_btn.pack(side="left", padx=(2, 0), ipadx=20, ipady=5, expand=True)
 
 
         ystart = tag_y + len(tmp_tag) * 30 + 3
-        code_btn = ttk.Button(content, text="代码设置", command=code_setting, style='Project.TButton')
+        code_btn = ttk.Button(content, text=_tr(_T, "查看器命令"), command=code_setting, style='Project.TButton')
         code_btn.place(x=5, y=ystart, width=105, height=30)
 
-        export_btn = ttk.Button(content, text="导出本模块设置", command=lambda: self.DialM.export_module(module['name']), style='Project.TButton')
+        export_btn = ttk.Button(content, text=_tr(_T, "导出模块配置"), command=lambda: self.DialM.export_module(module['name']), style='Project.TButton')
         export_btn.place(x=120, y=ystart, width=150, height=30)
         
         content_.pack(fill="x", pady=5) if module['showing'] else content_.pack_forget()
@@ -581,11 +643,11 @@ class EasyQCApp:
         def toggle():
             if frame.showing:
                 content_.pack_forget()   # 隐藏整个内容区
-                toggle_btn.config(text="展开▼")
+                toggle_btn.config(text=_tr(_T, "展开▼"))
                 module['showing'] = False
             else:
                 content_.pack(fill="x", pady=5)  # 显示内容区
-                toggle_btn.config(text="收起▲")
+                toggle_btn.config(text=_tr(_T, "收起▲"))
                 module['showing'] = True
             frame.showing = not frame.showing
 
@@ -631,16 +693,16 @@ class EasyQCApp:
         self.inner_frame_mo = ttk.Frame(self.module_frame)
         self.inner_frame_mo.place(x=10, y=0, width=580, height=555)
 
-        variable_title = ttk.Label(self.inner_frame_mo, text="质控模块设置", font=self.font_14)
+        variable_title = ttk.Label(self.inner_frame_mo, text=_tr(_T, "质控模块设置"), font=self.font_14)
         variable_title.place(x=220, y=-3, width=120, height=30)
 
-        add_module = ttk.Button(self.inner_frame_mo, text="增加模块", command=self.DialM.add_module, style='Project.TButton')
+        add_module = ttk.Button(self.inner_frame_mo, text=_tr(_T, "添加模块"), command=self.DialM.add_module, style='Project.TButton')
         add_module.place(x=100, y=25, width=100, height=30)
 
-        load_module = ttk.Button(self.inner_frame_mo, text="导入模块", command=self.DialM.import_module, style='Project.TButton')
+        load_module = ttk.Button(self.inner_frame_mo, text=_tr(_T, "导入模块"), command=self.DialM.import_module, style='Project.TButton')
         load_module.place(x=230, y=25, width=100, height=30)
 
-        del_module = ttk.Button(self.inner_frame_mo, text="模块管理", command=self.DialM.manage_module, style='Project.TButton')
+        del_module = ttk.Button(self.inner_frame_mo, text=_tr(_T, "模块管理"), command=self.DialM.manage_module, style='Project.TButton')
         del_module.place(x=360, y=25, width=100, height=30)
 
 
@@ -705,10 +767,8 @@ class EasyQCApp:
         loaded_ratings = rating_service.load_legacy_state(subjects)
         self.gui_state.apply_loaded_ratings(loaded_ratings)
         self.table_service.save_table(project, TABLE_QCTABLE, loaded_ratings.qctable)
-        if not loaded_ratings.original_table.empty:
-            self.table_service.save_table(project, "ezqc_qctable_orig", loaded_ratings.original_table)
-        if not loaded_ratings.original_wide_table.empty:
-            self.table_service.save_table(project, "ezqc_qctable_orig_wide", loaded_ratings.original_wide_table)
+        # P3-D / F-AGG-6: no intermediate _orig/_orig_wide files — pure in-memory
+        # pipeline. Only the final ezqc_qctable.csv is persisted.
         return True
 
     def _rating_service_for_project(self, project):
@@ -809,10 +869,28 @@ class EasyQCApp:
         log_debug("已退订 EventBus 处理器", "EasyQCApp")
 
     def _on_project_changed(self, _event=None) -> None:
-        """Handle PROJECT_CHANGED. Lightweight: log staleness. The actual
-        re-render stays pull-based (dialogs call load_project_to_gui) to avoid
-        double-rendering until P2 migrates refresh to be event-driven."""
-        log_debug("收到 PROJECT_CHANGED 事件,标记项目视图为待刷新", "EasyQCApp")
+        """Handle PROJECT_CHANGED: reload tables into session state and refresh
+        the GUI (replaces the old ProjectManager cbProjM.load_project_to_gui).
+
+        Reentrancy guard: load_project_to_gui calls _sync_project_service which
+        calls project_service.load(), which emits PROJECT_CHANGED again — without
+        this guard that is infinite recursion."""
+        if getattr(self, "_refreshing", False):
+            return
+        self._refreshing = True
+        try:
+            log_debug("收到 PROJECT_CHANGED 事件,刷新项目视图", "EasyQCApp")
+            if self.project_service is not None and self.table_service is not None:
+                cp = self.project_service.current_project
+                if cp is not None:
+                    loaded = self.table_service.load_legacy_state_tables(cp)
+                    if loaded is not None:
+                        self.gui_state.apply_loaded_tables(loaded)
+            self.load_project_to_gui()
+        except Exception as e:
+            log_error(f"PROJECT_CHANGED 刷新失败: {e}", "EasyQCApp")
+        finally:
+            self._refreshing = False
 
     def _on_modules_changed(self, _event=None) -> None:
         """Handle MODULES_CHANGED. Lightweight: log staleness."""

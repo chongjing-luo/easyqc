@@ -1,10 +1,42 @@
 from __future__ import annotations
+# === GUI i18n: 本文件用户可见文字中英文对照 ===
+from gui.i18n import tr as _tr
+
+_T = {
+    "没有数据可显示":         {"zh": "没有数据可显示",       "en": "No data to display"},
+    "数据表格 - EasyQC":      {"zh": "数据表格 - EasyQC",    "en": "Data Table - EasyQC"},
+    "数据筛选":               {"zh": "数据筛选",             "en": "Filter & Sort"},
+    "快捷操作":               {"zh": "快捷操作",             "en": "Quick Actions"},
+    "过滤行:":                {"zh": "过滤行:",              "en": "Filter:"},
+    "排序:":                  {"zh": "排序:",                "en": "Sort:"},
+    "选择列:":                {"zh": "选择列:",              "en": "Select:"},
+    "增加列:":                {"zh": "增加列:",              "en": "Derive:"},
+    "删除列:":                {"zh": "删除列:",              "en": "Drop:"},
+    "重命名:":                {"zh": "重命名:",              "en": "Rename:"},
+    "错误":                   {"zh": "错误",                 "en": "Error"},
+    "警告":                   {"zh": "警告",                 "en": "Warning"},
+    "表达式错误":             {"zh": "表达式错误",           "en": "Expression error"},
+    "表格转换执行失败":       {"zh": "表格转换执行失败",     "en": "Table transform failed"},
+    "请输入筛选表达式或JSON操作": {"zh": "请输入筛选表达式或JSON操作", "en": "Please enter filter expression or JSON"},
+    "是否保存结果？":         {"zh": "是否保存结果？",       "en": "Save results?"},
+    "执行":                   {"zh": "执行",                 "en": "Apply"},
+    "保存结果":               {"zh": "保存结果",             "en": "Save Results"},
+    "插入模板":               {"zh": "插入模板",             "en": "Insert Template"},
+    "处理前":                 {"zh": "处理前",               "en": "Show Before"},
+    "处理后":                 {"zh": "处理后",               "en": "Show After"},
+    "高级模式(JSON操作)":  {"zh": "高级模式(JSON操作)",  "en": "Advanced (JSON)"}
+    ,"信息":                 {"zh": "信息",                 "en": "Info"}
+    ,"取消":                   {"zh": "取消",                 "en": "Cancel"},
+}
+
 
 import json
 import keyword
 import subprocess
 import sys
 import tkinter as tk
+
+from core.shorthand_filter import parse_shorthand, shorthand_to_string, parse_shorthand_string, ShorthandParseError
 from pathlib import Path
 from typing import Callable
 from tkinter import messagebox, scrolledtext, ttk
@@ -31,7 +63,7 @@ class TableView:
 
     def show_df(self, df: pd.DataFrame):
         if df is None or df.empty:
-            messagebox.showinfo("信息", "没有数据可显示")
+            messagebox.showinfo(_tr(_T, "信息"), _tr(_T, "没有数据可显示"))
             return None
 
         self.window = tk.Toplevel(self.parent)
@@ -180,39 +212,120 @@ class TableTransformDialog:
         on_empty_result: Callable[[], object] | None = None,
     ):
         filter_dialog = tk.Toplevel(self.parent)
-        filter_dialog.title("数据过滤")
-        filter_dialog.geometry("400x600")
+        filter_dialog.title(_tr(_T, "数据筛选"))
+        filter_dialog.geometry("680x680")
 
-        main_frame = ttk.Frame(filter_dialog)
-        main_frame.place(x=10, y=10, width=380, height=150)
+        # Use a scrollable outer frame so content never gets clipped
+        outer = ttk.Frame(filter_dialog)
+        outer.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        query_label = ttk.Label(main_frame, text="JSON结构化表格转换操作:")
-        query_label.place(x=0, y=0)
+        # --- Shorthand Entries (top, always visible) ---
+        parsed_sf = parse_shorthand_string(select_filter) if select_filter else {}
+        is_legacy_query = select_filter and not parsed_sf
 
-        text_container = ttk.Frame(main_frame)
-        text_container.place(x=0, y=30, width=380, height=120)
+        shorthand_frame = ttk.LabelFrame(outer, text=_tr(_T, "快捷操作"))
+        shorthand_frame.pack(fill=tk.X, pady=(0, 8))
 
-        query_text = scrolledtext.ScrolledText(text_container, wrap=tk.WORD, padx=5, pady=5)
+        entry_specs = [
+            ("过滤行:", "filter"),
+            ("排序:", "sort"),
+            ("选择列:", "select"),
+            ("增加列:", "derive"),
+            ("删除列:", "drop"),
+            ("重命名:", "rename"),
+        ]
+        entry_vars = {}
+        for label_text, key in entry_specs:
+            row = ttk.Frame(shorthand_frame)
+            row.pack(fill=tk.X, padx=8, pady=3)
+            ttk.Label(row, text=label_text, width=8).pack(side=tk.LEFT)
+            var = tk.StringVar(value=parsed_sf.get(key, ""))
+            entry_vars[key] = var
+            ttk.Entry(row, textvariable=var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        ttk.Label(shorthand_frame, foreground="gray", justify=tk.LEFT,
+                  text="过滤行: 表达式(如 age > 30)\n"
+                       "排序: 列名 [asc|desc]   选择列/删除列: 逗号分隔列名\n"
+                       "增加列: 新名 = 表达式   重命名: 旧名 -> 新名"
+        ).pack(fill=tk.X, padx=8, pady=(5, 8))
+
+        # --- Collapsible Advanced JSON section ---
+        advanced_state = {"expanded": False}
+
+        advanced_header = ttk.Frame(outer)
+        advanced_header.pack(fill=tk.X, pady=(0, 4))
+
+        def toggle_advanced():
+            if advanced_state["expanded"]:
+                advanced_body.pack_forget()
+                toggle_btn.config(text="▶ " + _tr(_T, "高级模式(JSON操作)"))
+                advanced_state["expanded"] = False
+            else:
+                advanced_body.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+                toggle_btn.config(text="▼ " + _tr(_T, "高级模式(JSON操作)"))
+                advanced_state["expanded"] = True
+
+        toggle_btn = ttk.Button(advanced_header, text="▶ 高级模式(JSON操作)", command=toggle_advanced)
+        toggle_btn.pack(side=tk.LEFT)
+
+        advanced_body = ttk.Frame(outer)
+        # NOT packed initially (collapsed)
+
+        query_text = scrolledtext.ScrolledText(advanced_body, wrap=tk.WORD, padx=5, pady=5,
+                                                height=10)
         query_text.pack(fill=tk.BOTH, expand=True)
-        if select_filter:
+        if is_legacy_query:
             query_text.insert(tk.END, select_filter)
-        query_text.tag_configure("left", justify="left")
-        query_text.tag_add("left", "1.0", "end")
+        # If legacy query, auto-expand
+        if is_legacy_query:
+            toggle_advanced()
 
-        button_frame = ttk.Frame(filter_dialog)
-        button_frame.place(x=0, y=200, width=380, height=100)
+        # --- Buttons (bottom, always visible) ---
+        # Pack buttons FIRST with side=BOTTOM so they are always rendered at the
+        # bottom regardless of the collapsible JSON section's expand state.
+        button_frame = ttk.Frame(outer)
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(4, 0))
 
         state = {"saved": False, "query": ""}
 
         def execute_query():
-            state["query"] = query_text.get("1.0", tk.END).strip()
-            if state["query"]:
+            sf_ops = parse_shorthand(
+                filter_expr=entry_vars["filter"].get(),
+                sort_expr=entry_vars["sort"].get(),
+                select_expr=entry_vars["select"].get(),
+                derive_expr=entry_vars["derive"].get(),
+                drop_expr=entry_vars["drop"].get(),
+                rename_expr=entry_vars["rename"].get(),
+            )
+            json_text = query_text.get("1.0", tk.END).strip()
+
+            if sf_ops and not json_text:
+                state["query"] = shorthand_to_string(
+                    filter_expr=entry_vars["filter"].get() or None,
+                    sort_expr=entry_vars["sort"].get() or None,
+                    select_expr=entry_vars["select"].get() or None,
+                    derive_expr=entry_vars["derive"].get() or None,
+                    drop_expr=entry_vars["drop"].get() or None,
+                    rename_expr=entry_vars["rename"].get() or None,
+                )
                 try:
-                    return self.execute_query(df, state["query"])
+                    return self.apply_operations(df.copy(), sf_ops)
+                except ShorthandParseError as exc:
+                    messagebox.showerror(_tr(_T, "错误"), _tr(_T, "表达式错误") + f": {exc}")
+                    return None
+                except Exception as exc:
+                    messagebox.showerror(_tr(_T, "错误"), _tr(_T, "表格转换执行失败") + f": {str(exc)}")
+                    return None
+
+            if json_text:
+                state["query"] = json_text
+                try:
+                    return self.execute_query(df, json_text)
                 except Exception as exc:
                     messagebox.showerror("错误", f"表格转换执行失败: {str(exc)}")
                     return None
-            messagebox.showwarning("警告", "请输入 JSON 结构化表格转换操作")
+
+            messagebox.showwarning(_tr(_T, "警告"), _tr(_T, "请输入筛选表达式或JSON操作"))
             return None
 
         def execute():
@@ -221,6 +334,8 @@ class TableTransformDialog:
                 on_show_df(df_output)
 
         def insert_template():
+            if not advanced_state["expanded"]:
+                toggle_advanced()
             query_text.insert(tk.END, self.default_template(df))
 
         def save_result():
@@ -245,24 +360,23 @@ class TableTransformDialog:
 
         def destroy():
             if not state["saved"]:
-                result = messagebox.askyesno("警告", "是否保存结果？")
+                result = messagebox.askyesno(_tr(_T, "警告"), _tr(_T, "是否保存结果？"))
                 if result:
                     save_result()
                 else:
                     cancel()
-
             try:
                 if filter_dialog.winfo_exists():
                     filter_dialog.destroy()
             except tk.TclError:
                 pass
 
-        ttk.Button(button_frame, text="插入模板", command=insert_template).place(x=5, y=0, width=100, height=30)
-        ttk.Button(button_frame, text="执行并查看结果", command=execute).place(x=110, y=0, width=140, height=30)
-        ttk.Button(button_frame, text="保存结果", command=save_result).place(x=255, y=0, width=110, height=30)
-        ttk.Button(button_frame, text="取消", command=cancel).place(x=300, y=35, width=80, height=30)
-        ttk.Button(button_frame, text="显示处理前数据", command=lambda: on_show_df(df) if on_show_df else None).place(x=5, y=35, width=140, height=30)
-        ttk.Button(button_frame, text="显示处理后数据", command=execute).place(x=155, y=35, width=140, height=30)
+        ttk.Button(button_frame, text=_tr(_T, "执行"), command=execute).pack(side=tk.LEFT, padx=3, ipady=4)
+        ttk.Button(button_frame, text=_tr(_T, "保存结果"), command=save_result).pack(side=tk.LEFT, padx=3, ipady=4)
+        ttk.Button(button_frame, text=_tr(_T, "插入模板"), command=insert_template).pack(side=tk.LEFT, padx=3, ipady=4)
+        ttk.Button(button_frame, text=_tr(_T, "处理前"), command=lambda: on_show_df(df) if on_show_df else None).pack(side=tk.LEFT, padx=3, ipady=4)
+        ttk.Button(button_frame, text=_tr(_T, "处理后"), command=execute).pack(side=tk.LEFT, padx=3, ipady=4)
+        ttk.Button(button_frame, text=_tr(_T, "取消"), command=cancel).pack(side=tk.RIGHT, padx=3, ipady=4)
 
         filter_dialog.protocol("WM_DELETE_WINDOW", destroy)
         return filter_dialog
