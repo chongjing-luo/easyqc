@@ -13,14 +13,39 @@ PyInstaller spec for EasyQC — 跨平台打包 (Linux / macOS / Windows)
     dist/EasyQC/EasyQC.exe # Windows 可执行文件
 """
 
+import hashlib
+import os
 import sys
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+
+from PyInstaller.utils.hooks import copy_metadata
 
 _PROJECT_ROOT = Path(SPECPATH)
+_is_linux = sys.platform.startswith("linux")
 _is_macos = sys.platform == "darwin"
 _is_windows = sys.platform == "win32"
 APP_NAME = "EasyQC"
+
+# Linux cursor library: build.py validates the exact approved deb/ELF first.
+binaries = []
+_linux_cursor_input = os.environ.get("EASYQC_LINUX_CURSOR_LIBRARY")
+if _is_linux:
+    if not _linux_cursor_input:
+        raise RuntimeError("Linux cursor library input was not provided by build.py")
+    _linux_cursor_library = Path(_linux_cursor_input)
+    if (
+        not _linux_cursor_library.is_file()
+        or _linux_cursor_library.name != "libxcb-cursor.so.0"
+    ):
+        raise RuntimeError("Linux cursor library input is missing or invalid")
+    if (
+        hashlib.sha256(_linux_cursor_library.read_bytes()).hexdigest()
+        != "729297e66519bdb0df3ac8d5a2950e2e09b1e8d0b9eeea33250fce57a27aafa3"
+    ):
+        raise RuntimeError("Linux cursor library input hash is invalid")
+    binaries.append((str(_linux_cursor_library), "."))
+elif _linux_cursor_input:
+    raise RuntimeError("Linux cursor library input is invalid on this target")
 
 # ============== hidden imports ==============
 hiddenimports = [
@@ -28,19 +53,14 @@ hiddenimports = [
     "tkinter", "tkinter.ttk", "tkinter.scrolledtext",
     "tkinter.messagebox", "tkinter.filedialog", "tkinter.simpledialog",
     "_tkinter",
+    # --- Qt Preview / future default GUI ---
+    "PySide6", "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets",
     # --- pandas ---
     "pandas._libs.tslibs",
 ]
 
-# 自动收集子模块：pandas 有复杂的 C 扩展
-for _pkg in ["pandas"]:
-    try:
-        hiddenimports += collect_submodules(_pkg)
-    except Exception:
-        pass
-
 # ============== data files ==============
-datas = []
+datas = copy_metadata("platformdirs")
 
 # 项目模板文件
 _template = _PROJECT_ROOT / "template" / "hcpall_template.scene"
@@ -61,7 +81,7 @@ excludes = [
 a = Analysis(
     [str(_PROJECT_ROOT / "easyqc.py")],
     pathex=[str(_PROJECT_ROOT)],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
