@@ -7,6 +7,7 @@ run native commands.
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
 import json
 import os
@@ -28,10 +29,22 @@ COMPONENT_LEDGER_SCHEMA = "easyqc-release-component-ledger-v1"
 COMPONENT_POLICY_SCHEMA = "easyqc-component-policy-v1"
 DISTRIBUTION_METADATA_SCHEMA = "easyqc-release-distribution-metadata-v1"
 PYINSTALLER_TOC_INDEX_SCHEMA = "easyqc-release-pyinstaller-toc-index-v1"
+PYINSTALLER_EVIDENCE_INDEX_SCHEMA = (
+    "easyqc-release-pyinstaller-evidence-index-v1"
+)
 UNRESOLVED_COMPONENTS_SCHEMA = "easyqc-release-unresolved-components-v1"
 
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+_NORMALIZED_DISTRIBUTION_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_REQUIRED_PYINSTALLER_TOC_KINDS = (
+    "Analysis",
+    "PYZ",
+    "PKG",
+    "EXE",
+    "COLLECT",
+)
+_MAX_RETAINED_TOC_BYTES = 16 * 1024 * 1024
 
 
 class ComponentInventoryError(ReleaseContractError):
@@ -356,7 +369,11 @@ def _validate_build_identity(receipt: dict[str, object]) -> None:
 def _classify(context: _BuildContext, build_receipt_sha256: str) -> ComponentLedger:
     rules, non_component_rules = _load_policy(context.policy, context.target)
     metadata = _load_metadata(context.metadata)
-    toc_entries = _load_toc_index(context.toc_index)
+    toc_entries = _load_toc_index(
+        context.toc_index,
+        packet_root=context.packet_root,
+        manifest=context.manifest,
+    )
     manifest_entries = {
         entry.path: entry
         for entry in context.manifest.entries
@@ -725,11 +742,24 @@ def _load_policy(
 
 
 def _load_metadata(metadata: dict[str, object]) -> dict[str, dict[str, object]]:
-    _expect_fields(metadata, {"schema", "components"}, "distribution metadata")
-    if metadata["schema"] != DISTRIBUTION_METADATA_SCHEMA:
+    if metadata.get("schema") != DISTRIBUTION_METADATA_SCHEMA:
         raise ComponentInventoryError(
             f"distribution metadata schema must be {DISTRIBUTION_METADATA_SCHEMA}"
         )
+    fields = set(metadata)
+    if fields == {"schema", "components"}:
+        return _load_normalized_metadata(metadata)
+    if fields == {"schema", "distribution_count", "distributions"}:
+        return _load_installed_distribution_metadata(metadata)
+    raise ComponentInventoryError(
+        "distribution metadata fields do not match a normalized fixture or "
+        "retained build-environment record"
+    )
+
+
+def _load_normalized_metadata(
+    metadata: dict[str, object],
+) -> dict[str, dict[str, object]]:
     records = _object_list(metadata["components"], "metadata components")
     result: dict[str, dict[str, object]] = {}
     for record in records:
@@ -757,12 +787,140 @@ def _load_metadata(metadata: dict[str, object]) -> dict[str, dict[str, object]]:
     return result
 
 
-def _load_toc_index(toc: dict[str, object]) -> dict[tuple[str, str], dict[str, str]]:
-    _expect_fields(toc, {"schema", "entries"}, "PyInstaller TOC index")
-    if toc["schema"] != PYINSTALLER_TOC_INDEX_SCHEMA:
+def _load_installed_distribution_metadata(
+    metadata: dict[str, object],
+) -> dict[str, dict[str, object]]:
+    records = _object_list(metadata["distributions"], "metadata distributions")
+    count = metadata["distribution_count"]
+    if isinstance(count, bool) or not isinstance(count, int) or count != len(records):
         raise ComponentInventoryError(
-            f"TOC index schema must be {PYINSTALLER_TOC_INDEX_SCHEMA}"
+            "distribution_count must equal the retained distribution rows"
         )
+
+    result: dict[str, dict[str, object]] = {}
+    observed_order: list[tuple[str, str]] = []
+    expected_fields = {
+        "canonical_name",
+        "license_classifiers",
+        "license_expression",
+        "license_field_first_line",
+        "license_files",
+        "name",
+        "purl",
+        "requires_python",
+        "top_level_imports",
+        "version",
+    }
+    for record in records:
+        _expect_fields(record, expected_fields, "metadata distribution")
+        canonical_name = _required_string(
+            record["canonical_name"], "metadata canonical_name"
+        )
+        if not _NORMALIZED_DISTRIBUTION_PATTERN.fullmatch(canonical_name):
+            raise ComponentInventoryError(
+                f"metadata canonical_name is not normalized: {canonical_name}"
+            )
+        name = _required_string(record["name"], f"metadata {canonical_name}.name")
+        version = _required_string(
+            record["version"], f"metadata {canonical_name}.version"
+        )
+        purl = _required_string(record["purl"], f"metadata {canonical_name}.purl")
+        if purl != f"pkg:pypi/{canonical_name}@{version}":
+            raise ComponentInventoryError(
+                f"metadata {canonical_name}.purl does not match name/version"
+            )
+        _sorted_strings(
+            record["license_classifiers"],
+            f"metadata {canonical_name}.license_classifiers",
+        )
+        first_line = _required_list(
+            record["license_field_first_line"],
+            f"metadata {canonical_name}.license_field_first_line",
+        )
+        if len(first_line) > 1 or any(
+            not isinstance(value, str) or not value for value in first_line
+        ):
+            raise ComponentInventoryError(
+                f"metadata {canonical_name}.license_field_first_line is invalid"
+            )
+        for optional_field in ("license_expression", "requires_python"):
+            value = record[optional_field]
+            if value is not None:
+                _required_string(value, f"metadata {canonical_name}.{optional_field}")
+        _sorted_strings(
+            record["top_level_imports"],
+            f"metadata {canonical_name}.top_level_imports",
+        )
+
+        license_files = _object_list(
+            record["license_files"], f"metadata {canonical_name}.license_files"
+        )
+        license_paths: list[str] = []
+        for license_file in license_files:
+            _expect_fields(
+                license_file,
+                {"distribution_path", "sha256", "size"},
+                f"metadata {canonical_name}.license_file",
+            )
+            license_path = _canonical_path(
+                license_file["distribution_path"],
+                f"metadata {canonical_name}.license_file.distribution_path",
+            )
+            _validate_sha256(
+                license_file["sha256"],
+                f"metadata {canonical_name}.license_file.sha256",
+            )
+            size = license_file["size"]
+            if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+                raise ComponentInventoryError(
+                    f"metadata {canonical_name}.license_file.size is invalid"
+                )
+            license_paths.append(license_path)
+        if license_paths != sorted(license_paths) or len(license_paths) != len(
+            set(license_paths)
+        ):
+            raise ComponentInventoryError(
+                f"metadata {canonical_name}.license_files must be unique and sorted"
+            )
+
+        component_id = f"library:{canonical_name}@{version}"
+        if component_id in result:
+            raise ComponentInventoryError(
+                f"duplicate metadata component: {component_id}"
+            )
+        result[component_id] = {
+            "component_id": component_id,
+            "type": "library",
+            "name": name,
+            "version": version,
+            "purl": purl,
+        }
+        observed_order.append((canonical_name, version))
+    if observed_order != sorted(observed_order):
+        raise ComponentInventoryError("metadata distributions must be sorted")
+    return result
+
+
+def _load_toc_index(
+    toc: dict[str, object],
+    *,
+    packet_root: Path,
+    manifest: ArtifactManifest,
+) -> dict[tuple[str, str], dict[str, str]]:
+    schema = toc.get("schema")
+    if schema == PYINSTALLER_TOC_INDEX_SCHEMA:
+        return _load_normalized_toc_index(toc)
+    if schema == PYINSTALLER_EVIDENCE_INDEX_SCHEMA:
+        return _load_retained_pyinstaller_evidence(toc, packet_root, manifest)
+    raise ComponentInventoryError(
+        "unsupported PyInstaller TOC/evidence index schema"
+    )
+
+
+def _load_normalized_toc_index(
+    toc: dict[str, object],
+) -> dict[tuple[str, str], dict[str, str]]:
+    _expect_fields(toc, {"schema", "entries"}, "PyInstaller TOC index")
     records = _object_list(toc["entries"], "TOC entries")
     result: dict[tuple[str, str], dict[str, str]] = {}
     order: list[tuple[str, str]] = []
@@ -793,6 +951,146 @@ def _load_toc_index(toc: dict[str, object]) -> dict[tuple[str, str], dict[str, s
     return result
 
 
+def _load_retained_pyinstaller_evidence(
+    index: dict[str, object],
+    packet_root: Path,
+    manifest: ArtifactManifest,
+) -> dict[tuple[str, str], dict[str, str]]:
+    _expect_fields(
+        index,
+        {"schema", "tocs", "warning"},
+        "PyInstaller evidence index",
+    )
+    rows = _object_list(index["tocs"], "PyInstaller evidence TOCs")
+    if len(rows) != len(_REQUIRED_PYINSTALLER_TOC_KINDS):
+        raise ComponentInventoryError(
+            "PyInstaller evidence must contain five retained TOCs"
+        )
+    toc_paths: dict[str, Path] = {}
+    observed_kinds: list[str] = []
+    for row in rows:
+        _expect_fields(
+            row,
+            {"kind", "path", "sha256"},
+            "PyInstaller evidence TOC",
+        )
+        kind = _required_string(row["kind"], "PyInstaller evidence TOC kind")
+        observed_kinds.append(kind)
+        toc_path = _reference_path(
+            packet_root,
+            {"path": row["path"], "sha256": row["sha256"]},
+            f"{kind} TOC",
+        )
+        if (
+            toc_path.parent != packet_root / "build/evidence/pyinstaller"
+            or toc_path.suffix != ".toc"
+        ):
+            raise ComponentInventoryError(
+                f"{kind} TOC must be retained below build/evidence/pyinstaller/"
+            )
+        toc_paths[kind] = toc_path
+    if observed_kinds != list(_REQUIRED_PYINSTALLER_TOC_KINDS) or len(
+        toc_paths
+    ) != len(observed_kinds):
+        raise ComponentInventoryError(
+            "PyInstaller evidence TOC kinds/order are invalid"
+        )
+
+    warning = _required_object(index["warning"], "PyInstaller warning evidence")
+    _expect_fields(
+        warning,
+        {"disposition", "path", "sha256"},
+        "PyInstaller warning evidence",
+    )
+    if warning["disposition"] != "RETAINED_REVIEW_REQUIRED":
+        raise ComponentInventoryError(
+            "PyInstaller warning disposition must require retained review"
+        )
+    warning_path = _reference_path(
+        packet_root,
+        {"path": warning["path"], "sha256": warning["sha256"]},
+        "PyInstaller warning evidence",
+    )
+    if warning_path.parent != packet_root / "build/evidence/pyinstaller":
+        raise ComponentInventoryError(
+            "PyInstaller warning must be retained below build/evidence/pyinstaller/"
+        )
+    return _load_collect_toc(toc_paths["COLLECT"], manifest)
+
+
+def _load_collect_toc(
+    path: Path,
+    manifest: ArtifactManifest,
+) -> dict[tuple[str, str], dict[str, str]]:
+    try:
+        size = path.stat().st_size
+        if size > _MAX_RETAINED_TOC_BYTES:
+            raise ComponentInventoryError(
+                f"COLLECT TOC exceeds {_MAX_RETAINED_TOC_BYTES} bytes"
+            )
+        raw = path.read_text(encoding="utf-8")
+        value = ast.literal_eval(raw)
+    except ComponentInventoryError:
+        raise
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ComponentInventoryError(f"cannot read COLLECT TOC: {exc}") from exc
+    except (MemoryError, RecursionError, SyntaxError, ValueError) as exc:
+        raise ComponentInventoryError(
+            "COLLECT TOC is not a safe Python literal"
+        ) from exc
+    if (
+        not isinstance(value, tuple)
+        or len(value) != 1
+        or not isinstance(value[0], list)
+    ):
+        raise ComponentInventoryError("COLLECT TOC root shape is invalid")
+
+    manifest_entries = {
+        entry.path: entry
+        for entry in manifest.entries
+        if entry.entry_type != "directory"
+    }
+    result: dict[tuple[str, str], dict[str, str]] = {}
+    for raw_row in value[0]:
+        if (
+            not isinstance(raw_row, (tuple, list))
+            or len(raw_row) != 3
+            or any(not isinstance(item, str) or not item for item in raw_row)
+        ):
+            raise ComponentInventoryError("COLLECT TOC entry is invalid")
+        destination, _raw_source, toc_type = raw_row
+        destination = _canonical_path(destination, "COLLECT destination")
+        direct_path = destination
+        internal_path = f"_internal/{destination}"
+        candidates = [
+            candidate
+            for candidate in (direct_path, internal_path)
+            if candidate in manifest_entries
+        ]
+        if len(candidates) != 1:
+            raise ComponentInventoryError(
+                f"COLLECT destination has no unique candidate path: {destination}"
+            )
+        final_path = candidates[0]
+        entry_type = "symlink" if toc_type == "SYMLINK" else "regular-file"
+        if manifest_entries[final_path].entry_type != entry_type:
+            raise ComponentInventoryError(
+                f"COLLECT entry type disagrees with candidate: {final_path}"
+            )
+        key = ("unassigned", final_path)
+        if key in result:
+            raise ComponentInventoryError(
+                f"duplicate COLLECT final path: {final_path}"
+            )
+        result[key] = {
+            "component_id": "unassigned",
+            "entry_type": entry_type,
+            "final_path": final_path,
+            "source_path": f"artifact/{final_path}",
+        }
+    return result
+
+
 def _component_reasons(
     rule: dict[str, object],
     metadata: dict[str, object] | None,
@@ -808,19 +1106,36 @@ def _component_reasons(
     if metadata is None:
         reasons.append("exact distribution metadata is missing")
     else:
-        for field in ("type", "name", "version", "purl", "provider", "license_declared"):
-            if metadata[field] != rule[field]:
+        for field in (
+            "type",
+            "name",
+            "version",
+            "purl",
+            "provider",
+            "license_declared",
+        ):
+            if field not in metadata:
+                reasons.append(f"distribution metadata does not establish {field}")
+            elif metadata[field] != rule[field]:
                 reasons.append(f"metadata disagrees with policy field {field}")
     if rule["license_concluded"] == "NOASSERTION":
         reasons.append("license_concluded cannot be NOASSERTION")
     for source in rule["toc_sources"]:
         final_path = str(source["final_path"])
         key = (component_id, final_path)
-        observed = toc_entries.get(key)
-        if observed != {"component_id": component_id, **source}:
+        observed_key = key if key in toc_entries else ("unassigned", final_path)
+        observed = toc_entries.get(observed_key)
+        expected = {
+            "entry_type": source["entry_type"],
+            "final_path": source["final_path"],
+            "source_path": source["source_path"],
+        }
+        if observed is None or any(
+            observed[field] != value for field, value in expected.items()
+        ):
             reasons.append(f"TOC evidence mismatch for {final_path}")
         else:
-            referenced_toc.add(key)
+            referenced_toc.add(observed_key)
         manifest_entry = manifest_entries.get(final_path)
         if (
             manifest_entry is not None

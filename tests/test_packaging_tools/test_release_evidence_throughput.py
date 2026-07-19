@@ -314,6 +314,96 @@ def _rewrite_policy_and_receipt(
     )
 
 
+def _rewrite_e4_raw_evidence(
+    packet: SyntheticPacket,
+    *,
+    collect_bytes: bytes | None = None,
+    bad_collect_hash: bool = False,
+) -> InventoryRequest:
+    build_dir = packet.root / "build"
+    evidence_dir = build_dir / "evidence/pyinstaller"
+    toc_rows = [
+        ("EasyQC", "/host/work/EasyQC", "EXECUTABLE"),
+        ("EasyQC-link", "EasyQC", "SYMLINK"),
+    ]
+    toc_references: list[dict[str, str]] = []
+    for kind in ("Analysis", "PYZ", "PKG", "EXE", "COLLECT"):
+        toc_path = evidence_dir / f"{kind}-00.toc"
+        if kind == "COLLECT":
+            content = (
+                collect_bytes
+                if collect_bytes is not None
+                else repr((toc_rows,)).encode()
+            )
+        else:
+            content = b"[]\n"
+        toc_path.parent.mkdir(parents=True, exist_ok=True)
+        toc_path.write_bytes(content)
+        reference = {"kind": kind, **_reference(toc_path, packet.root)}
+        if kind == "COLLECT" and bad_collect_hash:
+            reference["sha256"] = "0" * 64
+        toc_references.append(reference)
+
+    warning_path = evidence_dir / "warn-easyqc.txt"
+    warning_path.write_bytes(b"fixture warning\n")
+    toc_index_path = build_dir / "pyinstaller-toc-index.json"
+    _write_json(
+        toc_index_path,
+        {
+            "schema": "easyqc-release-pyinstaller-evidence-index-v1",
+            "tocs": toc_references,
+            "warning": {
+                "disposition": "RETAINED_REVIEW_REQUIRED",
+                **_reference(warning_path, packet.root),
+            },
+        },
+    )
+
+    metadata_path = build_dir / "distribution-metadata.json"
+    _write_json(
+        metadata_path,
+        {
+            "schema": DISTRIBUTION_METADATA_SCHEMA,
+            "distribution_count": 1,
+            "distributions": [
+                {
+                    "canonical_name": "easyqc-fixture",
+                    "license_classifiers": [
+                        "License :: OSI Approved :: MIT License"
+                    ],
+                    "license_expression": "MIT",
+                    "license_field_first_line": ["MIT"],
+                    "license_files": [
+                        {
+                            "distribution_path": (
+                                "easyqc_fixture-1.0.0.dist-info/LICENSE"
+                            ),
+                            "sha256": "a" * 64,
+                            "size": 123,
+                        }
+                    ],
+                    "name": "EasyQC fixture",
+                    "purl": "pkg:pypi/easyqc-fixture@1.0.0",
+                    "requires_python": ">=3.10",
+                    "top_level_imports": ["easyqc_fixture"],
+                    "version": "1.0.0",
+                }
+            ],
+        },
+    )
+
+    receipt = json.loads(packet.build_receipt.read_text(encoding="utf-8"))
+    receipt["evidence"] = {
+        "toc_index": _reference(toc_index_path, packet.root),
+        "distribution_metadata": _reference(metadata_path, packet.root),
+    }
+    _write_json(packet.build_receipt, receipt)
+    return replace(
+        _inventory_request(packet),
+        build_receipt_sha256=sha256_file(packet.build_receipt),
+    )
+
+
 def _classified_paths(ledger_payload: dict[str, object]) -> list[str]:
     component_paths = [
         path
@@ -462,6 +552,59 @@ def test_tracked_metadata_capture_seed_cannot_emit_pass_inventory(
     with pytest.raises(InventoryOutputError, match="complete PASS ledger"):
         emit_inventory_outputs(ledger, packet.inventory_dir)
     assert not (packet.inventory_dir / "inventory-receipt.json").exists()
+
+
+def test_e4_raw_evidence_reaches_a_diagnostic_fail_ledger(
+    tmp_path: Path,
+) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+
+    ledger = generate_component_ledger(_rewrite_e4_raw_evidence(packet))
+
+    assert ledger.release_status == "FAIL"
+    assert ledger.unresolved
+    assert ledger.candidate_id == packet.manifest.candidate_id
+    assert b"/host/" not in (
+        packet.inventory_dir / "component-ledger.json"
+    ).read_bytes()
+    assert not (packet.inventory_dir / "inventory-receipt.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("collect_bytes", "bad_collect_hash", "expected_error"),
+    [
+        (b"not a literal\n", False, "COLLECT TOC is not a safe Python literal"),
+        (
+            repr(
+                ([
+                    ("EasyQC", "/host/one/EasyQC", "EXECUTABLE"),
+                    ("EasyQC", "/host/two/EasyQC", "EXECUTABLE"),
+                ],)
+            ).encode(),
+            False,
+            "duplicate COLLECT final path",
+        ),
+        (None, True, "COLLECT TOC SHA-256 mismatch"),
+    ],
+)
+def test_e4_raw_evidence_rejects_unsafe_or_ambiguous_collect_toc(
+    tmp_path: Path,
+    collect_bytes: bytes | None,
+    bad_collect_hash: bool,
+    expected_error: str,
+) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+
+    with pytest.raises(ComponentInventoryError, match=expected_error):
+        generate_component_ledger(
+            _rewrite_e4_raw_evidence(
+                packet,
+                collect_bytes=collect_bytes,
+                bad_collect_hash=bad_collect_hash,
+            )
+        )
+
+    assert not packet.inventory_dir.exists()
 
 
 def test_changed_notice_or_candidate_is_rejected_without_a_receipt(
