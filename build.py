@@ -49,6 +49,13 @@ from packaging_tools.artifact_manifest import (
 from packaging_tools.conda_component_evidence import (
     capture_conda_component_evidence,
 )
+from packaging_tools.component_evidence import (
+    append_component_assignments as _append_component_assignments,
+    capture_cursor_component as _capture_cursor_component,
+    capture_easyqc_component as _capture_easyqc_component,
+    merge_component_maps as _merge_component_maps,
+    validate_component_evidence_v3 as _validate_component_evidence_v3,
+)
 from packaging_tools.debian_component_evidence import (
     capture_debian_component_evidence,
 )
@@ -56,6 +63,7 @@ from packaging_tools.contracts import (
     APPROVED_RUNTIME_VERSION,
     BuildReceipt,
     ReleaseContractError,
+    RuntimeIdentity,
     ValidatedReleaseInputs,
     canonical_json_bytes,
     load_release_input,
@@ -111,6 +119,7 @@ PLATFORMDIRS_NOTICE = SCRIPT_DIR / "packaging" / "licenses" / "platformdirs.txt"
 PYINSTALLER_EVIDENCE_SCHEMA = "easyqc-release-pyinstaller-evidence-index-v1"
 DISTRIBUTION_METADATA_SCHEMA = "easyqc-release-distribution-metadata-v1"
 DISTRIBUTION_METADATA_V2_SCHEMA = "easyqc-release-distribution-metadata-v2"
+DISTRIBUTION_METADATA_V3_SCHEMA = "easyqc-release-distribution-metadata-v3"
 COMPONENT_POLICY_SCHEMA = "easyqc-component-policy-v1"
 _REQUIRED_PYINSTALLER_TOC_KINDS = (
     "Analysis",
@@ -132,6 +141,8 @@ _LICENSE_FILE_PATTERN = re.compile(
 )
 _DISTRIBUTION_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+!-]*$")
 _MAX_RETAINED_TOC_BYTES = 16 * 1024 * 1024
+_MAX_COMPONENT_EVIDENCE_FILE_BYTES = 16 * 1024 * 1024
+_MAX_TOTAL_COMPONENT_EVIDENCE_BYTES = 256 * 1024 * 1024
 _EXPLICIT_BUILD_ROLES = {
     "EasyQC": (
         "pyinstaller-generated",
@@ -790,6 +801,11 @@ def _verify_release_orchestrator_source(source_root: Path) -> None:
         "build.py",
         "packaging_tools/contracts.py",
         "packaging_tools/artifact_manifest.py",
+        "packaging_tools/component_evidence.py",
+        "packaging_tools/component_evidence_io.py",
+        "packaging_tools/component_inventory.py",
+        "packaging_tools/conda_component_evidence.py",
+        "packaging_tools/debian_component_evidence.py",
     ):
         archived = _contained_regular_file(
             source_root,
@@ -1373,6 +1389,8 @@ def _distribution_source_identity(
     distribution_path: str,
     located_path: Path,
     label: str,
+    *,
+    max_bytes: int | None = None,
 ) -> dict[str, object]:
     descriptor = _open_distribution_regular_file(
         distribution,
@@ -1382,6 +1400,8 @@ def _distribution_source_identity(
     )
     try:
         opened = os.fstat(descriptor)
+        if max_bytes is not None and opened.st_size > max_bytes:
+            raise ReleaseContractError(f"{label} exceeds {max_bytes} bytes")
         identity = _descriptor_identity(descriptor, label)
     finally:
         os.close(descriptor)
@@ -1401,6 +1421,8 @@ def _copy_distribution_evidence_file(
     located_path: Path,
     destination: Path,
     label: str,
+    *,
+    max_bytes: int | None = None,
 ) -> dict[str, object]:
     descriptor = _open_distribution_regular_file(
         distribution,
@@ -1410,6 +1432,8 @@ def _copy_distribution_evidence_file(
     )
     try:
         opened = os.fstat(descriptor)
+        if max_bytes is not None and opened.st_size > max_bytes:
+            raise ReleaseContractError(f"{label} exceeds {max_bytes} bytes")
         if destination.exists() or destination.is_symlink():
             raise ReleaseContractError(f"{label} already exists: {destination}")
         digest = hashlib.sha256()
@@ -2060,43 +2084,18 @@ def _capture_contributor_license_files(
     return sorted(records, key=lambda row: str(row["distribution_path"]))
 
 
-def capture_python_component_evidence(
-    artifact: Path,
-    manifest: ArtifactManifest,
-    evidence_index_path: Path,
-    build_dir: Path,
-) -> dict[str, object]:
-    """Capture receipt-ready Python contributor evidence for one candidate.
+def _discover_python_contributors(
+    collect_rows: list[dict[str, object]],
+    *,
+    regular_only: bool,
+) -> tuple[
+    dict[str, dict[str, object]],
+    dict[str, list[dict[str, object]]],
+    list[dict[str, object]],
+]:
+    """Authenticate exact installed-distribution owners without choosing schema."""
 
-    Input: one finalized artifact/manifest and its retained PyInstaller index.
-    Output: one canonicalizable v2 metadata object containing only Python
-    distributions that own an observed COLLECT source.
-    Side effects: exclusively copies those distributions' regular license files
-    below ``build/evidence/python-distributions``.
-    Errors: malformed evidence, unsafe/changing sources, duplicate or ambiguous
-    ownership, and path/hash/count mismatches fail loud.
-    Split trigger: Conda, Debian, application, cursor, and source-template
-    ownership remain separate evidence collectors.
-    """
-
-    artifact = Path(artifact)
-    build_dir = Path(build_dir)
-    if artifact.is_symlink() or not artifact.is_dir():
-        raise ReleaseContractError("candidate artifact is not a real directory")
-    try:
-        if artifact.resolve(strict=True) != manifest.artifact_root.resolve(strict=True):
-            raise ReleaseContractError("candidate artifact and manifest roots disagree")
-    except OSError as exc:
-        raise ReleaseContractError(f"cannot resolve candidate artifact: {exc}") from exc
-    current_manifest = create_artifact_manifest(artifact)
-    if current_manifest.canonical_bytes != manifest.canonical_bytes:
-        raise ReleaseContractError("candidate artifact changed before metadata capture")
-    collect_rows = _load_collect_rows_for_capture(
-        evidence_index_path,
-        build_dir,
-        manifest,
-    )
-
+    _collect_row_index(collect_rows)
     distributions: dict[str, dict[str, object]] = {}
     source_owners: dict[str, list[tuple[str, str, Path]]] = {}
     for distribution in importlib_metadata.distributions():
@@ -2140,12 +2139,18 @@ def capture_python_component_evidence(
     unassigned: list[dict[str, object]] = []
     for row in collect_rows:
         raw_source = str(row["raw_source"])
-        owners = source_owners.get(_host_source_key(raw_source), []) if os.path.isabs(
-            raw_source
-        ) else []
+        owners = (
+            source_owners.get(_host_source_key(raw_source), [])
+            if os.path.isabs(raw_source)
+            and (not regular_only or row["entry_type"] == "regular-file")
+            else []
+        )
         unique_owners = {
-            (component_id, distribution_path, _host_source_key(located)):
-            (component_id, distribution_path, located)
+            (component_id, distribution_path, _host_source_key(located)): (
+                component_id,
+                distribution_path,
+                located,
+            )
             for component_id, distribution_path, located in owners
         }
         if len(owners) != len(unique_owners):
@@ -2200,6 +2205,50 @@ def capture_python_component_evidence(
                     "source_locator": f"unassigned-source/{digest}",
                 }
             )
+    return distributions, assigned, unassigned
+
+
+def capture_python_component_evidence(
+    artifact: Path,
+    manifest: ArtifactManifest,
+    evidence_index_path: Path,
+    build_dir: Path,
+) -> dict[str, object]:
+    """Capture receipt-ready Python contributor evidence for one candidate.
+
+    Input: one finalized artifact/manifest and its retained PyInstaller index.
+    Output: one canonicalizable v2 metadata object containing only Python
+    distributions that own an observed COLLECT source.
+    Side effects: exclusively copies those distributions' regular license files
+    below ``build/evidence/python-distributions``.
+    Errors: malformed evidence, unsafe/changing sources, duplicate or ambiguous
+    ownership, and path/hash/count mismatches fail loud.
+    Split trigger: Conda, Debian, application, cursor, and source-template
+    ownership remain separate evidence collectors.
+    """
+
+    artifact = Path(artifact)
+    build_dir = Path(build_dir)
+    if artifact.is_symlink() or not artifact.is_dir():
+        raise ReleaseContractError("candidate artifact is not a real directory")
+    try:
+        if artifact.resolve(strict=True) != manifest.artifact_root.resolve(strict=True):
+            raise ReleaseContractError("candidate artifact and manifest roots disagree")
+    except OSError as exc:
+        raise ReleaseContractError(f"cannot resolve candidate artifact: {exc}") from exc
+    current_manifest = create_artifact_manifest(artifact)
+    if current_manifest.canonical_bytes != manifest.canonical_bytes:
+        raise ReleaseContractError("candidate artifact changed before metadata capture")
+    collect_rows = _load_collect_rows_for_capture(
+        evidence_index_path,
+        build_dir,
+        manifest,
+    )
+
+    distributions, assigned, unassigned = _discover_python_contributors(
+        collect_rows,
+        regular_only=False,
+    )
 
     evidence_parent = build_dir / "evidence"
     if evidence_parent.is_symlink() or not evidence_parent.is_dir():
@@ -2277,6 +2326,377 @@ def capture_python_component_evidence(
             key=lambda value: str(value["final_path"]),
         ),
     }
+
+
+def _python_v3_license_candidates(
+    distribution: importlib_metadata.Distribution,
+) -> list[dict[str, str]]:
+    candidates: set[tuple[str, str]] = set()
+    license_field = distribution.metadata.get("License")
+    if isinstance(license_field, str) and license_field.splitlines():
+        first_line = license_field.splitlines()[0]
+        if first_line:
+            candidates.add(("License", first_line))
+    expression = distribution.metadata.get("License-Expression")
+    if isinstance(expression, str) and expression:
+        candidates.add(("License-Expression", expression))
+    for value in distribution.metadata.get_all("Classifier", []):
+        if isinstance(value, str) and value.startswith("License ::"):
+            candidates.add(("Classifier", value))
+    return [
+        {"field": field, "value": value}
+        for field, value in sorted(candidates)
+    ]
+
+
+def _capture_python_components_v3(
+    collect_rows: list[dict[str, object]],
+    build_dir: Path,
+) -> dict[str, dict[str, object]]:
+    """Project exact Python contributors into fresh composite-v3 evidence."""
+
+    build_dir = Path(build_dir)
+    components_root = build_dir / "evidence/components"
+    if components_root.is_symlink() or not components_root.is_dir():
+        raise ReleaseContractError("component evidence directory is not real")
+    python_root = components_root / "python"
+    if python_root.exists() or python_root.is_symlink():
+        raise ReleaseContractError("Python v3 component evidence already exists")
+
+    distributions, assigned, _unassigned = _discover_python_contributors(
+        collect_rows,
+        regular_only=True,
+    )
+    if not assigned:
+        return {}
+
+    planned: dict[
+        str,
+        list[tuple[str, str, str, Path, dict[str, object]]],
+    ] = {}
+    aggregate_size = 0
+    for component_id in sorted(assigned):
+        descriptor = distributions[component_id]
+        distribution = descriptor["distribution"]
+        canonical_name = str(descriptor["canonical_name"])
+        version = str(descriptor["version"])
+        component_directory = f"{canonical_name}-{version}"
+        _canonical_relative_path(component_directory, "Python v3 component directory")
+
+        distribution_files: dict[str, Path] = {}
+        metadata_paths: list[str] = []
+        for item in distribution.files or ():
+            canonical_path = _canonical_relative_path(
+                item.as_posix(),
+                f"{component_id} distribution evidence path",
+            ).as_posix()
+            if canonical_path in distribution_files:
+                raise ReleaseContractError(
+                    f"duplicate Python distribution evidence path: {canonical_path}"
+                )
+            distribution_files[canonical_path] = Path(
+                distribution.locate_file(item)
+            )
+            if (
+                PurePosixPath(canonical_path).name == "METADATA"
+                and PurePosixPath(canonical_path).parent.name.endswith(".dist-info")
+            ):
+                metadata_paths.append(canonical_path)
+        if len(metadata_paths) != 1:
+            raise ReleaseContractError(
+                f"{component_id} must have one exact dist-info METADATA file"
+            )
+
+        selected: list[tuple[str, str, str]] = [
+            (
+                "python-metadata",
+                metadata_paths[0],
+                f"{component_directory}/METADATA",
+            )
+        ]
+        selected.extend(
+            (
+                "python-license",
+                distribution_path,
+                f"{component_directory}/licenses/{distribution_path}",
+            )
+            for distribution_path in sorted(distribution_files)
+            if _LICENSE_FILE_PATTERN.search(distribution_path)
+        )
+        selected.sort(key=lambda item: (item[0], item[1], item[2]))
+
+        rows: list[tuple[str, str, str, Path, dict[str, object]]] = []
+        for kind, distribution_path, retained_relative in selected:
+            located = distribution_files[distribution_path]
+            identity = _distribution_source_identity(
+                distribution,
+                distribution_path,
+                located,
+                f"{component_id} {kind}",
+                max_bytes=_MAX_COMPONENT_EVIDENCE_FILE_BYTES,
+            )
+            size = identity["size"]
+            if not isinstance(size, int) or size > _MAX_COMPONENT_EVIDENCE_FILE_BYTES:
+                raise ReleaseContractError(
+                    f"{component_id} {kind} exceeds component evidence limit"
+                )
+            aggregate_size += size
+            if aggregate_size > _MAX_TOTAL_COMPONENT_EVIDENCE_BYTES:
+                raise ReleaseContractError(
+                    "Python v3 component evidence exceeds aggregate limit"
+                )
+            rows.append(
+                (kind, distribution_path, retained_relative, located, identity)
+            )
+        planned[component_id] = rows
+
+    try:
+        python_root.mkdir()
+    except OSError as exc:
+        raise ReleaseContractError(
+            f"cannot create Python v3 evidence directory: {exc}"
+        ) from exc
+
+    packet_root = build_dir.parent.resolve(strict=True)
+    evidence_by_component: dict[str, list[dict[str, object]]] = {}
+    for component_id in sorted(planned):
+        descriptor = distributions[component_id]
+        distribution = descriptor["distribution"]
+        canonical_name = str(descriptor["canonical_name"])
+        evidence_rows: list[dict[str, object]] = []
+        for kind, distribution_path, retained_relative, located, expected in (
+            planned[component_id]
+        ):
+            destination = _candidate_output_path(
+                python_root,
+                retained_relative,
+                f"{component_id} {kind}",
+            )
+            retained = _copy_distribution_evidence_file(
+                distribution,
+                distribution_path,
+                located,
+                destination,
+                f"{component_id} {kind}",
+                max_bytes=_MAX_COMPONENT_EVIDENCE_FILE_BYTES,
+            )
+            if retained != expected:
+                raise ReleaseContractError(
+                    f"{component_id} {kind} changed before v3 retention"
+                )
+            evidence_rows.append(
+                {
+                    "kind": kind,
+                    "retained_path": destination.relative_to(packet_root).as_posix(),
+                    "sha256": retained["sha256"],
+                    "size": retained["size"],
+                    "source_locator": (
+                        f"python-distribution/{canonical_name}/{distribution_path}"
+                    ),
+                }
+            )
+        evidence_by_component[component_id] = evidence_rows
+
+    result: dict[str, dict[str, object]] = {}
+    for component_id in sorted(assigned):
+        descriptor = distributions[component_id]
+        distribution = descriptor["distribution"]
+        canonical_name = str(descriptor["canonical_name"])
+        version = str(descriptor["version"])
+        collected_files = [
+            {
+                "entry_type": row["entry_type"],
+                "final_path": row["final_path"],
+                "package_path": row["distribution_path"],
+                "raw_source_text_sha256": row["raw_source_text_sha256"],
+                "source_identity": row["source_identity"],
+                "source_kind": "python-distribution-file",
+                "source_locator": row["source_locator"],
+                "target_final_path": None,
+                "toc_type": row["toc_type"],
+            }
+            for row in sorted(
+                assigned[component_id],
+                key=lambda value: str(value["final_path"]),
+            )
+        ]
+        result[component_id] = {
+            "collected_files": collected_files,
+            "component_id": component_id,
+            "ecosystem": "python",
+            "evidence_files": evidence_by_component[component_id],
+            "license_candidates": _python_v3_license_candidates(distribution),
+            "name": descriptor["name"],
+            "provider_candidates": _provider_candidates(distribution),
+            "purl": f"pkg:pypi/{canonical_name}@{version}",
+            "type": "library",
+            "version": version,
+        }
+    return result
+
+
+def capture_component_evidence_v3(
+    artifact: Path,
+    manifest: ArtifactManifest,
+    evidence_index_path: Path,
+    build_dir: Path,
+    runtime_identity: RuntimeIdentity,
+    source_root: Path,
+    cursor_runtime: VerifiedLinuxCursorRuntime,
+    release_version: str,
+    source_revision: str,
+) -> dict[str, object]:
+    """Compose all seven authenticated source kinds for one Linux candidate."""
+
+    artifact = Path(artifact)
+    build_dir = Path(build_dir)
+    source_root = Path(source_root)
+    if artifact.is_symlink() or not artifact.is_dir():
+        raise ReleaseContractError("candidate artifact is not a real directory")
+    if not isinstance(manifest, ArtifactManifest):
+        raise ReleaseContractError("component v3 capture requires ArtifactManifest")
+    try:
+        if artifact.resolve(strict=True) != manifest.artifact_root.resolve(strict=True):
+            raise ReleaseContractError("candidate artifact and manifest roots disagree")
+    except OSError as exc:
+        raise ReleaseContractError(f"cannot resolve candidate artifact: {exc}") from exc
+    if create_artifact_manifest(artifact).canonical_bytes != manifest.canonical_bytes:
+        raise ReleaseContractError("candidate changed before composite v3 capture")
+    if (
+        not isinstance(runtime_identity, RuntimeIdentity)
+        or runtime_identity.target != "linux-x86_64"
+        or runtime_identity.version != APPROVED_RUNTIME_VERSION
+    ):
+        raise ReleaseContractError("composite v3 requires the approved Linux runtime")
+    if not isinstance(cursor_runtime, VerifiedLinuxCursorRuntime):
+        raise ReleaseContractError("composite v3 requires verified cursor runtime")
+    if build_dir.name != "build" or build_dir.is_symlink() or not build_dir.is_dir():
+        raise ReleaseContractError("component v3 build directory is invalid")
+
+    collect_rows = _load_collect_rows_for_capture(
+        evidence_index_path,
+        build_dir,
+        manifest,
+    )
+    evidence_parent = build_dir / "evidence"
+    if evidence_parent.is_symlink() or not evidence_parent.is_dir():
+        raise ReleaseContractError("build evidence directory is not real")
+    components_root = evidence_parent / "components"
+    if components_root.exists() or components_root.is_symlink():
+        raise ReleaseContractError("component evidence output already exists")
+    try:
+        components_root.mkdir()
+    except OSError as exc:
+        raise ReleaseContractError(f"cannot create component evidence root: {exc}") from exc
+
+    components: dict[str, dict[str, object]] = {}
+    python_components = _capture_python_components_v3(collect_rows, build_dir)
+    _merge_component_maps(components, python_components, "Python")
+    python_ids = set(python_components)
+    _append_component_assignments(
+        components,
+        _assign_python_symlink_aliases(
+            collect_rows,
+            manifest,
+            components,
+            python_ids,
+        ),
+        "Python symlink",
+    )
+    _merge_component_maps(
+        components,
+        capture_conda_component_evidence(
+            collect_rows,
+            components,
+            build_dir,
+            runtime_identity,
+        ),
+        "Conda",
+    )
+    _merge_component_maps(
+        components,
+        capture_debian_component_evidence(
+            collect_rows,
+            components,
+            build_dir,
+        ),
+        "Debian",
+    )
+    easyqc_component = _capture_easyqc_component(
+        source_root,
+        build_dir,
+        manifest,
+        release_version,
+        source_revision,
+    )
+    cursor_component = _capture_cursor_component(
+        cursor_runtime,
+        build_dir,
+        manifest,
+        soname=LINUX_CURSOR_SONAME,
+        library_sha256=LINUX_CURSOR_LIBRARY_SHA256,
+        reviewed_notice_path=LINUX_CURSOR_NOTICE,
+        package=LINUX_CURSOR_PACKAGE,
+        version=LINUX_CURSOR_VERSION,
+        architecture=LINUX_CURSOR_ARCHITECTURE,
+        deb_sha256=LINUX_CURSOR_DEB_SHA256,
+        provenance=_linux_cursor_provenance().encode("utf-8"),
+    )
+    _merge_component_maps(
+        components,
+        {str(easyqc_component["component_id"]): easyqc_component},
+        "EasyQC",
+    )
+    _merge_component_maps(
+        components,
+        {str(cursor_component["component_id"]): cursor_component},
+        "verified cursor",
+    )
+    role_component_ids = {
+        "EasyQC": str(easyqc_component["component_id"]),
+        "_internal/base_library.zip": (
+            f"library:python@{APPROVED_RUNTIME_VERSION}"
+        ),
+        "_internal/libxcb-cursor.so.0": str(cursor_component["component_id"]),
+        "_internal/template/hcpall_template.scene": str(
+            easyqc_component["component_id"]
+        ),
+    }
+    _append_component_assignments(
+        components,
+        _assign_explicit_build_roles(
+            collect_rows,
+            manifest,
+            components,
+            role_component_ids,
+        ),
+        "explicit build role",
+    )
+
+    component_rows = [components[component_id] for component_id in sorted(components)]
+    assigned_count = sum(
+        len(component["collected_files"]) for component in component_rows
+    )
+    metadata = {
+        "schema": DISTRIBUTION_METADATA_V3_SCHEMA,
+        "collect_entry_count": len(collect_rows),
+        "component_count": len(component_rows),
+        "assigned_collected_entry_count": assigned_count,
+        "unassigned_collected_entry_count": 0,
+        "components": component_rows,
+        "unassigned_collected_entries": [],
+    }
+    _validate_component_evidence_v3(
+        metadata,
+        collect_rows,
+        build_dir,
+        artifact,
+        source_root,
+        runtime_identity.artifact.path,
+    )
+    if create_artifact_manifest(artifact).canonical_bytes != manifest.canonical_bytes:
+        raise ReleaseContractError("candidate changed during composite v3 capture")
+    return metadata
 
 
 def _stage_candidate(
@@ -2379,14 +2799,32 @@ def build_candidate(
         manifest_path = build_dir / "artifact-manifest.json"
         write_artifact_manifest(manifest_path, manifest)
         metadata_path = build_dir / "distribution-metadata.json"
-        write_canonical_json(
-            metadata_path,
-            capture_python_component_evidence(
+        if validated_inputs.bundle.target == "linux-x86_64":
+            if cursor_runtime is None:
+                raise ReleaseContractError(
+                    "Linux composite metadata requires verified cursor runtime"
+                )
+            distribution_metadata = capture_component_evidence_v3(
                 artifact,
                 manifest,
                 evidence_index_path,
                 build_dir,
-            ),
+                validated_inputs.runtime_identity,
+                source_root,
+                cursor_runtime,
+                validated_inputs.bundle.version,
+                validated_inputs.bundle.source_revision,
+            )
+        else:
+            distribution_metadata = capture_python_component_evidence(
+                artifact,
+                manifest,
+                evidence_index_path,
+                build_dir,
+            )
+        write_canonical_json(
+            metadata_path,
+            distribution_metadata,
         )
 
         _cleanup_release_intermediates(
