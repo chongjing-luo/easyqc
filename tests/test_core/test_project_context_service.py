@@ -1,0 +1,202 @@
+from __future__ import annotations
+
+from copy import deepcopy
+
+import pandas as pd
+import pytest
+
+from core.app_services import build_app_services
+from core.project_context_service import ProjectContextError
+from core.qc_workflow_service import QcWorkflowService
+from core.event_bus import EventType
+
+
+def _module_payload(*, name: str = "AnatQC", rater: str | None = "rater1") -> dict:
+    return {
+        "name": name,
+        "label": f"{name} label",
+        "rater": rater,
+        "ezqcid": None,
+        "watch_mode": False,
+        "tags": {"1": {"label": "Motion", "value": False}},
+        "scores": {
+            "1": {
+                "label": "Quality",
+                "num": "Poor,Fair,Good",
+                "num_": "Poor,Fair,Good",
+                "value": None,
+            }
+        },
+        "code": "freeview {image}",
+        "interper": "shell",
+        "control": True,
+        "select_filter": None,
+        "showing": True,
+        "code_exe": None,
+        "time": None,
+        "notes": None,
+        "button": {},
+    }
+
+
+def _subjects(prefix: str = "") -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "ezqcid": ["SUB001", "SUB002", "SUB003"],
+            "site": ["A", "B", "C"],
+            "image": [f"/{prefix}one.nii", f"/{prefix}two.nii", f"/{prefix}three.nii"],
+        }
+    )
+
+
+def _add_project(services, tmp_path, name: str, *, prefix: str = "", second_module=False):
+    configuration = services.configuration_service
+    configuration.create_project(name, tmp_path)
+    configuration.replace_subjects(_subjects(prefix))
+    configuration.save_module(_module_payload(), original_name="example")
+    if second_module:
+        configuration.add_module("FuncQC", "Functional QC")
+        configuration.save_module(
+            _module_payload(name="FuncQC", rater="rater2"),
+            original_name="FuncQC",
+        )
+    return configuration.current_project
+
+
+def test_empty_context_is_detached_and_does_not_create_registry(tmp_path) -> None:
+    registry = tmp_path / "projects.json"
+    services = build_app_services(registry)
+
+    snapshot = services.project_context_service.open_initial()
+
+    assert snapshot.project_name == ""
+    assert snapshot.project_path is None
+    assert snapshot.context_revision == 0
+    assert snapshot.project_names == ()
+    assert snapshot.subjects.empty
+    assert snapshot.table_view_service.source_total == 0
+    assert not registry.exists()
+
+
+def test_last_project_snapshot_prepares_subjects_ratings_and_table_service(tmp_path) -> None:
+    registry = tmp_path / "projects.json"
+    services = build_app_services(registry)
+    project = _add_project(services, tmp_path, "SAMPLE")
+    workflow = QcWorkflowService(
+        _module_payload(),
+        _subjects(),
+        rating_dir=project.rating_dir / "AnatQC" / "rater1",
+        code_executor=services.code_executor,
+    )
+    workflow.set_score("1", "Good")
+    workflow.save()
+
+    reopened = build_app_services(registry)
+    snapshot = reopened.project_context_service.open_initial()
+
+    assert snapshot.project_name == "SAMPLE"
+    assert snapshot.project_path == project.path.resolve()
+    assert snapshot.context_revision == 1
+    assert tuple(snapshot.subjects["ezqcid"]) == ("SUB001", "SUB002", "SUB003")
+    assert [module.name for module in snapshot.modules] == ["AnatQC"]
+    assert "AnatQC.rater1.score1" in {
+        profile.name for profile in snapshot.table_view_service.profiles
+    }
+    assert "AnatQC.rater1.button" not in {
+        profile.name for profile in snapshot.table_view_service.profiles
+    }
+    result = snapshot.table_view_service.apply_state(
+        snapshot.table_view_service.default_state()
+    )
+    assert result.dataframe.loc[0, "AnatQC.rater1.score1"] == "Good"
+
+
+def test_qc_factory_uses_snapshot_order_directory_and_emits_rating_event(tmp_path) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    project = _add_project(services, tmp_path, "SAMPLE")
+    snapshot = services.project_context_service.snapshot()
+    received = []
+    services.event_bus.subscribe(EventType.RATING_SAVED, received.append)
+
+    workflow = services.project_context_service.create_qc_workflow(
+        snapshot,
+        module_name="AnatQC",
+        initial_ezqcid="SUB003",
+        navigation_ids=("SUB003", "SUB001"),
+    )
+
+    assert workflow.subject_ids == ("SUB003", "SUB001")
+    assert workflow.current_ezqcid == "SUB003"
+    workflow.set_score("1", "Fair")
+    saved = workflow.save()
+    assert saved.parent == project.rating_dir / "AnatQC" / "rater1"
+    assert len(received) == 1
+    assert received[0].data == {
+        "context_revision": snapshot.context_revision,
+        "project_name": "SAMPLE",
+        "project_path": str(project.path.resolve()),
+        "module_name": "AnatQC",
+        "rater": "rater1",
+        "ezqcid": "SUB003",
+        "path": str(saved),
+    }
+
+
+@pytest.mark.parametrize(
+    "navigation_ids, message",
+    [
+        (("SUB001", "SUB001"), "duplicate"),
+        (("SUB001", "FOREIGN"), "not in"),
+        ((), "at least one"),
+    ],
+)
+def test_qc_factory_rejects_unsafe_navigation_queue(
+    tmp_path,
+    navigation_ids,
+    message,
+) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    _add_project(services, tmp_path, "SAMPLE")
+    snapshot = services.project_context_service.snapshot()
+
+    with pytest.raises(ProjectContextError, match=message):
+        services.project_context_service.create_qc_workflow(
+            snapshot,
+            module_name="AnatQC",
+            initial_ezqcid="SUB001",
+            navigation_ids=navigation_ids,
+        )
+
+
+def test_qc_factory_rejects_snapshot_after_project_switch_even_for_same_id(tmp_path) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    _add_project(services, tmp_path, "ALPHA", prefix="alpha/")
+    alpha = services.project_context_service.snapshot()
+    _add_project(services, tmp_path, "BETA", prefix="beta/")
+    beta = services.project_context_service.snapshot()
+
+    assert beta.context_revision > alpha.context_revision
+    with pytest.raises(ProjectContextError, match="stale"):
+        services.project_context_service.create_qc_workflow(
+            alpha,
+            module_name="AnatQC",
+            initial_ezqcid="SUB001",
+            navigation_ids=("SUB001",),
+        )
+
+
+def test_failed_project_load_preserves_current_project_and_settings(tmp_path) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    configuration = services.configuration_service
+    alpha_project = _add_project(services, tmp_path, "ALPHA")
+    alpha_settings = deepcopy(dict(services.project_service.settings))
+    beta_project = _add_project(services, tmp_path, "BETA")
+    services.project_service.load("ALPHA")
+    beta_project.settings_path.write_text("{broken", encoding="utf-8")
+
+    with pytest.raises(Exception):
+        services.project_service.load("BETA")
+
+    assert services.project_service.current_project == alpha_project
+    assert dict(services.project_service.settings) == alpha_settings
+    assert configuration.current_project == alpha_project
