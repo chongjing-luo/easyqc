@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -9,6 +11,7 @@ import tarfile
 import pytest
 
 import build as build_script
+from packaging_tools import conda_component_evidence as conda_evidence_module
 from packaging_tools import component_inventory as component_inventory_module
 from packaging_tools.artifact_manifest import create_artifact_manifest
 from packaging_tools.contracts import (
@@ -1180,6 +1183,88 @@ def _write_conda_record(
     return path, payload
 
 
+def _conda_path_declaration(
+    member: str,
+    data: bytes,
+    path_type: str,
+) -> dict[str, object]:
+    return {
+        "_path": member,
+        "path_type": path_type,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "size_in_bytes": len(data),
+    }
+
+
+def _prepare_conda_owned_link_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    files: list[str],
+    declarations: list[dict[str, object]],
+    regular_files: dict[str, bytes],
+    links: dict[str, str],
+) -> tuple[Path, RuntimeIdentity]:
+    base_prefix = tmp_path / "conda"
+    _write_conda_record(
+        base_prefix,
+        name="python",
+        version="3.10.17",
+        build="h0_cpython",
+        files=[],
+        overrides={"license": None},
+    )
+    _write_conda_record(
+        base_prefix,
+        name="bzip2",
+        version="1.0.8",
+        build="h4bc722e_7",
+        files=files,
+        overrides={
+            "paths_data": {
+                "paths": declarations,
+                "paths_version": 1,
+            }
+        },
+    )
+    for member, data in regular_files.items():
+        _write(base_prefix / member, data)
+    for member, target in links.items():
+        link = base_prefix / member
+        link.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            link.symlink_to(target)
+        except (NotImplementedError, OSError) as exc:
+            pytest.skip(f"symlinks are unavailable on this platform: {exc}")
+    runtime = _fixture_runtime_identity(tmp_path / "runtime-input")
+    monkeypatch.setattr(build_script.sys, "base_prefix", str(base_prefix))
+    return base_prefix, runtime
+
+
+def _capture_conda_fixture_member(
+    tmp_path: Path,
+    base_prefix: Path,
+    runtime: RuntimeIdentity,
+    member: str,
+    *,
+    packet_name: str = "packet",
+) -> tuple[dict[str, dict[str, object]], Path]:
+    build_dir = _conda_build_dir(tmp_path / packet_name)
+    result = build_script.capture_conda_component_evidence(
+        [
+            _raw_collect_row(
+                "_internal/libbz2.so.1.0",
+                raw_source=str(base_prefix / member),
+                toc_type="BINARY",
+            )
+        ],
+        {},
+        build_dir,
+        runtime,
+    )
+    return result, build_dir
+
+
 def _conda_build_dir(packet_root: Path) -> Path:
     build_dir = packet_root / "build"
     (build_dir / "evidence/components").mkdir(parents=True)
@@ -1202,6 +1287,450 @@ def _existing_collected_row(final_path: str) -> dict[str, object]:
         "target_final_path": None,
         "toc_type": "DATA",
     }
+
+
+@pytest.mark.parametrize(
+    "final_path_type",
+    ["hardlink", "pyc_file", "unix_python_entry_point"],
+)
+def test_conda_component_evidence_accepts_exact_owned_leaf_softlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    final_path_type: str,
+) -> None:
+    link_member = "lib/libbz2.so.1.0"
+    target_member = "lib/libbz2.so.1.0.8"
+    target_bytes = b"exact bzip2 fixture bytes\n"
+    declarations = [
+        _conda_path_declaration(link_member, target_bytes, "softlink"),
+        _conda_path_declaration(target_member, target_bytes, final_path_type),
+        {
+            "_path": "share/unrelated-marker",
+            "path_type": "hardlink",
+        },
+    ]
+    base_prefix, runtime = _prepare_conda_owned_link_fixture(
+        tmp_path,
+        monkeypatch,
+        files=[link_member, target_member],
+        declarations=declarations,
+        regular_files={target_member: target_bytes},
+        links={link_member: "libbz2.so.1.0.8"},
+    )
+
+    first, first_build = _capture_conda_fixture_member(
+        tmp_path,
+        base_prefix,
+        runtime,
+        link_member,
+        packet_name="first-packet",
+    )
+    second, _second_build = _capture_conda_fixture_member(
+        tmp_path,
+        base_prefix,
+        runtime,
+        link_member,
+        packet_name="second-packet",
+    )
+
+    assert canonical_json_bytes(first) == canonical_json_bytes(second)
+    assert list(first) == ["library:bzip2@1.0.8"]
+    row = first["library:bzip2@1.0.8"]["collected_files"][0]
+    assert row["package_path"] == link_member
+    assert row["source_locator"].endswith(f"/{link_member}")
+    assert row["source_identity"] == {
+        "entry_type": "regular-file",
+        "sha256": hashlib.sha256(target_bytes).hexdigest(),
+        "size": len(target_bytes),
+    }
+    output = canonical_json_bytes(first)
+    assert str(tmp_path).encode() not in output
+    assert b"libbz2.so.1.0.8" not in output
+    for evidence in first["library:bzip2@1.0.8"]["evidence_files"]:
+        retained = first_build.parent / evidence["retained_path"]
+        assert retained.is_file() and not retained.is_symlink()
+
+
+def test_conda_component_evidence_accepts_two_hop_and_license_softlinks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_link = "lib/libbz2.so"
+    second_link = "lib/libbz2.so.1.0"
+    target_member = "lib/libbz2.so.1.0.8"
+    license_link = "share/licenses/bzip2/LICENSE"
+    license_target = "share/licenses/bzip2/LICENSE.real"
+    library_bytes = b"two-hop bzip2 fixture\n"
+    license_bytes = b"exact linked license fixture\n"
+    declarations = [
+        _conda_path_declaration(first_link, library_bytes, "softlink"),
+        _conda_path_declaration(second_link, library_bytes, "softlink"),
+        _conda_path_declaration(target_member, library_bytes, "hardlink"),
+        _conda_path_declaration(license_link, license_bytes, "softlink"),
+        _conda_path_declaration(license_target, license_bytes, "hardlink"),
+    ]
+    base_prefix, runtime = _prepare_conda_owned_link_fixture(
+        tmp_path,
+        monkeypatch,
+        files=[
+            first_link,
+            second_link,
+            target_member,
+            license_link,
+            license_target,
+        ],
+        declarations=declarations,
+        regular_files={
+            target_member: library_bytes,
+            license_target: license_bytes,
+        },
+        links={
+            first_link: "libbz2.so.1.0",
+            second_link: "libbz2.so.1.0.8",
+            license_link: "LICENSE.real",
+        },
+    )
+
+    result, build_dir = _capture_conda_fixture_member(
+        tmp_path,
+        base_prefix,
+        runtime,
+        first_link,
+    )
+
+    component = result["library:bzip2@1.0.8"]
+    assert component["collected_files"][0]["source_identity"] == {
+        "entry_type": "regular-file",
+        "sha256": hashlib.sha256(library_bytes).hexdigest(),
+        "size": len(library_bytes),
+    }
+    license_rows = [
+        row for row in component["evidence_files"] if row["kind"] == "conda-license"
+    ]
+    assert len(license_rows) == 2
+    for row in license_rows:
+        retained = build_dir.parent / row["retained_path"]
+        assert retained.read_bytes() == license_bytes
+        assert retained.is_file() and not retained.is_symlink()
+
+
+@pytest.mark.parametrize(
+    "unsafe_target",
+    [
+        "/lib/target.so",
+        "C:/lib/target.so",
+        "target\\name.so",
+        "../../outside.so",
+        "bad\x00target.so",
+        "x" * 4097,
+    ],
+    ids=["absolute", "drive", "backslash", "escape", "nul", "overlong"],
+)
+def test_conda_component_evidence_rejects_unsafe_owned_link_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe_target: str,
+) -> None:
+    link_member = "lib/link.so"
+    target_member = "lib/target.so"
+    target_bytes = b"target\n"
+    base_prefix, runtime = _prepare_conda_owned_link_fixture(
+        tmp_path,
+        monkeypatch,
+        files=[link_member, target_member],
+        declarations=[
+            _conda_path_declaration(link_member, target_bytes, "softlink"),
+            _conda_path_declaration(target_member, target_bytes, "hardlink"),
+        ],
+        regular_files={target_member: target_bytes},
+        links={link_member: "target.so"},
+    )
+    original_readlink = conda_evidence_module.os.readlink
+
+    def unsafe_readlink(path, *, dir_fd=None):
+        if path == "link.so" and dir_fd is not None:
+            return unsafe_target
+        return original_readlink(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(conda_evidence_module.os, "readlink", unsafe_readlink)
+
+    with pytest.raises(ReleaseContractError) as captured:
+        _capture_conda_fixture_member(
+            tmp_path,
+            base_prefix,
+            runtime,
+            link_member,
+        )
+    assert str(tmp_path) not in str(captured.value)
+    assert not (tmp_path / "packet/build/evidence/components/conda").exists()
+
+
+@pytest.mark.parametrize("problem", ["cycle", "over-limit"])
+def test_conda_component_evidence_rejects_owned_link_cycle_or_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    problem: str,
+) -> None:
+    target_bytes = b"bounded target\n"
+    if problem == "cycle":
+        members = ["lib/link-0.so", "lib/link-1.so"]
+        links = {
+            members[0]: "link-1.so",
+            members[1]: "link-0.so",
+        }
+        regular_files: dict[str, bytes] = {}
+        declarations = [
+            _conda_path_declaration(member, target_bytes, "softlink")
+            for member in members
+        ]
+    else:
+        link_members = [f"lib/link-{index}.so" for index in range(65)]
+        target_member = "lib/target.so"
+        members = [*link_members, target_member]
+        links = {
+            member: (
+                f"link-{index + 1}.so"
+                if index + 1 < len(link_members)
+                else "target.so"
+            )
+            for index, member in enumerate(link_members)
+        }
+        regular_files = {target_member: target_bytes}
+        declarations = [
+            *[
+                _conda_path_declaration(member, target_bytes, "softlink")
+                for member in link_members
+            ],
+            _conda_path_declaration(target_member, target_bytes, "hardlink"),
+        ]
+    base_prefix, runtime = _prepare_conda_owned_link_fixture(
+        tmp_path,
+        monkeypatch,
+        files=members,
+        declarations=declarations,
+        regular_files=regular_files,
+        links=links,
+    )
+
+    with pytest.raises(ReleaseContractError, match="cycle"):
+        _capture_conda_fixture_member(
+            tmp_path,
+            base_prefix,
+            runtime,
+            members[0],
+        )
+    assert not (tmp_path / "packet/build/evidence/components/conda").exists()
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "missing-link-declaration",
+        "missing-target-declaration",
+        "duplicate-declaration",
+        "noncanonical-declaration",
+        "wrong-link-type",
+        "wrong-target-type",
+        "digest-drift",
+        "size-drift",
+        "target-unowned",
+        "cross-package-target",
+        "regular-declared-softlink",
+        "final-directory",
+        "parent-symlink",
+    ],
+)
+def test_conda_component_evidence_rejects_declaration_ownership_or_shape_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    problem: str,
+) -> None:
+    link_member = "lib/link.so"
+    target_member = "lib/target.so"
+    target_bytes = b"same package target\n"
+    files = [link_member, target_member]
+    declarations = [
+        _conda_path_declaration(link_member, target_bytes, "softlink"),
+        _conda_path_declaration(target_member, target_bytes, "hardlink"),
+    ]
+    regular_files = {target_member: target_bytes}
+    links = {link_member: "target.so"}
+    if problem == "missing-link-declaration":
+        declarations.pop(0)
+    elif problem == "missing-target-declaration":
+        declarations.pop()
+    elif problem == "duplicate-declaration":
+        declarations.append(dict(declarations[0]))
+    elif problem == "noncanonical-declaration":
+        declarations.append(
+            _conda_path_declaration("lib/../forged.so", target_bytes, "hardlink")
+        )
+    elif problem == "wrong-link-type":
+        declarations[0]["path_type"] = "hardlink"
+    elif problem == "wrong-target-type":
+        declarations[1]["path_type"] = "softlink"
+    elif problem == "digest-drift":
+        declarations[0]["sha256"] = "0" * 64
+    elif problem == "size-drift":
+        declarations[1]["size_in_bytes"] = len(target_bytes) + 1
+    elif problem in {"target-unowned", "cross-package-target"}:
+        files.remove(target_member)
+    elif problem == "regular-declared-softlink":
+        files = [link_member]
+        declarations = [
+            _conda_path_declaration(link_member, target_bytes, "softlink")
+        ]
+        regular_files = {link_member: target_bytes}
+        links = {}
+    elif problem == "final-directory":
+        regular_files = {}
+    base_prefix, runtime = _prepare_conda_owned_link_fixture(
+        tmp_path,
+        monkeypatch,
+        files=files,
+        declarations=declarations,
+        regular_files=regular_files,
+        links=links,
+    )
+    if problem == "cross-package-target":
+        _write_conda_record(
+            base_prefix,
+            name="other",
+            version="1.0",
+            build="h1",
+            files=[target_member],
+            overrides={
+                "paths_data": {
+                    "paths": [
+                        _conda_path_declaration(
+                            target_member,
+                            target_bytes,
+                            "hardlink",
+                        )
+                    ],
+                    "paths_version": 1,
+                }
+            },
+        )
+    elif problem == "final-directory":
+        (base_prefix / target_member).mkdir(parents=True)
+    elif problem == "parent-symlink":
+        original_parent = base_prefix / "lib"
+        real_parent = base_prefix / "real-lib"
+        original_parent.rename(real_parent)
+        original_parent.symlink_to("real-lib", target_is_directory=True)
+
+    with pytest.raises(ReleaseContractError):
+        _capture_conda_fixture_member(
+            tmp_path,
+            base_prefix,
+            runtime,
+            link_member,
+        )
+    assert not (tmp_path / "packet/build/evidence/components/conda").exists()
+
+
+def test_conda_component_evidence_rejects_same_byte_link_chain_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    link_member = "lib/link.so"
+    first_target = "lib/target.so"
+    second_target = "lib/other.so"
+    target_bytes = b"same bytes do not transfer path identity\n"
+    base_prefix, runtime = _prepare_conda_owned_link_fixture(
+        tmp_path,
+        monkeypatch,
+        files=[link_member, first_target, second_target],
+        declarations=[
+            _conda_path_declaration(link_member, target_bytes, "softlink"),
+            _conda_path_declaration(first_target, target_bytes, "hardlink"),
+            _conda_path_declaration(second_target, target_bytes, "hardlink"),
+        ],
+        regular_files={
+            first_target: target_bytes,
+            second_target: target_bytes,
+        },
+        links={link_member: "target.so"},
+    )
+    original_readlink = conda_evidence_module.os.readlink
+    reads = 0
+
+    def drift_between_passes(path, *, dir_fd=None):
+        nonlocal reads
+        target = original_readlink(path, dir_fd=dir_fd)
+        if path == "link.so" and dir_fd is not None:
+            reads += 1
+            if reads == 2:
+                return "other.so"
+        return target
+
+    monkeypatch.setattr(
+        conda_evidence_module.os,
+        "readlink",
+        drift_between_passes,
+    )
+
+    with pytest.raises(ReleaseContractError, match="changed"):
+        _capture_conda_fixture_member(
+            tmp_path,
+            base_prefix,
+            runtime,
+            link_member,
+        )
+    assert not (tmp_path / "packet/build/evidence/components/conda").exists()
+
+
+def test_conda_component_evidence_rejects_same_size_target_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    link_member = "lib/link.so"
+    target_member = "lib/target.so"
+    target_bytes = b"target-before"
+    replacement_bytes = b"target-after!"
+    assert len(target_bytes) == len(replacement_bytes)
+    base_prefix, runtime = _prepare_conda_owned_link_fixture(
+        tmp_path,
+        monkeypatch,
+        files=[link_member, target_member],
+        declarations=[
+            _conda_path_declaration(link_member, target_bytes, "softlink"),
+            _conda_path_declaration(target_member, target_bytes, "hardlink"),
+        ],
+        regular_files={target_member: target_bytes},
+        links={link_member: "target.so"},
+    )
+    target = base_prefix / target_member
+    original_open = conda_evidence_module.os.open
+    target_opens = 0
+
+    def replace_before_second_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal target_opens
+        if path == "target.so" and dir_fd is not None:
+            target_opens += 1
+            if target_opens == 2:
+                replacement = _write(
+                    base_prefix / "lib/replacement.so",
+                    replacement_bytes,
+                )
+                os.replace(replacement, target)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(
+        conda_evidence_module.os,
+        "open",
+        replace_before_second_open,
+    )
+
+    with pytest.raises(ReleaseContractError, match="changed"):
+        _capture_conda_fixture_member(
+            tmp_path,
+            base_prefix,
+            runtime,
+            link_member,
+        )
+    assert not (tmp_path / "packet/build/evidence/components/conda").exists()
 
 
 def test_conda_component_evidence_assigns_only_exact_contributors(

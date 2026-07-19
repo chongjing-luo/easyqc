@@ -3,22 +3,32 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
+import stat
 import sys
+from types import MappingProxyType
+from typing import Mapping
 
 from .component_evidence_io import (
+    _MAX_EVIDENCE_FILE_BYTES,
+    _MAX_SYMLINKS,
+    _MAX_SYMLINK_TARGET_BYTES,
     _MAX_TOTAL_EVIDENCE_BYTES,
+    _bytes_identity,
     _canonical_relative_path,
     _collect_index,
     _exclusive_output_path,
     _existing_owner_paths,
     _hash_root_file,
     _open_root_directory,
+    _read_descriptor,
     _read_root_bytes,
     _real_directory,
+    _same_identity,
     _validate_build_dir,
     _write_evidence,
 )
@@ -34,6 +44,20 @@ _LICENSE_FILE_PATTERN = re.compile(
     r"(^|/)(licen[cs]e|copying|notice|authors?|copyright)([._-]|$)",
     re.IGNORECASE,
 )
+_REGULAR_PATH_TYPES = frozenset(
+    {"hardlink", "pyc_file", "unix_python_entry_point"}
+)
+_SOFTLINK_PATH_TYPES = frozenset({"softlink"})
+
+
+@dataclass(frozen=True)
+class _CondaPathDeclaration:
+    member: str
+    path_type: str
+    sha256: str | None
+    size: int | None
+
+
 @dataclass(frozen=True)
 class _CondaPackage:
     component_id: str
@@ -45,12 +69,21 @@ class _CondaPackage:
     url: str
     license: str
     files: tuple[str, ...]
+    path_declarations: Mapping[str, _CondaPathDeclaration]
     metadata_name: str
     metadata_bytes: bytes
 
     @property
     def package_id(self) -> str:
         return f"{self.name}-{self.version}-{self.build}-{self.subdir}"
+
+
+@dataclass(frozen=True)
+class _ResolvedCondaMember:
+    descriptor: int
+    resolved_member: PurePosixPath
+    metadata: os.stat_result
+    chain_proof: tuple[tuple[object, ...], ...]
 
 
 def _metadata_names(base_prefix: Path) -> list[str]:
@@ -108,6 +141,75 @@ def _required_string(
     return value
 
 
+def _path_declarations(
+    payload: dict[str, object],
+    metadata_name: str,
+) -> Mapping[str, _CondaPathDeclaration]:
+    paths_data = payload.get("paths_data")
+    if paths_data is None:
+        return MappingProxyType({})
+    if not isinstance(paths_data, dict):
+        raise ReleaseContractError(
+            f"Conda paths_data is invalid: {metadata_name}"
+        )
+    paths = paths_data.get("paths")
+    if not isinstance(paths, list):
+        raise ReleaseContractError(
+            f"Conda paths_data paths are invalid: {metadata_name}"
+        )
+    declarations: dict[str, _CondaPathDeclaration] = {}
+    for index, value in enumerate(paths):
+        if not isinstance(value, dict):
+            raise ReleaseContractError(
+                f"Conda path declaration is invalid: {metadata_name} row {index}"
+            )
+        member = _canonical_relative_path(
+            value.get("_path"),
+            f"{metadata_name} path declaration",
+        ).as_posix()
+        if member in declarations:
+            raise ReleaseContractError(
+                f"duplicate Conda path declaration: {metadata_name} {member}"
+            )
+        path_type = _required_string(
+            value.get("path_type"),
+            f"{metadata_name} path declaration type",
+        )
+        digest_value = value.get("sha256")
+        if digest_value is None:
+            digest = None
+        elif not isinstance(digest_value, str) or not _SHA256_PATTERN.fullmatch(
+            digest_value
+        ):
+            raise ReleaseContractError(
+                f"Conda path declaration SHA-256 is invalid: {metadata_name} {member}"
+            )
+        else:
+            digest = digest_value
+        size_value = value.get("size_in_bytes")
+        if size_value is None:
+            size = None
+        elif (
+            not isinstance(size_value, int)
+            or isinstance(size_value, bool)
+            or size_value < 0
+        ):
+            raise ReleaseContractError(
+                f"Conda path declaration size is invalid: {metadata_name} {member}"
+            )
+        else:
+            size = size_value
+        declarations[member] = _CondaPathDeclaration(
+            member=member,
+            path_type=path_type,
+            sha256=digest,
+            size=size,
+        )
+    return MappingProxyType(
+        {member: declarations[member] for member in sorted(declarations)}
+    )
+
+
 def _load_package(
     base_prefix: Path,
     metadata_name: str,
@@ -162,6 +264,7 @@ def _load_package(
         url=url,
         license=license_value,
         files=files,
+        path_declarations=_path_declarations(payload, metadata_name),
         metadata_name=metadata_name,
         metadata_bytes=raw,
     )
@@ -214,6 +317,397 @@ def _source_member(base_prefix: Path, raw_source: str) -> str | None:
     return _canonical_relative_path(relative, "Conda COLLECT source member").as_posix()
 
 
+def _stat_proof(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+    )
+
+
+def _required_path_declaration(
+    package: _CondaPackage,
+    member: str,
+    allowed_types: frozenset[str],
+    label: str,
+) -> _CondaPathDeclaration:
+    declaration = package.path_declarations.get(member)
+    if declaration is None:
+        raise ReleaseContractError(f"{label} has no exact Conda path declaration")
+    if declaration.path_type not in allowed_types:
+        raise ReleaseContractError(
+            f"{label} Conda path declaration disagrees with its file type"
+        )
+    if declaration.sha256 is None or declaration.size is None:
+        raise ReleaseContractError(
+            f"{label} Conda path declaration has no content identity"
+        )
+    return declaration
+
+
+def _owned_link_target_member(
+    current_member: PurePosixPath,
+    target: object,
+    label: str,
+) -> PurePosixPath:
+    if (
+        not isinstance(target, str)
+        or not target
+        or "\x00" in target
+        or "\\" in target
+    ):
+        raise ReleaseContractError(f"{label} has an unsafe Conda link target")
+    try:
+        target_bytes = target.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ReleaseContractError(
+            f"{label} Conda link target is not valid UTF-8"
+        ) from exc
+    if len(target_bytes) > _MAX_SYMLINK_TARGET_BYTES:
+        raise ReleaseContractError(f"{label} Conda link target exceeds path limit")
+    target_path = PurePosixPath(target)
+    windows_target = PureWindowsPath(target)
+    if (
+        target_path.is_absolute()
+        or windows_target.is_absolute()
+        or bool(windows_target.drive)
+        or target_path.as_posix() != target
+        or not target_path.parts
+        or any(part in {"", ".", ".."} for part in target_path.parts)
+    ):
+        raise ReleaseContractError(f"{label} has an unsafe Conda link target")
+    normalized = PurePosixPath(*current_member.parts[:-1], *target_path.parts)
+    return _canonical_relative_path(
+        normalized.as_posix(),
+        f"{label} resolved Conda member",
+    )
+
+
+def _owned_member_is_softlink(
+    base_prefix: Path,
+    package: _CondaPackage,
+    file_owners: Mapping[str, _CondaPackage],
+    logical_member: PurePosixPath,
+    label: str,
+) -> bool:
+    member = _canonical_relative_path(
+        logical_member.as_posix(),
+        f"{label} logical member",
+    )
+    member_text = member.as_posix()
+    if file_owners.get(member_text) is not package:
+        raise ReleaseContractError(f"{label} has no exact same-package owner")
+    parent = PurePosixPath(*member.parts[:-1])
+    parent_descriptor = _open_root_directory(base_prefix, parent, label)
+    try:
+        try:
+            metadata = os.stat(
+                member.parts[-1],
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise ReleaseContractError(f"{label} is missing or changed") from exc
+    finally:
+        os.close(parent_descriptor)
+    declaration = package.path_declarations.get(member_text)
+    if stat.S_ISLNK(metadata.st_mode):
+        return True
+    if declaration is not None and declaration.path_type == "softlink":
+        raise ReleaseContractError(
+            f"{label} Conda path declaration disagrees with its file type"
+        )
+    return False
+
+
+def _open_owned_conda_member(
+    base_prefix: Path,
+    package: _CondaPackage,
+    file_owners: Mapping[str, _CondaPackage],
+    logical_member: PurePosixPath,
+    label: str,
+) -> _ResolvedCondaMember:
+    """Open one exact metadata-declared same-package Conda leaf-link chain."""
+
+    current = _canonical_relative_path(
+        logical_member.as_posix(),
+        f"{label} logical member",
+    )
+    followed = 0
+    visited: set[tuple[int, int]] = set()
+    proof: list[tuple[object, ...]] = []
+    while True:
+        member_text = current.as_posix()
+        if file_owners.get(member_text) is not package:
+            raise ReleaseContractError(f"{label} has a cross-package Conda target")
+        parent = PurePosixPath(*current.parts[:-1])
+        parent_descriptor = _open_root_directory(base_prefix, parent, label)
+        try:
+            parent_metadata = os.fstat(parent_descriptor)
+            try:
+                before = os.stat(
+                    current.parts[-1],
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+            except OSError as exc:
+                raise ReleaseContractError(f"{label} is missing or changed") from exc
+            if stat.S_ISLNK(before.st_mode):
+                _required_path_declaration(
+                    package,
+                    member_text,
+                    _SOFTLINK_PATH_TYPES,
+                    label,
+                )
+                followed += 1
+                marker = (before.st_dev, before.st_ino)
+                if followed > _MAX_SYMLINKS or marker in visited:
+                    raise ReleaseContractError(f"{label} contains a Conda link cycle")
+                visited.add(marker)
+                try:
+                    target = os.readlink(
+                        current.parts[-1],
+                        dir_fd=parent_descriptor,
+                    )
+                    after = os.stat(
+                        current.parts[-1],
+                        dir_fd=parent_descriptor,
+                        follow_symlinks=False,
+                    )
+                except OSError as exc:
+                    raise ReleaseContractError(
+                        f"cannot inspect {label} Conda link"
+                    ) from exc
+                if not _same_identity(before, after):
+                    raise ReleaseContractError(f"{label} Conda link changed while read")
+                target_member = _owned_link_target_member(current, target, label)
+                if file_owners.get(target_member.as_posix()) is not package:
+                    raise ReleaseContractError(
+                        f"{label} has a cross-package Conda target"
+                    )
+                proof.append(
+                    (
+                        member_text,
+                        _stat_proof(parent_metadata),
+                        _stat_proof(before),
+                        target_member.as_posix(),
+                    )
+                )
+                current = target_member
+                continue
+            if followed == 0:
+                raise ReleaseContractError(
+                    f"{label} changed from a declared Conda leaf link"
+                )
+            if not stat.S_ISREG(before.st_mode):
+                raise ReleaseContractError(
+                    f"{label} Conda target is not a regular file"
+                )
+            _required_path_declaration(
+                package,
+                member_text,
+                _REGULAR_PATH_TYPES,
+                label,
+            )
+            flags = (
+                os.O_RDONLY
+                | getattr(os, "O_BINARY", 0)
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            try:
+                descriptor = os.open(
+                    current.parts[-1],
+                    flags,
+                    dir_fd=parent_descriptor,
+                )
+            except OSError as exc:
+                raise ReleaseContractError(
+                    f"{label} Conda target changed while opening"
+                ) from exc
+            try:
+                opened = os.fstat(descriptor)
+            except OSError as exc:
+                os.close(descriptor)
+                raise ReleaseContractError(
+                    f"{label} Conda target changed while opening"
+                ) from exc
+            if not _same_identity(before, opened):
+                os.close(descriptor)
+                raise ReleaseContractError(
+                    f"{label} Conda target changed while opening"
+                )
+            proof.append(
+                (
+                    member_text,
+                    _stat_proof(parent_metadata),
+                    _stat_proof(opened),
+                    None,
+                )
+            )
+            return _ResolvedCondaMember(
+                descriptor=descriptor,
+                resolved_member=current,
+                metadata=opened,
+                chain_proof=tuple(proof),
+            )
+        finally:
+            os.close(parent_descriptor)
+
+
+def _hash_opened_conda_member(
+    resolved: _ResolvedCondaMember,
+    label: str,
+) -> dict[str, object]:
+    before = os.fstat(resolved.descriptor)
+    if not _same_identity(resolved.metadata, before):
+        raise ReleaseContractError(f"{label} Conda target changed before hashing")
+    digest = hashlib.sha256()
+    try:
+        for chunk in iter(lambda: os.read(resolved.descriptor, 1024 * 1024), b""):
+            digest.update(chunk)
+    except OSError as exc:
+        raise ReleaseContractError(f"cannot hash {label} Conda target") from exc
+    after = os.fstat(resolved.descriptor)
+    if not _same_identity(before, after):
+        raise ReleaseContractError(f"{label} Conda target changed while hashing")
+    return {
+        "entry_type": "regular-file",
+        "sha256": digest.hexdigest(),
+        "size": before.st_size,
+    }
+
+
+def _same_resolved_member(
+    first: _ResolvedCondaMember,
+    second: _ResolvedCondaMember,
+) -> bool:
+    return (
+        first.resolved_member == second.resolved_member
+        and first.chain_proof == second.chain_proof
+        and _same_identity(first.metadata, second.metadata)
+    )
+
+
+def _validate_declared_content(
+    package: _CondaPackage,
+    resolved: _ResolvedCondaMember,
+    identity: dict[str, object],
+    label: str,
+) -> None:
+    for item in resolved.chain_proof:
+        member = str(item[0])
+        declaration = package.path_declarations[member]
+        if (
+            declaration.sha256 != identity["sha256"]
+            or declaration.size != identity["size"]
+        ):
+            raise ReleaseContractError(
+                f"{label} Conda declaration disagrees with regular content"
+            )
+
+
+def _hash_owned_conda_member(
+    base_prefix: Path,
+    package: _CondaPackage,
+    file_owners: Mapping[str, _CondaPackage],
+    logical_member: PurePosixPath,
+    label: str,
+) -> dict[str, object]:
+    if not _owned_member_is_softlink(
+        base_prefix,
+        package,
+        file_owners,
+        logical_member,
+        label,
+    ):
+        return _hash_root_file(base_prefix, logical_member, label)
+    first = _open_owned_conda_member(
+        base_prefix,
+        package,
+        file_owners,
+        logical_member,
+        label,
+    )
+    try:
+        first_identity = _hash_opened_conda_member(first, label)
+    finally:
+        os.close(first.descriptor)
+    second = _open_owned_conda_member(
+        base_prefix,
+        package,
+        file_owners,
+        logical_member,
+        label,
+    )
+    try:
+        second_identity = _hash_opened_conda_member(second, label)
+    finally:
+        os.close(second.descriptor)
+    if not _same_resolved_member(first, second) or first_identity != second_identity:
+        raise ReleaseContractError(f"{label} Conda link changed after it was hashed")
+    _validate_declared_content(package, first, first_identity, label)
+    return first_identity
+
+
+def _read_owned_conda_member(
+    base_prefix: Path,
+    package: _CondaPackage,
+    file_owners: Mapping[str, _CondaPackage],
+    logical_member: PurePosixPath,
+    label: str,
+) -> tuple[bytes, dict[str, object]]:
+    if not _owned_member_is_softlink(
+        base_prefix,
+        package,
+        file_owners,
+        logical_member,
+        label,
+    ):
+        return _read_root_bytes(base_prefix, logical_member, label)
+    first = _open_owned_conda_member(
+        base_prefix,
+        package,
+        file_owners,
+        logical_member,
+        label,
+    )
+    try:
+        first_bytes, first_stat = _read_descriptor(
+            first.descriptor,
+            label,
+            maximum_bytes=_MAX_EVIDENCE_FILE_BYTES,
+        )
+    finally:
+        os.close(first.descriptor)
+    second = _open_owned_conda_member(
+        base_prefix,
+        package,
+        file_owners,
+        logical_member,
+        label,
+    )
+    try:
+        second_bytes, second_stat = _read_descriptor(
+            second.descriptor,
+            label,
+            maximum_bytes=_MAX_EVIDENCE_FILE_BYTES,
+        )
+    finally:
+        os.close(second.descriptor)
+    if (
+        not _same_resolved_member(first, second)
+        or not _same_identity(first_stat, second_stat)
+        or first_bytes != second_bytes
+    ):
+        raise ReleaseContractError(f"{label} Conda link changed after it was read")
+    identity = _bytes_identity(first_bytes)
+    _validate_declared_content(package, first, identity, label)
+    return first_bytes, identity
+
+
 def capture_conda_component_evidence(
     collect_rows: list[dict[str, object]],
     existing_components: dict[str, dict[str, object]],
@@ -257,8 +751,10 @@ def capture_conda_component_evidence(
         package = file_owners.get(member) if member is not None else None
         if package is None:
             continue
-        source_identity = _hash_root_file(
+        source_identity = _hash_owned_conda_member(
             base_prefix,
+            package,
+            file_owners,
             PurePosixPath(member),
             f"Conda contributor {member}",
         )
@@ -306,8 +802,10 @@ def capture_conda_component_evidence(
         for member in package.files:
             if not _LICENSE_FILE_PATTERN.search(member):
                 continue
-            license_bytes, license_identity = _read_root_bytes(
+            license_bytes, license_identity = _read_owned_conda_member(
                 base_prefix,
+                package,
+                file_owners,
                 PurePosixPath(member),
                 f"Conda license {package.component_id} {member}",
             )
