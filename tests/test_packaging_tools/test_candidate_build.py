@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import subprocess
 import sys
 import tarfile
@@ -12,6 +12,7 @@ import pytest
 
 import build as build_script
 from packaging_tools import conda_component_evidence as conda_evidence_module
+from packaging_tools import component_evidence as component_evidence_module
 from packaging_tools import component_inventory as component_inventory_module
 from packaging_tools.artifact_manifest import create_artifact_manifest
 from packaging_tools.contracts import (
@@ -3275,10 +3276,16 @@ def _install_composite_v3_fixture(
     source_root = build_dir / "source"
     _write(source_root / "LICENSE", b"EasyQC fixture license\n")
     _write(source_root / "easyqc.spec", b"# authenticated fixture spec\n")
-    cursor_library = _write(
-        build_dir / "linux-cursor-sysroot/usr/lib/libxcb-cursor.so.0",
+    cursor_parent = build_dir / "linux-cursor-sysroot/usr/lib"
+    cursor_target = _write(
+        cursor_parent / "libxcb-cursor.so.0.0.0",
         b"verified cursor ELF\n",
     )
+    cursor_library = cursor_parent / "libxcb-cursor.so.0"
+    try:
+        cursor_library.symlink_to(cursor_target.name)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks are unavailable on this platform: {exc}")
     reviewed_cursor_notice = _write(
         tmp_path / "reviewed-cursor-license.txt",
         b"verified cursor license\n",
@@ -3337,7 +3344,7 @@ def _install_composite_v3_fixture(
     monkeypatch.setattr(
         build_script,
         "LINUX_CURSOR_LIBRARY_SHA256",
-        sha256_file(cursor_library),
+        sha256_file(cursor_target),
     )
     monkeypatch.setattr(
         build_script,
@@ -3443,10 +3450,12 @@ def _install_composite_v3_fixture(
     return {
         "artifact": artifact,
         "build_dir": build_dir,
+        "cursor_library": cursor_library,
         "cursor_runtime": build_script.VerifiedLinuxCursorRuntime(
             cursor_library,
             cursor_notice,
         ),
+        "cursor_target": cursor_target,
         "evidence_index": evidence_index,
         "manifest": manifest,
         "packet_root": packet_root,
@@ -3599,6 +3608,11 @@ def test_component_evidence_v3_composes_all_seven_source_kinds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixture = _install_composite_v3_fixture(tmp_path, monkeypatch)
+    cursor_library = Path(fixture["cursor_library"])
+    cursor_target = Path(fixture["cursor_target"])
+
+    assert cursor_library.is_symlink()
+    assert os.readlink(cursor_library) == cursor_target.name
 
     metadata = build_script.capture_component_evidence_v3(
         fixture["artifact"],
@@ -3639,8 +3653,209 @@ def test_component_evidence_v3_composes_all_seven_source_kinds(
         metadata,
         fixture["packet_root"],
     )
-    assert str(tmp_path).encode() not in canonical_json_bytes(metadata)
+    metadata_bytes = canonical_json_bytes(metadata)
+    assert str(tmp_path).encode() not in metadata_bytes
+    assert cursor_target.name.encode() not in metadata_bytes
     assert not (fixture["build_dir"] / "evidence/python-distributions").exists()
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "regular-leaf",
+        "absolute-target",
+        "parent-symlink",
+        "target-symlink",
+        "cycle",
+        "missing-target",
+        "directory-target",
+        "fifo-target",
+        "oversize-target",
+    ],
+)
+def test_cursor_component_rejects_noncanonical_or_nonregular_soname_shapes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+) -> None:
+    fixture = _install_composite_v3_fixture(tmp_path, monkeypatch)
+    cursor_library = Path(fixture["cursor_library"])
+    cursor_target = Path(fixture["cursor_target"])
+    cursor_bytes = cursor_target.read_bytes()
+
+    if shape == "regular-leaf":
+        cursor_library.unlink()
+        _write(cursor_library, cursor_bytes)
+    elif shape == "absolute-target":
+        cursor_library.unlink()
+        cursor_library.symlink_to(cursor_target.resolve())
+    elif shape == "parent-symlink":
+        cursor_parent = cursor_library.parent
+        real_parent = cursor_parent.with_name("lib-real")
+        cursor_parent.rename(real_parent)
+        cursor_parent.symlink_to(real_parent.name, target_is_directory=True)
+    elif shape == "target-symlink":
+        real_target = cursor_target.with_name("libxcb-cursor-real.so")
+        cursor_target.rename(real_target)
+        cursor_target.symlink_to(real_target.name)
+    elif shape == "cycle":
+        cursor_target.unlink()
+        cursor_target.symlink_to(cursor_library.name)
+    elif shape == "missing-target":
+        cursor_target.unlink()
+    elif shape == "directory-target":
+        cursor_target.unlink()
+        cursor_target.mkdir()
+    elif shape == "fifo-target":
+        cursor_target.unlink()
+        os.mkfifo(cursor_target)
+    else:
+        _write(cursor_target, b"X" * (16 * 1024 * 1024 + 1))
+
+    with pytest.raises(ReleaseContractError, match="cursor"):
+        component_evidence_module._read_cursor_leaf_symlink(
+            Path(fixture["build_dir"]) / "linux-cursor-sysroot",
+            PurePosixPath("usr/lib/libxcb-cursor.so.0"),
+            "verified cursor library",
+        )
+
+
+@pytest.mark.parametrize(
+    "unsafe_target",
+    [
+        pytest.param("/tmp/libxcb-cursor.so", id="absolute"),
+        pytest.param("../libxcb-cursor.so.0.0.0", id="dotdot"),
+        pytest.param("nested/libxcb-cursor.so.0.0.0", id="separator"),
+        pytest.param("C:\\libxcb-cursor.so", id="windows-drive"),
+        pytest.param("", id="empty"),
+        pytest.param(".", id="dot"),
+        pytest.param("..", id="dotdot-only"),
+        pytest.param("bad\x00target", id="nul"),
+        pytest.param("x" * 4097, id="overlong"),
+        pytest.param("\udcff", id="invalid-utf8"),
+    ],
+)
+def test_cursor_component_rejects_unsafe_leaf_target_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe_target: str,
+) -> None:
+    fixture = _install_composite_v3_fixture(tmp_path, monkeypatch)
+    cursor_library = Path(fixture["cursor_library"])
+    original_readlink = os.readlink
+
+    def readlink_with_unsafe_cursor_target(
+        path: os.PathLike[str] | str,
+        *args: object,
+        **kwargs: object,
+    ) -> str:
+        if os.fspath(path) == cursor_library.name:
+            return unsafe_target
+        return original_readlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        component_evidence_module.os,
+        "readlink",
+        readlink_with_unsafe_cursor_target,
+    )
+
+    with pytest.raises(ReleaseContractError, match="cursor"):
+        component_evidence_module._read_cursor_leaf_symlink(
+            Path(fixture["build_dir"]) / "linux-cursor-sysroot",
+            PurePosixPath("usr/lib/libxcb-cursor.so.0"),
+            "verified cursor library",
+        )
+
+
+@pytest.mark.parametrize("mutation", ["leaf", "target-same-size"])
+def test_cursor_component_rejects_mutation_between_complete_proofs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    fixture = _install_composite_v3_fixture(tmp_path, monkeypatch)
+    cursor_library = Path(fixture["cursor_library"])
+    cursor_target = Path(fixture["cursor_target"])
+    original_open_root = component_evidence_module._open_root_directory
+    opens = 0
+
+    def open_root_after_mutation(
+        root: Path,
+        relative: PurePosixPath,
+        label: str,
+    ) -> int:
+        nonlocal opens
+        opens += 1
+        if opens == 2:
+            if mutation == "leaf":
+                cursor_library.unlink()
+                cursor_library.symlink_to(cursor_target.name)
+            else:
+                original_bytes = cursor_target.read_bytes()
+                replacement = cursor_target.with_name("replacement-cursor.so")
+                _write(
+                    replacement,
+                    bytes([original_bytes[0] ^ 1]) + original_bytes[1:],
+                )
+                os.replace(replacement, cursor_target)
+        return original_open_root(root, relative, label)
+
+    monkeypatch.setattr(
+        component_evidence_module,
+        "_open_root_directory",
+        open_root_after_mutation,
+    )
+
+    with pytest.raises(ReleaseContractError, match="changed"):
+        component_evidence_module._read_cursor_leaf_symlink(
+            Path(fixture["build_dir"]) / "linux-cursor-sysroot",
+            PurePosixPath("usr/lib/libxcb-cursor.so.0"),
+            "verified cursor library",
+        )
+
+
+def test_cursor_component_rejects_target_mutation_during_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _install_composite_v3_fixture(tmp_path, monkeypatch)
+    cursor_target = Path(fixture["cursor_target"])
+    original_read_descriptor = component_evidence_module._read_descriptor
+    mutated = False
+
+    def read_descriptor_then_mutate(
+        descriptor: int,
+        label: str,
+        *,
+        maximum_bytes: int,
+    ) -> tuple[bytes, os.stat_result]:
+        nonlocal mutated
+        result = original_read_descriptor(
+            descriptor,
+            label,
+            maximum_bytes=maximum_bytes,
+        )
+        if not mutated:
+            original_bytes = cursor_target.read_bytes()
+            _write(
+                cursor_target,
+                bytes([original_bytes[0] ^ 1]) + original_bytes[1:],
+            )
+            mutated = True
+        return result
+
+    monkeypatch.setattr(
+        component_evidence_module,
+        "_read_descriptor",
+        read_descriptor_then_mutate,
+    )
+
+    with pytest.raises(ReleaseContractError, match="changed"):
+        component_evidence_module._read_cursor_leaf_symlink(
+            Path(fixture["build_dir"]) / "linux-cursor-sysroot",
+            PurePosixPath("usr/lib/libxcb-cursor.so.0"),
+            "verified cursor library",
+        )
 
 
 @pytest.mark.parametrize(

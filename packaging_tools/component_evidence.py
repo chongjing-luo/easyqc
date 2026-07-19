@@ -12,14 +12,20 @@ import hashlib
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
+import stat
 
 from .artifact_manifest import ArtifactManifest
 from .component_evidence_io import (
+    _MAX_EVIDENCE_FILE_BYTES,
+    _MAX_SYMLINK_TARGET_BYTES,
     _MAX_TOTAL_EVIDENCE_BYTES,
     _collect_index,
     _exclusive_output_path,
+    _open_root_directory,
+    _read_descriptor,
     _read_root_bytes,
     _real_directory,
+    _same_identity,
     _write_evidence,
 )
 from .component_inventory import _load_composite_component_metadata
@@ -90,6 +96,176 @@ def _retain(
         "sha256": identity["sha256"],
         "size": identity["size"],
         "source_locator": source_locator,
+    }
+
+
+def _cursor_target_basename(target: object, label: str) -> str:
+    if (
+        not isinstance(target, str)
+        or not target
+        or "\\" in target
+        or "\x00" in target
+    ):
+        raise ReleaseContractError(f"{label} has an unsafe symlink target")
+    try:
+        target_bytes = target.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ReleaseContractError(
+            f"{label} symlink target is not valid UTF-8"
+        ) from exc
+    if len(target_bytes) > _MAX_SYMLINK_TARGET_BYTES:
+        raise ReleaseContractError(f"{label} symlink target exceeds path limit")
+    target_path = PurePosixPath(target)
+    windows_target = PureWindowsPath(target)
+    if (
+        target_path.is_absolute()
+        or windows_target.is_absolute()
+        or bool(windows_target.drive)
+        or target_path.as_posix() != target
+        or len(target_path.parts) != 1
+        or target_path.parts[0] in {".", ".."}
+    ):
+        raise ReleaseContractError(
+            f"{label} symlink target must be one canonical relative basename"
+        )
+    return target
+
+
+def _read_cursor_leaf_symlink_once(
+    root: Path,
+    logical_path: PurePosixPath,
+    label: str,
+) -> tuple[bytes, os.stat_result, str, os.stat_result]:
+    if logical_path.is_absolute() or not logical_path.parts or any(
+        part in {"", ".", ".."} or "\\" in part or "\x00" in part
+        for part in logical_path.parts
+    ):
+        raise ReleaseContractError(f"{label} path is not safe for no-follow I/O")
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise ReleaseContractError(f"{label} requires no-follow file I/O")
+    parent = PurePosixPath(*logical_path.parts[:-1])
+    leaf = logical_path.parts[-1]
+    parent_descriptor = _open_root_directory(root, parent, label)
+    target_descriptor: int | None = None
+    try:
+        try:
+            link_before = os.stat(
+                leaf,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise ReleaseContractError(f"{label} symlink is missing or changed") from exc
+        if not stat.S_ISLNK(link_before.st_mode):
+            raise ReleaseContractError(f"{label} must be a leaf symlink")
+        try:
+            target = _cursor_target_basename(
+                os.readlink(leaf, dir_fd=parent_descriptor),
+                label,
+            )
+            link_after_read = os.stat(
+                leaf,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise ReleaseContractError(
+                f"cannot inspect {label} symlink target"
+            ) from exc
+        if not _same_identity(link_before, link_after_read):
+            raise ReleaseContractError(f"{label} symlink changed while read")
+
+        try:
+            target_before = os.stat(
+                target,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise ReleaseContractError(f"{label} target is missing or changed") from exc
+        if not stat.S_ISREG(target_before.st_mode):
+            raise ReleaseContractError(f"{label} target is not a regular file")
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | os.O_NOFOLLOW
+        )
+        try:
+            target_descriptor = os.open(
+                target,
+                flags,
+                dir_fd=parent_descriptor,
+            )
+        except OSError as exc:
+            raise ReleaseContractError(
+                f"{label} target is missing, changed, or an unsafe symlink"
+            ) from exc
+        try:
+            target_opened = os.fstat(target_descriptor)
+        except OSError as exc:
+            raise ReleaseContractError(
+                f"cannot inspect opened {label} target"
+            ) from exc
+        if (
+            not stat.S_ISREG(target_opened.st_mode)
+            or not _same_identity(target_before, target_opened)
+        ):
+            raise ReleaseContractError(f"{label} target changed while opening")
+        target_bytes, target_read = _read_descriptor(
+            target_descriptor,
+            label,
+            maximum_bytes=_MAX_EVIDENCE_FILE_BYTES,
+        )
+        if not _same_identity(target_opened, target_read):
+            raise ReleaseContractError(f"{label} target changed while read")
+        try:
+            target_after = os.stat(
+                target,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            link_after = os.stat(
+                leaf,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise ReleaseContractError(f"{label} changed after it was read") from exc
+        if (
+            not _same_identity(target_before, target_after)
+            or not _same_identity(link_before, link_after)
+        ):
+            raise ReleaseContractError(f"{label} changed after it was read")
+        return target_bytes, link_before, target, target_before
+    finally:
+        if target_descriptor is not None:
+            os.close(target_descriptor)
+        os.close(parent_descriptor)
+
+
+def _read_cursor_leaf_symlink(
+    root: Path,
+    logical_path: PurePosixPath,
+    label: str,
+) -> tuple[bytes, dict[str, object]]:
+    first_bytes, first_link, first_target, first_target_stat = (
+        _read_cursor_leaf_symlink_once(root, logical_path, label)
+    )
+    second_bytes, second_link, second_target, second_target_stat = (
+        _read_cursor_leaf_symlink_once(root, logical_path, label)
+    )
+    if (
+        first_target != second_target
+        or not _same_identity(first_link, second_link)
+        or not _same_identity(first_target_stat, second_target_stat)
+        or first_bytes != second_bytes
+    ):
+        raise ReleaseContractError(f"{label} changed after it was read")
+    return first_bytes, {
+        "entry_type": "regular-file",
+        "sha256": hashlib.sha256(first_bytes).hexdigest(),
+        "size": len(first_bytes),
     }
 
 
@@ -261,7 +437,7 @@ def capture_cursor_component(
     _real_directory(sysroot, "verified cursor sysroot")
     sysroot_absolute = Path(os.path.abspath(os.fspath(sysroot)))
     sysroot_resolved = sysroot.resolve(strict=True)
-    verified: dict[str, tuple[bytes, dict[str, object]]] = {}
+    verified_relative: dict[str, PurePosixPath] = {}
     for path, label in (
         (library_path, "cursor library"),
         (copyright_path, "cursor copyright"),
@@ -269,20 +445,33 @@ def capture_cursor_component(
         try:
             absolute = Path(os.path.abspath(os.fspath(path)))
             relative = absolute.relative_to(sysroot_absolute)
-            resolved = absolute.resolve(strict=True)
         except ValueError as exc:
             raise ReleaseContractError(f"verified {label} escapes cursor sysroot") from exc
-        except OSError as exc:
-            raise ReleaseContractError(f"cannot resolve verified {label}: {exc}") from exc
-        if not resolved.is_relative_to(sysroot_resolved):
-            raise ReleaseContractError(f"verified {label} escapes cursor sysroot")
-        verified[label] = _read_root_bytes(
-            sysroot,
-            PurePosixPath(relative.as_posix()),
-            f"verified {label}",
-        )
+        verified_relative[label] = PurePosixPath(relative.as_posix())
 
-    library_bytes, library_identity = verified["cursor library"]
+    library_relative = verified_relative["cursor library"]
+    copyright_relative = verified_relative["cursor copyright"]
+    library_verified = _read_cursor_leaf_symlink(
+        sysroot,
+        library_relative,
+        "verified cursor library",
+    )
+    try:
+        copyright_resolved = Path(
+            os.path.abspath(os.fspath(copyright_path))
+        ).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ReleaseContractError(
+            f"cannot resolve verified cursor copyright: {exc}"
+        ) from exc
+    if not copyright_resolved.is_relative_to(sysroot_resolved):
+        raise ReleaseContractError("verified cursor copyright escapes cursor sysroot")
+    copyright_verified = _read_root_bytes(
+        sysroot,
+        copyright_relative,
+        "verified cursor copyright",
+    )
+    library_bytes, library_identity = library_verified
     if library_path.name != soname or library_identity["sha256"] != library_sha256:
         raise ReleaseContractError("verified cursor library identity mismatch")
     candidate_cursor = next(
@@ -305,7 +494,7 @@ def capture_cursor_component(
         PurePosixPath(notice_path.name),
         "reviewed cursor notice",
     )
-    copyright_bytes, copyright_identity = verified["cursor copyright"]
+    copyright_bytes, copyright_identity = copyright_verified
     if copyright_bytes != reviewed_notice or copyright_identity != reviewed_identity:
         raise ReleaseContractError("verified cursor copyright does not match notice")
     if len(copyright_bytes) + len(provenance) > _MAX_TOTAL_EVIDENCE_BYTES:
@@ -338,15 +527,24 @@ def capture_cursor_component(
             label="verified cursor provenance",
         ),
     ]
-    for path, label in (
-        (library_path, "cursor library"),
-        (copyright_path, "cursor copyright"),
-    ):
-        absolute = Path(os.path.abspath(os.fspath(path)))
-        relative = PurePosixPath(absolute.relative_to(sysroot_absolute).as_posix())
-        current = _read_root_bytes(sysroot, relative, f"final verified {label}")
-        if current != verified[label]:
-            raise ReleaseContractError(f"verified {label} changed before publication")
+    current_library = _read_cursor_leaf_symlink(
+        sysroot,
+        library_relative,
+        "final verified cursor library",
+    )
+    if current_library != library_verified:
+        raise ReleaseContractError(
+            "verified cursor library changed before publication"
+        )
+    current_copyright = _read_root_bytes(
+        sysroot,
+        copyright_relative,
+        "final verified cursor copyright",
+    )
+    if current_copyright != copyright_verified:
+        raise ReleaseContractError(
+            "verified cursor copyright changed before publication"
+        )
     component_id = f"library:{package}@{version}"
     return {
         "collected_files": [],
