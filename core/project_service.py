@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import json
 import re
+from copy import deepcopy
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable
@@ -15,6 +16,14 @@ from utils.validators import validate_project_name
 
 
 MODULE_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+@dataclass(frozen=True)
+class PreparedProjectLoad:
+    """Parsed candidate that has not changed the active project/settings pair."""
+
+    project: Project
+    settings: dict[str, Any]
 
 
 class ProjectService:
@@ -60,17 +69,45 @@ class ProjectService:
         self._notify("project_changed")
         return project
 
-    def load(self, name: str) -> Project:
+    def load(self, name: str, *, notify: bool = True) -> Project:
+        return self.commit_load(self.prepare_load(name), notify=notify)
+
+    def prepare_load(self, name: str) -> PreparedProjectLoad:
+        """Read one project candidate without mutating active service state."""
+
         if name not in self.registry.projects:
             raise KeyError(name)
         project = self.registry.projects[name]
         if not project.settings_path.exists():
             raise FileNotFoundError(project.settings_path)
 
+        # Read and validate the candidate before changing the active pair.  A
+        # damaged settings file must never leave ``current`` pointing at the
+        # new project while ``_settings`` still belongs to the previous one.
+        candidate_settings = FileUtils.safe_json_load(project.settings_path)
+        if not isinstance(candidate_settings, dict):
+            raise ValueError(f"项目设置必须是对象: {project.settings_path}")
+        return PreparedProjectLoad(project=project, settings=deepcopy(candidate_settings))
+
+    def commit_load(
+        self,
+        prepared: PreparedProjectLoad,
+        *,
+        notify: bool = True,
+    ) -> Project:
+        """Atomically accept a previously parsed project candidate."""
+
+        if not isinstance(prepared, PreparedProjectLoad):
+            raise TypeError("commit_load requires PreparedProjectLoad")
+        registered = self.registry.projects.get(prepared.project.name)
+        if registered is None or registered.path != prepared.project.path:
+            raise ValueError("Prepared project is no longer registered")
+        project = prepared.project
         self.current = project
-        self.registry.last_project = name
-        self._settings = FileUtils.safe_json_load(project.settings_path)
-        self._notify("project_changed")
+        self.registry.last_project = project.name
+        self._settings = deepcopy(prepared.settings)
+        if notify:
+            self._notify("project_changed")
         return project
 
     def remove(self, name: str) -> None:
@@ -249,7 +286,7 @@ class ProjectService:
         """Rows for the project combo/list: (name,) tuples."""
         return [(name,) for name in self.registry.projects]
 
-    def import_project_from_dir(self, output_dir) -> None:
+    def import_project_from_dir(self, output_dir, *, notify: bool = True) -> None:
         """Import a project from a directory containing settings_<name>.json.
         Registers it in the registry and loads it (no copy)."""
         output_dir = Path(output_dir)
@@ -267,8 +304,9 @@ class ProjectService:
         self.registry.projects[project_name] = project
         self.registry.last_project = project_name
         self._save_registry()
-        self.load(project_name)
-        self._notify("project_changed")
+        self.load(project_name, notify=notify)
+        if notify:
+            self._notify("project_changed")
 
     def constants(self) -> dict[str, Any]:
         """Return the constants dict (mutable view for read checks)."""
@@ -322,18 +360,55 @@ class ProjectService:
 
     def export_module(self, module_name: str, path) -> None:
         """Write a sanitized module copy (rater/ezqcid=None) to path."""
-        import json
-        from copy import deepcopy
         idx = self._module_index_by_name(module_name)
         module = self._settings["qcmodule"][idx]
         export_copy = deepcopy(module)
         export_copy["rater"] = None
         export_copy["ezqcid"] = None
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(export_copy, f, indent=4, ensure_ascii=False)
+        FileUtils.safe_json_save(path, export_copy)
 
-    def save(self) -> None:
+    def commit_settings(
+        self,
+        candidate: Mapping[str, Any],
+        *,
+        change_event: str = "modules_changed",
+        notify: bool = True,
+    ) -> None:
+        """Atomically persist a copied settings candidate or restore memory."""
+
+        self._require_current_project()
+        if change_event not in {"modules_changed", "settings_saved"}:
+            raise ValueError(f"不支持的设置变更事件: {change_event}")
+        prepared = deepcopy(dict(candidate))
+        constants = prepared.get("constants")
+        modules = prepared.get("qcmodule")
+        if not isinstance(constants, dict):
+            raise ValueError("constants 必须是对象")
+        if not isinstance(modules, dict) or not modules:
+            raise ValueError("至少保留一个 QC 模块")
+        names: list[str] = []
+        for key, payload in sorted(modules.items(), key=lambda item: int(item[0])):
+            if str(int(key)) != str(key):
+                raise ValueError(f"模块索引不合法: {key}")
+            if not isinstance(payload, dict):
+                raise ValueError(f"模块 {key} 必须是对象")
+            module = QCModule.from_legacy_dict(payload)
+            self._validate_module_name(module.name)
+            names.append(module.name)
+        if len(set(names)) != len(names):
+            raise ValueError("模块名称不能重复")
+
+        previous = self._settings
+        self._settings = prepared
+        try:
+            self.save(notify=notify)
+        except Exception:
+            self._settings = previous
+            raise
+        if notify and change_event != "settings_saved":
+            self._notify(change_event)
+
+    def save(self, *, notify: bool = True) -> None:
         self._save_registry()
         if self.current is not None:
             self._ensure_schema_version(self._settings)
@@ -341,7 +416,19 @@ class ProjectService:
             # SETTINGS_SAVED is a typed-only event (new in P1-C). It is emitted
             # directly rather than via _notify so it does not fire the legacy
             # string observers, which only expect project/modules events.
-            self.event_bus.emit(Event(type=EventType.SETTINGS_SAVED, source="ProjectService"))
+            if notify:
+                self.publish_change("settings_saved")
+
+    def publish_change(self, event: str, data: dict[str, Any] | None = None) -> None:
+        """Publish a validated service change on the caller's thread."""
+        if event == "settings_saved":
+            self.event_bus.emit(
+                Event(type=EventType.SETTINGS_SAVED, source="ProjectService", data=data)
+            )
+            return
+        if event not in {"project_changed", "modules_changed"}:
+            raise ValueError(f"不支持的项目变更事件: {event}")
+        self._notify(event, data)
 
     @staticmethod
     def _ensure_schema_version(payload: dict[str, Any]) -> None:
@@ -449,4 +536,4 @@ class ProjectService:
             raise ValueError(f"模块名不合法: {name}")
 
 
-__all__ = ["ProjectService"]
+__all__ = ["PreparedProjectLoad", "ProjectService"]
