@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 from typing import Iterable
 
 from .artifact_manifest import ArtifactManifest, create_artifact_manifest
@@ -30,6 +31,7 @@ COMPONENT_LEDGER_SCHEMA = "easyqc-release-component-ledger-v1"
 COMPONENT_POLICY_SCHEMA = "easyqc-component-policy-v1"
 DISTRIBUTION_METADATA_SCHEMA = "easyqc-release-distribution-metadata-v1"
 DISTRIBUTION_METADATA_V2_SCHEMA = "easyqc-release-distribution-metadata-v2"
+DISTRIBUTION_METADATA_V3_SCHEMA = "easyqc-release-distribution-metadata-v3"
 PYINSTALLER_TOC_INDEX_SCHEMA = "easyqc-release-pyinstaller-toc-index-v1"
 PYINSTALLER_EVIDENCE_INDEX_SCHEMA = (
     "easyqc-release-pyinstaller-evidence-index-v1"
@@ -53,7 +55,25 @@ _PYINSTALLER_COLLECT_TYPES = frozenset(
 _PYINSTALLER_WARNING_DISPOSITIONS = frozenset(
     {"RETAINED_NO_WARNINGS", "RETAINED_REVIEW_REQUIRED"}
 )
+_V3_SOURCE_KINDS = frozenset(
+    {
+        "conda-package-file",
+        "debian-package-file",
+        "easyqc-source-file",
+        "pyinstaller-generated",
+        "python-distribution-file",
+        "python-symlink-alias",
+        "verified-cursor-deb",
+    }
+)
 _MAX_RETAINED_TOC_BYTES = 16 * 1024 * 1024
+_MAX_RETAINED_COMPONENT_EVIDENCE_BYTES = 16 * 1024 * 1024
+_MAX_TOTAL_COMPONENT_EVIDENCE_BYTES = 256 * 1024 * 1024
+_SUPPORTS_DESCRIPTOR_RELATIVE_OPEN = (
+    os.open in os.supports_dir_fd
+    and hasattr(os, "O_DIRECTORY")
+    and hasattr(os, "O_NOFOLLOW")
+)
 
 
 class ComponentInventoryError(ReleaseContractError):
@@ -787,6 +807,8 @@ def _load_metadata(
     packet_root: Path,
 ) -> _MetadataEvidence:
     schema = metadata.get("schema")
+    if schema == DISTRIBUTION_METADATA_V3_SCHEMA:
+        return _load_composite_component_metadata(metadata, packet_root)
     if schema == DISTRIBUTION_METADATA_V2_SCHEMA:
         return _load_python_contributor_metadata(metadata, packet_root)
     if schema != DISTRIBUTION_METADATA_SCHEMA:
@@ -1034,6 +1056,352 @@ def _load_v2_collected_row(
             f"{label}.distribution_path",
         )
     return normalized
+
+
+def _load_v3_candidate_values(value: object, label: str) -> tuple[str, ...]:
+    rows = _object_list(value, label)
+    pairs: list[tuple[str, str]] = []
+    for row in rows:
+        _expect_fields(row, {"field", "value"}, f"{label} entry")
+        pairs.append(
+            (
+                _required_string(row["field"], f"{label}.field"),
+                _required_string(row["value"], f"{label}.value"),
+            )
+        )
+    if pairs != sorted(pairs) or len(pairs) != len(set(pairs)):
+        raise ComponentInventoryError(f"{label} must be unique and sorted")
+    return tuple(candidate for _field, candidate in pairs)
+
+
+def _load_v3_collected_row(
+    record: dict[str, object],
+    label: str,
+) -> dict[str, object]:
+    _expect_fields(
+        record,
+        {
+            "entry_type",
+            "final_path",
+            "package_path",
+            "raw_source_text_sha256",
+            "source_identity",
+            "source_kind",
+            "source_locator",
+            "target_final_path",
+            "toc_type",
+        },
+        label,
+    )
+    entry_type = _required_string(record["entry_type"], f"{label}.entry_type")
+    if entry_type not in {"regular-file", "symlink"}:
+        raise ComponentInventoryError(f"{label}.entry_type is invalid")
+    toc_type = _required_string(record["toc_type"], f"{label}.toc_type")
+    if toc_type not in _PYINSTALLER_COLLECT_TYPES:
+        raise ComponentInventoryError(f"{label}.toc_type is unsupported")
+    if (toc_type == "SYMLINK") != (entry_type == "symlink"):
+        raise ComponentInventoryError(f"{label} TOC/entry type mismatch")
+
+    source_kind = _required_string(record["source_kind"], f"{label}.source_kind")
+    if source_kind not in _V3_SOURCE_KINDS:
+        raise ComponentInventoryError(f"{label}.source_kind is unsupported")
+    if (source_kind == "python-symlink-alias") != (entry_type == "symlink"):
+        raise ComponentInventoryError(
+            f"{label}.python-symlink-alias must identify exactly a symlink"
+        )
+
+    source_identity = _required_object(
+        record["source_identity"],
+        f"{label}.source_identity",
+    )
+    _validate_source_identity(source_identity, f"{label}.source_identity")
+    if source_identity.get("entry_type") == "unavailable":
+        raise ComponentInventoryError(
+            f"{label}.source_identity must be available in v3"
+        )
+    if source_identity.get("entry_type") != entry_type:
+        raise ComponentInventoryError(
+            f"{label}.source_identity entry type mismatch"
+        )
+
+    package_path_value = record["package_path"]
+    package_path = None
+    if package_path_value is not None:
+        package_path = _canonical_path(
+            package_path_value,
+            f"{label}.package_path",
+        )
+    target_value = record["target_final_path"]
+    target_final_path = None
+    if target_value is not None:
+        target_final_path = _canonical_path(
+            target_value,
+            f"{label}.target_final_path",
+        )
+    if (target_final_path is not None) != (entry_type == "symlink"):
+        raise ComponentInventoryError(
+            f"{label}.target_final_path is required only for symlinks"
+        )
+
+    return {
+        "entry_type": entry_type,
+        "final_path": _canonical_path(record["final_path"], f"{label}.final_path"),
+        "package_path": package_path,
+        "raw_source_text_sha256": _validate_sha256(
+            record["raw_source_text_sha256"],
+            f"{label}.raw_source_text_sha256",
+        ),
+        "source_identity": source_identity,
+        "source_kind": source_kind,
+        "source_locator": _canonical_path(
+            record["source_locator"],
+            f"{label}.source_locator",
+        ),
+        "target_final_path": target_final_path,
+        "toc_type": toc_type,
+    }
+
+
+def _load_v3_evidence_file(
+    record: dict[str, object],
+    label: str,
+    packet_root: Path,
+) -> tuple[dict[str, object], str, int]:
+    _expect_fields(
+        record,
+        {"kind", "retained_path", "sha256", "size", "source_locator"},
+        label,
+    )
+    kind = _required_string(record["kind"], f"{label}.kind")
+    if not _NORMALIZED_DISTRIBUTION_PATTERN.fullmatch(kind):
+        raise ComponentInventoryError(f"{label}.kind is not canonical")
+    retained_path = _canonical_path(
+        record["retained_path"],
+        f"{label}.retained_path",
+    )
+    if not retained_path.startswith("build/evidence/components/"):
+        raise ComponentInventoryError(
+            f"{label}.retained_path must be below build/evidence/components/"
+        )
+    expected_sha256 = _validate_sha256(
+        record["sha256"],
+        f"{label}.sha256",
+    )
+    expected_size = record["size"]
+    if (
+        isinstance(expected_size, bool)
+        or not isinstance(expected_size, int)
+        or expected_size < 0
+    ):
+        raise ComponentInventoryError(f"{label}.size is invalid")
+    if expected_size > _MAX_RETAINED_COMPONENT_EVIDENCE_BYTES:
+        raise ComponentInventoryError(
+            f"{label}.size exceeds {_MAX_RETAINED_COMPONENT_EVIDENCE_BYTES} bytes"
+        )
+    _authenticate_v3_evidence_file(
+        packet_root,
+        retained_path,
+        expected_sha256,
+        expected_size,
+        label,
+    )
+    normalized = {
+        "kind": kind,
+        "retained_path": retained_path,
+        "sha256": expected_sha256,
+        "size": expected_size,
+        "source_locator": _canonical_path(
+            record["source_locator"],
+            f"{label}.source_locator",
+        ),
+    }
+    return normalized, retained_path, expected_size
+
+
+def _open_v3_evidence_descriptor(
+    packet_root: Path,
+    retained_path: str,
+    label: str,
+) -> int:
+    if not _SUPPORTS_DESCRIPTOR_RELATIVE_OPEN:
+        raise ComponentInventoryError(
+            "v3 nested evidence requires descriptor-relative no-follow support"
+        )
+    relative = PurePosixPath(retained_path)
+    try:
+        root_metadata = packet_root.lstat()
+    except OSError as exc:
+        raise ComponentInventoryError(
+            f"cannot inspect v3 evidence packet root: {exc}"
+        ) from exc
+    if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(
+        root_metadata.st_mode
+    ):
+        raise ComponentInventoryError("v3 evidence packet root is not a real directory")
+
+    file_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | os.O_NOFOLLOW
+    )
+    directory_flags = file_flags | os.O_DIRECTORY
+    current_descriptor = -1
+    try:
+        try:
+            current_descriptor = os.open(packet_root, directory_flags)
+            opened_root = os.fstat(current_descriptor)
+        except OSError as exc:
+            raise ComponentInventoryError(
+                f"cannot open v3 evidence packet root: {exc}"
+            ) from exc
+        if (
+            not stat.S_ISDIR(opened_root.st_mode)
+            or (opened_root.st_dev, opened_root.st_ino)
+            != (root_metadata.st_dev, root_metadata.st_ino)
+        ):
+            raise ComponentInventoryError(
+                "v3 evidence packet root changed while opening"
+            )
+        for part in relative.parts[:-1]:
+            try:
+                next_descriptor = os.open(
+                    part,
+                    directory_flags,
+                    dir_fd=current_descriptor,
+                )
+            except OSError as exc:
+                raise ComponentInventoryError(
+                    f"{label} nested evidence parent is missing, changed, or "
+                    f"an unsafe symlink: {part}"
+                ) from exc
+            try:
+                next_metadata = os.fstat(next_descriptor)
+            except OSError as exc:
+                os.close(next_descriptor)
+                raise ComponentInventoryError(
+                    f"cannot inspect {label} nested evidence parent: {exc}"
+                ) from exc
+            if not stat.S_ISDIR(next_metadata.st_mode):
+                os.close(next_descriptor)
+                raise ComponentInventoryError(
+                    f"{label} nested evidence parent is not a directory"
+                )
+            os.close(current_descriptor)
+            current_descriptor = next_descriptor
+        try:
+            descriptor = os.open(
+                relative.parts[-1],
+                file_flags,
+                dir_fd=current_descriptor,
+            )
+        except OSError as exc:
+            raise ComponentInventoryError(
+                f"{label} nested evidence is missing, changed, or an unsafe symlink"
+            ) from exc
+    finally:
+        if current_descriptor >= 0:
+            os.close(current_descriptor)
+
+    try:
+        opened = os.fstat(descriptor)
+    except OSError as exc:
+        os.close(descriptor)
+        raise ComponentInventoryError(
+            f"cannot inspect {label} nested evidence: {exc}"
+        ) from exc
+    if not stat.S_ISREG(opened.st_mode):
+        os.close(descriptor)
+        raise ComponentInventoryError(f"{label} nested evidence is not a regular file")
+    if opened.st_nlink != 1:
+        os.close(descriptor)
+        raise ComponentInventoryError(
+            f"{label} nested evidence must not be hard-linked"
+        )
+    return descriptor
+
+
+def _authenticate_v3_evidence_file(
+    packet_root: Path,
+    retained_path: str,
+    expected_sha256: str,
+    expected_size: int,
+    label: str,
+) -> None:
+    descriptor = _open_v3_evidence_descriptor(packet_root, retained_path, label)
+    try:
+        before = os.fstat(descriptor)
+        if before.st_size != expected_size:
+            raise ComponentInventoryError(f"{label} nested evidence size mismatch")
+        digest = hashlib.sha256()
+        observed_size = 0
+        while observed_size <= expected_size:
+            try:
+                chunk = os.read(
+                    descriptor,
+                    min(1024 * 1024, expected_size - observed_size + 1),
+                )
+            except OSError as exc:
+                raise ComponentInventoryError(
+                    f"cannot hash {label} nested evidence: {exc}"
+                ) from exc
+            if not chunk:
+                break
+            observed_size += len(chunk)
+            if observed_size > expected_size:
+                raise ComponentInventoryError(
+                    f"{label} nested evidence size mismatch"
+                )
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+    except OSError as exc:
+        raise ComponentInventoryError(
+            f"cannot inspect {label} nested evidence while hashing: {exc}"
+        ) from exc
+    finally:
+        os.close(descriptor)
+
+    identity_fields = (
+        "st_dev",
+        "st_ino",
+        "st_mode",
+        "st_nlink",
+        "st_size",
+        "st_mtime_ns",
+    )
+    if any(
+        getattr(before, field) != getattr(after, field)
+        for field in identity_fields
+    ):
+        raise ComponentInventoryError(
+            f"{label} nested evidence changed while hashing"
+        )
+    if observed_size != expected_size:
+        raise ComponentInventoryError(f"{label} nested evidence size mismatch")
+    if digest.hexdigest() != expected_sha256:
+        raise ComponentInventoryError(f"{label} nested evidence SHA-256 mismatch")
+
+    revalidation_descriptor = _open_v3_evidence_descriptor(
+        packet_root,
+        retained_path,
+        label,
+    )
+    try:
+        try:
+            revalidated = os.fstat(revalidation_descriptor)
+        except OSError as exc:
+            raise ComponentInventoryError(
+                f"cannot revalidate {label} nested evidence: {exc}"
+            ) from exc
+    finally:
+        os.close(revalidation_descriptor)
+    if any(
+        getattr(before, field) != getattr(revalidated, field)
+        for field in identity_fields
+    ):
+        raise ComponentInventoryError(
+            f"{label} nested evidence changed after hashing"
+        )
 
 
 def _load_python_contributor_metadata(
@@ -1332,6 +1700,217 @@ def _load_python_contributor_metadata(
     )
 
 
+def _load_composite_component_metadata(
+    metadata: dict[str, object],
+    packet_root: Path,
+) -> _MetadataEvidence:
+    _expect_fields(
+        metadata,
+        {
+            "schema",
+            "collect_entry_count",
+            "component_count",
+            "assigned_collected_entry_count",
+            "unassigned_collected_entry_count",
+            "components",
+            "unassigned_collected_entries",
+        },
+        "composite component metadata",
+    )
+    components = _object_list(metadata["components"], "v3 components")
+    unassigned_rows = _object_list(
+        metadata["unassigned_collected_entries"],
+        "v3 unassigned collected entries",
+    )
+    _metadata_count(metadata["component_count"], len(components), "component_count")
+
+    result: dict[str, dict[str, object]] = {}
+    assigned: list[dict[str, object]] = []
+    component_order: list[str] = []
+    retained_paths: set[str] = set()
+    aggregate_evidence_size = 0
+    component_fields = {
+        "collected_files",
+        "component_id",
+        "ecosystem",
+        "evidence_files",
+        "license_candidates",
+        "name",
+        "provider_candidates",
+        "purl",
+        "type",
+        "version",
+    }
+    for component_index, component in enumerate(components):
+        label = f"v3 component {component_index}"
+        _expect_fields(component, component_fields, label)
+        component_id = _required_string(
+            component["component_id"],
+            f"{label}.component_id",
+        )
+        if component_id in result:
+            raise ComponentInventoryError(
+                f"duplicate metadata component: {component_id}"
+            )
+        ecosystem = _required_string(component["ecosystem"], f"{label}.ecosystem")
+        component_type = _required_string(component["type"], f"{label}.type")
+        name = _required_string(component["name"], f"{label}.name")
+        version = _required_string(component["version"], f"{label}.version")
+        purl = _required_string(component["purl"], f"{label}.purl")
+        provider_candidates = _load_v3_candidate_values(
+            component["provider_candidates"],
+            f"{label}.provider_candidates",
+        )
+        license_candidates = _load_v3_candidate_values(
+            component["license_candidates"],
+            f"{label}.license_candidates",
+        )
+
+        evidence_rows = _object_list(
+            component["evidence_files"],
+            f"{label}.evidence_files",
+        )
+        normalized_evidence: list[dict[str, object]] = []
+        component_origin_paths: list[str] = []
+        for evidence_index, evidence_row in enumerate(evidence_rows):
+            normalized, retained_path, evidence_size = _load_v3_evidence_file(
+                evidence_row,
+                f"{label}.evidence_file {evidence_index}",
+                packet_root,
+            )
+            if retained_path in retained_paths:
+                raise ComponentInventoryError(
+                    "v3 nested evidence retained paths must be globally unique"
+                )
+            retained_paths.add(retained_path)
+            aggregate_evidence_size += evidence_size
+            if aggregate_evidence_size > _MAX_TOTAL_COMPONENT_EVIDENCE_BYTES:
+                raise ComponentInventoryError(
+                    "v3 nested evidence exceeds aggregate size limit"
+                )
+            normalized_evidence.append(normalized)
+            component_origin_paths.append(retained_path)
+        evidence_order = [
+            (
+                str(row["kind"]),
+                str(row["source_locator"]),
+                str(row["retained_path"]),
+            )
+            for row in normalized_evidence
+        ]
+        if evidence_order != sorted(evidence_order) or len(evidence_order) != len(
+            set(evidence_order)
+        ):
+            raise ComponentInventoryError(
+                f"{label}.evidence_files must be unique and sorted"
+            )
+
+        collected_rows = _object_list(
+            component["collected_files"],
+            f"{label}.collected_files",
+        )
+        if not collected_rows:
+            raise ComponentInventoryError(
+                f"{label} must contain at least one collected contributor"
+            )
+        normalized_collected = [
+            {
+                **_load_v3_collected_row(
+                    row,
+                    f"{label}.collected_file {row_index}",
+                ),
+                "component_id": component_id,
+            }
+            for row_index, row in enumerate(collected_rows)
+        ]
+        collected_order = [str(row["final_path"]) for row in normalized_collected]
+        if collected_order != sorted(collected_order) or len(collected_order) != len(
+            set(collected_order)
+        ):
+            raise ComponentInventoryError(
+                f"{label}.collected_files must be unique and sorted"
+            )
+        collected_by_path = {
+            str(row["final_path"]): row for row in normalized_collected
+        }
+        for row in normalized_collected:
+            if row["entry_type"] != "symlink":
+                continue
+            target = collected_by_path.get(str(row["target_final_path"]))
+            if target is None or target["entry_type"] != "regular-file":
+                raise ComponentInventoryError(
+                    f"{label} symlink target must be a regular row in the "
+                    "same component"
+                )
+        assigned.extend(normalized_collected)
+        result[component_id] = {
+            "_evidence_schema": DISTRIBUTION_METADATA_V3_SCHEMA,
+            "component_id": component_id,
+            "ecosystem": ecosystem,
+            "license_declared_candidates": license_candidates,
+            "name": name,
+            "origin_evidence_paths": tuple(component_origin_paths),
+            "provider_candidates": provider_candidates,
+            "purl": purl,
+            "type": component_type,
+            "version": version,
+        }
+        component_order.append(component_id)
+
+    if component_order != sorted(component_order):
+        raise ComponentInventoryError("v3 components must be sorted")
+
+    normalized_unassigned = [
+        _load_v3_collected_row(row, f"v3 unassigned entry {index}")
+        for index, row in enumerate(unassigned_rows)
+    ]
+    unassigned_order = [str(row["final_path"]) for row in normalized_unassigned]
+    if unassigned_order != sorted(unassigned_order) or len(unassigned_order) != len(
+        set(unassigned_order)
+    ):
+        raise ComponentInventoryError(
+            "v3 unassigned collected entries must be unique and sorted"
+        )
+
+    all_rows = assigned + normalized_unassigned
+    final_paths = [str(row["final_path"]) for row in all_rows]
+    identities = [
+        (
+            str(row["final_path"]),
+            str(row["raw_source_text_sha256"]),
+            str(row["toc_type"]),
+        )
+        for row in all_rows
+    ]
+    if len(final_paths) != len(set(final_paths)) or len(identities) != len(
+        set(identities)
+    ):
+        raise ComponentInventoryError(
+            "v3 assigned/unassigned COLLECT rows must be globally unique"
+        )
+    _metadata_count(
+        metadata["assigned_collected_entry_count"],
+        len(assigned),
+        "assigned_collected_entry_count",
+    )
+    _metadata_count(
+        metadata["unassigned_collected_entry_count"],
+        len(normalized_unassigned),
+        "unassigned_collected_entry_count",
+    )
+    _metadata_count(
+        metadata["collect_entry_count"],
+        len(all_rows),
+        "collect_entry_count",
+    )
+    return _MetadataEvidence(
+        components=result,
+        assigned_collected_entries=tuple(assigned),
+        unassigned_collected_entries=tuple(normalized_unassigned),
+        requires_exact_collect_coverage=True,
+    )
+
+
 def _load_toc_index(
     toc: dict[str, object],
     *,
@@ -1343,13 +1922,13 @@ def _load_toc_index(
     if schema == PYINSTALLER_TOC_INDEX_SCHEMA:
         if metadata_evidence.requires_exact_collect_coverage:
             raise ComponentInventoryError(
-                "v2 Python contributor metadata requires retained raw COLLECT evidence"
+                "exact contributor metadata requires retained raw COLLECT evidence"
             )
         return _load_normalized_toc_index(toc)
     if schema == PYINSTALLER_EVIDENCE_INDEX_SCHEMA:
         raw_entries = _load_retained_pyinstaller_evidence(toc, packet_root, manifest)
         if metadata_evidence.requires_exact_collect_coverage:
-            return _apply_v2_collect_ownership(raw_entries, metadata_evidence)
+            return _apply_exact_collect_ownership(raw_entries, metadata_evidence)
         return raw_entries
     raise ComponentInventoryError(
         "unsupported PyInstaller TOC/evidence index schema"
@@ -1462,7 +2041,7 @@ def _load_retained_pyinstaller_evidence(
     return _load_collect_toc(toc_paths["COLLECT"], manifest)
 
 
-def _apply_v2_collect_ownership(
+def _apply_exact_collect_ownership(
     raw_entries: dict[tuple[str, str], dict[str, str]],
     metadata: _MetadataEvidence,
 ) -> dict[tuple[str, str], dict[str, str]]:
@@ -1501,10 +2080,10 @@ def _apply_v2_collect_ownership(
                 != row["raw_source_text_sha256"]
             ):
                 raise ComponentInventoryError(
-                    "v2 raw source digest mismatch for " + str(row["final_path"])
+                    "raw source digest mismatch for " + str(row["final_path"])
                 )
         raise ComponentInventoryError(
-            "v2 contributor evidence does not exactly cover retained COLLECT"
+            "contributor evidence does not exactly cover retained COLLECT"
         )
 
     result: dict[tuple[str, str], dict[str, str]] = {}
@@ -1518,12 +2097,12 @@ def _apply_v2_collect_ownership(
         ]
         if observed["entry_type"] != row["entry_type"]:
             raise ComponentInventoryError(
-                "v2 contributor entry type mismatch for " + str(row["final_path"])
+                "contributor entry type mismatch for " + str(row["final_path"])
             )
         component_id = str(row["component_id"])
         key = (component_id, str(row["final_path"]))
         if key in result:
-            raise ComponentInventoryError("duplicate v2 assigned COLLECT entry")
+            raise ComponentInventoryError("duplicate assigned COLLECT entry")
         result[key] = {
             "component_id": component_id,
             "entry_type": observed["entry_type"],
@@ -1542,7 +2121,7 @@ def _apply_v2_collect_ownership(
         ]
         if observed["entry_type"] != row["entry_type"]:
             raise ComponentInventoryError(
-                "v2 unassigned entry type mismatch for " + str(row["final_path"])
+                "unassigned entry type mismatch for " + str(row["final_path"])
             )
         key = ("unassigned", str(row["final_path"]))
         result[key] = {
@@ -1653,7 +2232,10 @@ def _component_reasons(
     reasons: list[str] = []
     if metadata is None:
         reasons.append("exact distribution metadata is missing")
-    elif metadata.get("_evidence_schema") == DISTRIBUTION_METADATA_V2_SCHEMA:
+    elif metadata.get("_evidence_schema") in {
+        DISTRIBUTION_METADATA_V2_SCHEMA,
+        DISTRIBUTION_METADATA_V3_SCHEMA,
+    }:
         for field in ("type", "name", "version", "purl"):
             if metadata[field] != rule[field]:
                 reasons.append(f"metadata disagrees with policy field {field}")
@@ -1677,10 +2259,18 @@ def _component_reasons(
             elif metadata[field] != rule[field]:
                 reasons.append(f"metadata disagrees with policy field {field}")
     origin_evidence = tuple(str(item) for item in rule["origin_evidence"])
+    accepted_origin_paths = set(authenticated_origin_paths)
+    if (
+        metadata is not None
+        and metadata.get("_evidence_schema") == DISTRIBUTION_METADATA_V3_SCHEMA
+    ):
+        accepted_origin_paths.update(
+            str(item) for item in metadata["origin_evidence_paths"]
+        )
     if not origin_evidence:
         reasons.append("policy origin_evidence is empty")
     for origin_path in origin_evidence:
-        if origin_path not in authenticated_origin_paths:
+        if origin_path not in accepted_origin_paths:
             reasons.append(
                 f"origin_evidence is not receipt-authenticated: {origin_path}"
             )

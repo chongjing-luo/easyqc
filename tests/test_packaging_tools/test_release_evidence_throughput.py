@@ -8,6 +8,7 @@ import tarfile
 
 import pytest
 
+import packaging_tools.component_inventory as component_inventory_module
 import packaging_tools.native_packet as native_packet_module
 from packaging_tools.artifact_manifest import (
     ArtifactManifest,
@@ -20,6 +21,7 @@ from packaging_tools.component_inventory import (
     COMPONENT_POLICY_SCHEMA,
     DISTRIBUTION_METADATA_SCHEMA,
     DISTRIBUTION_METADATA_V2_SCHEMA,
+    DISTRIBUTION_METADATA_V3_SCHEMA,
     PYINSTALLER_TOC_INDEX_SCHEMA,
     ComponentInventoryError,
     InventoryRequest,
@@ -562,6 +564,141 @@ def _rewrite_e4_v2_python_origin_evidence(
     )
 
 
+def _rewrite_distribution_metadata_and_receipt(
+    packet: SyntheticPacket,
+    metadata: dict[str, object],
+) -> InventoryRequest:
+    metadata_path = packet.root / "build/distribution-metadata.json"
+    _write_json(metadata_path, metadata)
+    receipt = json.loads(packet.build_receipt.read_text(encoding="utf-8"))
+    receipt["evidence"]["distribution_metadata"] = _reference(
+        metadata_path,
+        packet.root,
+    )
+    _write_json(packet.build_receipt, receipt)
+    return replace(
+        _inventory_request(packet),
+        build_receipt_sha256=sha256_file(packet.build_receipt),
+    )
+
+
+def _rewrite_e4_v3_component_evidence(
+    packet: SyntheticPacket,
+    *,
+    unassign_alias: bool = False,
+) -> tuple[InventoryRequest, Path]:
+    _request, v2_retained_license = _rewrite_e4_v2_python_origin_evidence(packet)
+    metadata_path = packet.root / "build/distribution-metadata.json"
+    v2 = json.loads(metadata_path.read_text(encoding="utf-8"))
+    v2_component = v2["components"][0]
+    retained_license = packet.root / (
+        "build/evidence/components/python/easyqc-fixture-1.0.0/LICENSE"
+    )
+    retained_license.parent.mkdir(parents=True)
+    retained_license.write_bytes(v2_retained_license.read_bytes())
+
+    collected: list[dict[str, object]] = []
+    for row in v2_component["collected_files"]:
+        is_symlink = row["entry_type"] == "symlink"
+        source_identity = row["source_identity"]
+        if is_symlink:
+            target = "EasyQC"
+            source_identity = {
+                "entry_type": "symlink",
+                "size": len(target.encode("utf-8")),
+                "target_text_sha256": _raw_source_text_sha256(target),
+            }
+        collected.append(
+            {
+                "entry_type": row["entry_type"],
+                "final_path": row["final_path"],
+                "package_path": row["distribution_path"],
+                "raw_source_text_sha256": row["raw_source_text_sha256"],
+                "source_identity": source_identity,
+                "source_kind": (
+                    "python-symlink-alias"
+                    if is_symlink
+                    else "python-distribution-file"
+                ),
+                "source_locator": row["source_locator"],
+                "target_final_path": "EasyQC" if is_symlink else None,
+                "toc_type": row["toc_type"],
+            }
+        )
+
+    unassigned: list[dict[str, object]] = []
+    if unassign_alias:
+        unassigned.append(collected.pop())
+
+    retained_path = retained_license.relative_to(packet.root).as_posix()
+    provider_candidates = list(v2_component["provider_candidates"])
+    license_candidates = sorted(
+        [
+            {
+                "field": "Classifier",
+                "value": value,
+            }
+            for value in v2_component["license_candidates"]["classifiers"]
+        ]
+        + [
+            {
+                "field": field,
+                "value": v2_component["license_candidates"][source_field],
+            }
+            for field, source_field in (
+                ("License", "field_first_line"),
+                ("License-Expression", "expression"),
+            )
+            if v2_component["license_candidates"][source_field] is not None
+        ],
+        key=lambda item: (item["field"], item["value"]),
+    )
+    v3 = {
+        "schema": DISTRIBUTION_METADATA_V3_SCHEMA,
+        "collect_entry_count": len(collected) + len(unassigned),
+        "component_count": 1,
+        "assigned_collected_entry_count": len(collected),
+        "unassigned_collected_entry_count": len(unassigned),
+        "components": [
+            {
+                "collected_files": collected,
+                "component_id": v2_component["component_id"],
+                "ecosystem": "python",
+                "evidence_files": [
+                    {
+                        "kind": "python-license",
+                        "retained_path": retained_path,
+                        "sha256": sha256_file(retained_license),
+                        "size": retained_license.stat().st_size,
+                        "source_locator": (
+                            "python-distribution/easyqc-fixture/"
+                            "easyqc_fixture-1.0.0.dist-info/LICENSE"
+                        ),
+                    }
+                ],
+                "license_candidates": license_candidates,
+                "name": v2_component["name"],
+                "provider_candidates": provider_candidates,
+                "purl": v2_component["purl"],
+                "type": "library",
+                "version": v2_component["version"],
+            }
+        ],
+        "unassigned_collected_entries": unassigned,
+    }
+
+    policy_path = packet.root / "inputs/component-policy.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["rules"][0]["origin_evidence"] = sorted(
+        policy["rules"][0]["origin_evidence"] + [retained_path]
+    )
+    _write_json(policy_path, policy)
+    receipt = json.loads(packet.build_receipt.read_text(encoding="utf-8"))
+    receipt["component_policy"] = _reference(policy_path, packet.root)
+    _write_json(packet.build_receipt, receipt)
+    return _rewrite_distribution_metadata_and_receipt(packet, v3), retained_license
+
+
 def _classified_paths(ledger_payload: dict[str, object]) -> list[str]:
     component_paths = [
         path
@@ -889,6 +1026,296 @@ def test_v2_python_license_conclusion_must_be_exact_raw_metadata(
         "metadata does not establish license_concluded" in item.reason
         for item in ledger.unresolved
     )
+
+
+def test_v3_composite_evidence_drives_exact_ownership_and_nested_origins(
+    tmp_path: Path,
+) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    request, retained_license = _rewrite_e4_v3_component_evidence(packet)
+
+    ledger = generate_component_ledger(request)
+
+    assert ledger.release_status == "PASS"
+    assert ledger.unresolved == ()
+    assert ledger.components[0].file_paths == ("EasyQC", "EasyQC-link")
+    assert retained_license.relative_to(packet.root).as_posix() in (
+        ledger.components[0].origin_evidence
+    )
+    assert b"/host/" not in (
+        packet.inventory_dir / "component-ledger.json"
+    ).read_bytes()
+
+
+def test_v3_composite_ledger_is_byte_deterministic(tmp_path: Path) -> None:
+    first = _build_synthetic_packet(tmp_path / "first/packet")
+    second = _build_synthetic_packet(tmp_path / "second/packet")
+    first_request, _first_license = _rewrite_e4_v3_component_evidence(first)
+    second_request, _second_license = _rewrite_e4_v3_component_evidence(second)
+
+    first_ledger = generate_component_ledger(first_request)
+    second_ledger = generate_component_ledger(second_request)
+
+    assert first_ledger.candidate_id == second_ledger.candidate_id
+    assert first_ledger.release_status == second_ledger.release_status == "PASS"
+    assert (first.inventory_dir / "component-ledger.json").read_bytes() == (
+        second.inventory_dir / "component-ledger.json"
+    ).read_bytes()
+    assert (first.inventory_dir / "unresolved-components.json").read_bytes() == (
+        second.inventory_dir / "unresolved-components.json"
+    ).read_bytes()
+
+
+@pytest.mark.parametrize(
+    ("bad_case", "expected_error"),
+    [
+        ("unknown-field", "fields mismatch"),
+        ("unknown-source-kind", "source_kind is unsupported"),
+        ("absolute-source-locator", "canonical relative path"),
+    ],
+)
+def test_v3_rejects_unknown_fields_source_kinds_and_absolute_locators(
+    tmp_path: Path,
+    bad_case: str,
+    expected_error: str,
+) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    _request, _retained_license = _rewrite_e4_v3_component_evidence(packet)
+    metadata_path = packet.root / "build/distribution-metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if bad_case == "unknown-field":
+        metadata["unexpected"] = True
+    elif bad_case == "unknown-source-kind":
+        metadata["components"][0]["collected_files"][0]["source_kind"] = (
+            "guessed-prefix-owner"
+        )
+    else:
+        metadata["components"][0]["collected_files"][0]["source_locator"] = (
+            "/host/work/EasyQC"
+        )
+    request = _rewrite_distribution_metadata_and_receipt(packet, metadata)
+
+    with pytest.raises(ComponentInventoryError, match=expected_error):
+        generate_component_ledger(request)
+
+    assert not packet.inventory_dir.exists()
+
+
+def test_v3_rejects_mutated_nested_evidence(tmp_path: Path) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    request, retained_license = _rewrite_e4_v3_component_evidence(packet)
+    retained_license.write_bytes(b"mutated nested v3 evidence\n")
+
+    with pytest.raises(
+        ComponentInventoryError,
+        match=r"nested evidence (?:size|SHA-256) mismatch",
+    ):
+        generate_component_ledger(request)
+
+    assert not packet.inventory_dir.exists()
+
+
+def test_v3_rejects_hard_linked_nested_evidence(tmp_path: Path) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    request, retained_license = _rewrite_e4_v3_component_evidence(packet)
+    second_link = packet.root / "external-license-link"
+    try:
+        second_link.hardlink_to(retained_license)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"hard links are unavailable on this platform: {exc}")
+
+    with pytest.raises(
+        ComponentInventoryError,
+        match="nested evidence must not be hard-linked",
+    ):
+        generate_component_ledger(request)
+
+    assert not packet.inventory_dir.exists()
+
+
+@pytest.mark.parametrize("link_location", ["leaf", "parent"])
+def test_v3_rejects_symlinked_nested_evidence_path(
+    tmp_path: Path,
+    link_location: str,
+) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    request, retained_license = _rewrite_e4_v3_component_evidence(packet)
+    if link_location == "leaf":
+        external = packet.root / "external-license"
+        retained_license.rename(external)
+        link = retained_license
+        target = external
+    else:
+        components = packet.root / "build/evidence/components"
+        external = packet.root / "external-components"
+        components.rename(external)
+        link = components
+        target = external
+    try:
+        link.symlink_to(target, target_is_directory=target.is_dir())
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks are unavailable on this platform: {exc}")
+
+    with pytest.raises(ComponentInventoryError, match="unsafe symlink"):
+        generate_component_ledger(request)
+
+    assert not packet.inventory_dir.exists()
+
+
+def test_v3_rejects_nested_evidence_swap_after_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    request, retained_license = _rewrite_e4_v3_component_evidence(packet)
+    original_open = component_inventory_module._open_v3_evidence_descriptor
+    open_count = 0
+
+    def swap_before_revalidation(
+        packet_root: Path,
+        retained_path: str,
+        label: str,
+    ) -> int:
+        nonlocal open_count
+        open_count += 1
+        if open_count == 2:
+            replacement = retained_license.with_suffix(".replacement")
+            replacement.write_bytes(b"X" * retained_license.stat().st_size)
+            replacement.replace(retained_license)
+        return original_open(packet_root, retained_path, label)
+
+    monkeypatch.setattr(
+        component_inventory_module,
+        "_open_v3_evidence_descriptor",
+        swap_before_revalidation,
+    )
+
+    with pytest.raises(
+        ComponentInventoryError,
+        match="nested evidence changed after hashing",
+    ):
+        generate_component_ledger(request)
+
+    assert not packet.inventory_dir.exists()
+
+
+def test_v3_nested_origin_must_be_listed_by_own_component(tmp_path: Path) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    _request, _retained_license = _rewrite_e4_v3_component_evidence(packet)
+    metadata_path = packet.root / "build/distribution-metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["components"][0]["evidence_files"] = []
+    request = _rewrite_distribution_metadata_and_receipt(packet, metadata)
+
+    ledger = generate_component_ledger(request)
+
+    assert ledger.release_status == "FAIL"
+    assert any(
+        "origin_evidence is not receipt-authenticated" in item.reason
+        for item in ledger.unresolved
+    )
+
+
+def test_v3_rejects_incomplete_exact_collect_coverage(tmp_path: Path) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    _request, _retained_license = _rewrite_e4_v3_component_evidence(packet)
+    metadata_path = packet.root / "build/distribution-metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["components"][0]["collected_files"][0][
+        "raw_source_text_sha256"
+    ] = "0" * 64
+    request = _rewrite_distribution_metadata_and_receipt(packet, metadata)
+
+    with pytest.raises(
+        ComponentInventoryError,
+        match="raw source digest mismatch",
+    ):
+        generate_component_ledger(request)
+
+    assert not packet.inventory_dir.exists()
+
+
+def test_v3_rejects_symlink_target_outside_its_component(tmp_path: Path) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    _request, _retained_license = _rewrite_e4_v3_component_evidence(packet)
+    metadata_path = packet.root / "build/distribution-metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["components"][0]["collected_files"][1]["target_final_path"] = (
+        "missing-target"
+    )
+    request = _rewrite_distribution_metadata_and_receipt(packet, metadata)
+
+    with pytest.raises(
+        ComponentInventoryError,
+        match="symlink target must be a regular row in the same component",
+    ):
+        generate_component_ledger(request)
+
+    assert not packet.inventory_dir.exists()
+
+
+@pytest.mark.parametrize(
+    ("bad_case", "expected_error"),
+    [
+        ("count", "collect_entry_count must equal 2"),
+        ("candidate-order", "license_candidates must be unique and sorted"),
+        ("unavailable-identity", "source_identity must be available in v3"),
+        ("source-kind-type", "python-symlink-alias must identify exactly"),
+        ("evidence-size", "size exceeds 16777216 bytes"),
+        ("collected-order", "collected_files must be unique and sorted"),
+    ],
+)
+def test_v3_rejects_count_order_identity_and_size_drift(
+    tmp_path: Path,
+    bad_case: str,
+    expected_error: str,
+) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    _request, _retained_license = _rewrite_e4_v3_component_evidence(packet)
+    metadata_path = packet.root / "build/distribution-metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    component = metadata["components"][0]
+    if bad_case == "count":
+        metadata["collect_entry_count"] = 3
+    elif bad_case == "candidate-order":
+        component["license_candidates"].reverse()
+    elif bad_case == "unavailable-identity":
+        component["collected_files"][0]["source_identity"] = {
+            "entry_type": "unavailable"
+        }
+    elif bad_case == "source-kind-type":
+        component["collected_files"][0]["source_kind"] = (
+            "python-symlink-alias"
+        )
+    elif bad_case == "evidence-size":
+        component["evidence_files"][0]["size"] = 16 * 1024 * 1024 + 1
+    else:
+        component["collected_files"].reverse()
+    request = _rewrite_distribution_metadata_and_receipt(packet, metadata)
+
+    with pytest.raises(ComponentInventoryError, match=expected_error):
+        generate_component_ledger(request)
+
+    assert not packet.inventory_dir.exists()
+
+
+def test_v3_unassigned_collect_row_cannot_be_claimed_by_policy(
+    tmp_path: Path,
+) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    request, _retained_license = _rewrite_e4_v3_component_evidence(
+        packet,
+        unassign_alias=True,
+    )
+
+    ledger = generate_component_ledger(request)
+
+    assert ledger.release_status == "FAIL"
+    assert any(
+        item.reason == "TOC evidence mismatch for EasyQC-link"
+        for item in ledger.unresolved
+    )
+    assert not (packet.inventory_dir / "inventory-receipt.json").exists()
 
 
 @pytest.mark.parametrize(
