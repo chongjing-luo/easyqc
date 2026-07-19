@@ -2,7 +2,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-234%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-541%20passed%20%7C%204%20skipped-brightgreen.svg)](tests/)
 
 EasyQC 是一个可配置的 MRI 人工视觉质量控制工作台。它将"打开图像 → 记录评分 → 追踪进度 → 聚合结果"的完整人工 QC 链条整合为可追踪、可复用、项目化的软件工作流。
 
@@ -31,6 +31,16 @@ cd easyqc
 chmod +x setup.sh
 ./setup.sh
 ```
+
+Linux 上的 Qt xcb 平台还需要系统运行库。Ubuntu/Debian 请先执行：
+
+```bash
+sudo apt install libxcb-cursor0
+./setup.sh --check
+```
+
+安装脚本会对实际 `libqxcb.so` 运行 `ldd`；存在任何 `=> not found` 时会
+明确失败，而不是把“PySide6 可以 import”误报为 GUI 已可用。
 
 脚本会自动：检测 Python 版本 → 创建 `.venv` 虚拟环境 → 安装依赖 → 生成 `start.sh` 启动脚本。
 
@@ -80,6 +90,22 @@ EasyQC 采用 **flat layout**：`easyqc/` 目录本身**不是**可安装的 Pyt
 ./start.sh                   # Linux / macOS
 python easyqc.py             # 所有平台
 ```
+
+当前稳定入口仍是 tkinter。PySide6/Qt 迁移采用显式预览入口，避免在工作流
+尚未完成迁移时影响真实项目：
+
+```bash
+python easyqc.py --ui qt-preview   # Qt 只读表格迁移预览
+python easyqc.py --ui tk           # 显式使用当前稳定 GUI（迁移期回退）
+```
+
+Qt Preview 已包含共享 Core 服务和专业只读 Table 工作区：类型感知的可视化
+Filter Builder、多列排序、列显示/重排、固定 `ezqcid`、完整结果计数、分页、
+精确查找和安全的 QC 身份校验。筛选与排序界面不显示或要求编辑 JSON。Qt 的
+Table、QC 与项目配置现已通过同一个共享 Core 上下文接通真实项目，耗时
+query/load/export 已移出 GUI 线程；但完整第三方组件清单、三平台原生包和人工
+可访问性门禁尚未完成，因此仍需显式选择 Preview，默认入口继续使用 tkinter。
+两种 GUI 读取同一套现有 JSON/CSV 事实，Qt 层不会另建权威数据库。
 
 ### CLI 模式（直接打开指定 QC 页面）
 
@@ -250,7 +276,8 @@ freeview -v $SUBJECTS_DIR/{ezqcid}/mri/T1.mgz \
 
 ## 表格操作
 
-EasyQC 内置结构化表格操作引擎，支持 8 种内置 JSON 结构化操作，无需编写代码：
+EasyQC 内置结构化表格操作引擎，支持 8 种类型化操作。用户通过 GUI 选择列、
+操作符和值，无需查看、粘贴或编辑 JSON，也无需编写代码：
 
 | 操作 | 说明 | 示例 |
 |---|---|---|
@@ -263,6 +290,7 @@ EasyQC 内置结构化表格操作引擎，支持 8 种内置 JSON 结构化操�
 | `merge_tables` | 合并表格 | 与外部 CSV 按 `ezqcid` 合并 |
 | `aggregate` | 分组聚合 | 按 `batch` 分组统计 `score1` 均值 |
 
+底层仍使用可验证的结构化 Core 契约执行操作；它不是面向用户的编辑格式。
 所有操作在 GUI 中组合为操作序列，一次执行。派生列表达式通过安全解析器验证：
 - **白名单运算符**：`+`, `-`, `*`, `/`, `==`, `!=`, `>`, `>=`, `<`, `<=`, `and`, `or`, `not`
 - **白名单函数**：`abs`, `round`, `isna`, `notna`, `fillna`, `contains`, `startswith`, `endswith`, `isin`
@@ -331,8 +359,11 @@ easyqc/
 ## 测试
 
 ```bash
-# 运行全部测试
-.venv/bin/python -m pytest
+# 完整/发布测试：非 GUI、tkinter、Qt 分别运行在独立进程
+.venv/bin/python scripts/run_test_matrix.py
+
+# 单进程 pytest 仅用于本地诊断（无显示器 Linux 需提供虚拟 X）
+xvfb-run -a .venv/bin/python -m pytest
 
 # 运行特定模块测试
 .venv/bin/python -m pytest tests/test_core/
@@ -341,13 +372,21 @@ easyqc/
 .venv/bin/python -m pytest -v
 ```
 
+测试矩阵会完整执行三个分组；任一分组失败都会返回非零状态，但不会阻止后续
+分组运行。无显示器的 Linux 环境只为 tkinter 分组调用 `xvfb-run`，Qt 分组
+显式使用 offscreen 平台，从而避免迁移期在同一 Python 进程混用两个 GUI
+runtime。普通 `pytest` 保留为诊断手段，不作为双 GUI 迁移期的完整发布证据。
+
 测试覆盖：核心服务（项目 CRUD、评分聚合、命令执行、表格转换）、数据模型序列化/反序列化、输入验证、GUI 状态适配、旧版数据兼容性。
 
 ---
 
-## 打包为独立可执行文件
+## 打包为自带 Python 运行时的可执行目录
 
-EasyQC 支持通过 PyInstaller 打包为**零依赖的独立可执行文件**，用户无需安装 Python 或任何依赖。
+EasyQC 支持通过 PyInstaller 打包为自带 Python、PySide6、pandas、NumPy 的
+`onedir` 目录。用户无需另装 Python 包；Ubuntu 22.04 x86_64 基线产物还会
+显式携带经过固定哈希验证的 `libxcb-cursor0` 运行库。其他系统依赖仍由最终
+产物的 `ldd` 与原生 smoke 门禁判定，不能据此扩展为“所有 Linux”兼容声明。
 
 ### 打包流程
 
@@ -356,11 +395,19 @@ EasyQC 支持通过 PyInstaller 打包为**零依赖的独立可执行文件**�
 pip install -r requirements.txt
 pip install pyinstaller
 
-# 2. 一键打包（所有平台通用）
-python build.py                    # 打包当前平台
-python build.py --clean            # 清理后重新打包
-python build.py --version 1.0.0    # 指定版本号
+# 2a. Linux x86_64：调用方先取得官方 Ubuntu Jammy deb，然后显式传入
+python build.py --linux-cursor-deb /path/to/libxcb-cursor0_0.1.1-4ubuntu1_amd64.deb
+python build.py --clean --linux-cursor-deb /path/to/libxcb-cursor0_0.1.1-4ubuntu1_amd64.deb
+
+# 2b. macOS / Windows：在对应原生平台打包
+python build.py
+python build.py --version 1.0.0
 ```
+
+`build.py` 不下载、不安装这个 deb，也不使用 `sudo`。Linux 构建会先校验固定
+大小、deb SHA-256、Package/Version/Architecture，再解包到受控 build
+sysroot；PyInstaller 只能接收验证后的 `libxcb-cursor.so.0`。产物还必须包含
+`THIRD_PARTY_LICENSES/xcb-util-cursor.txt` 与确定性的 provenance 记录。
 
 > PyInstaller 只能为**当前平台**打包。要获得 Linux/macOS/Windows 的包，请在各自平台上分别运行 `python build.py`。
 
@@ -368,11 +415,18 @@ python build.py --version 1.0.0    # 指定版本号
 
 | 平台 | 产物 | 大小 |
 |---|---|---|
-| **Linux** | `dist/EasyQC-v1.0.0-linux-x86_64/EasyQC` | ~300 MB |
-| **macOS** | `dist/EasyQC-v1.0.0-macos-arm64/EasyQC.app` | ~300 MB |
-| **Windows** | `dist/EasyQC-v1.0.0-windows-AMD64/EasyQC.exe` | ~300 MB |
+| **Linux** | `dist/EasyQC-v1.0.0-linux-x86_64/EasyQC` | 533.219 MiB（当前 diagnostic 实测，非发布阈值） |
+| **macOS** | `dist/EasyQC-v1.0.0-macos-arm64/EasyQC.app` | 待原生构建记录 |
+| **Windows** | `dist/EasyQC-v1.0.0-windows-AMD64/EasyQC.exe` | 待原生构建记录 |
 
-产物目录**可直接复制**到同平台其他机器运行，无需安装 Python 或任何依赖。打包自包含 Python 解释器、pandas 和 numpy。
+产物目录可复制到同平台、兼容系统库的机器运行，无需安装 Python 或 Python
+包。`build.py` 会验证最终 cursor 哈希、MIT/X notice、provenance、精确的
+platformdirs 4.10.1 metadata/notice 与 `libqxcb.so` 的产物内 `ldd` 闭包，再
+运行 `--help`、offscreen 以及 Linux native xcb Qt Preview 事件循环 smoke；
+运行时会主动移除外部 `LD_LIBRARY_PATH`。打包 smoke 前后完整 artifact
+manifest 必须一致；出现 `_internal/logs/` 或任何其他候选产物变化都会直接
+失败，不会通过事后删除伪装成干净产物。Windows/macOS 不能由 Linux 交叉构建
+或代验。
 
 ### 技术说明
 
@@ -380,12 +434,18 @@ python build.py --version 1.0.0    # 指定版本号
 - **GUI 应用**：`console=False`，Windows 下双击启动不显示命令行窗口
 - **外部查看器**：需用户单独安装（FreeSurfer freeview、wb_view 等），打包文件不包含它们
 - **项目文件**：`projects.json`、项目目录、日志等运行时数据不打包在内，由用户运行时动态创建
+- **运行时日志**：默认写入操作系统的用户日志目录；文件日志不可用时继续 QC，并由当前 GUI 显示一次明确警告
+- **迁移期默认入口**：仍为 tkinter；Qt 完成 Table/QC/配置和三平台验证后才切换默认值
 
 ---
 
 ## 许可证
 
-MIT License — 详见 [LICENSE](LICENSE)。
+EasyQC 源码使用 MIT License，详见 [LICENSE](LICENSE)。分发包中的
+PySide6/Qt、PyInstaller 等第三方组件保留各自许可证；公开发布前必须附带
+第三方许可证清单并完成 LGPLv3 合规复核。Linux 基线包已为
+`xcb-util-cursor` 附带完整 MIT/X notice 和固定来源记录；这不替代整个包的
+第三方许可证总清单。
 
 ## 引用
 

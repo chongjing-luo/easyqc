@@ -24,6 +24,40 @@ source .venv/bin/activate
 python easyqc.py
 ```
 
+### PySide6/Qt 渐进迁移
+
+迁移期间默认界面仍为已验证的 tkinter 实现。新的 Qt 路径必须显式选择：
+
+```bash
+python easyqc.py --ui qt-preview
+```
+
+当前 Preview 已提供“共享 Core 服务 → 完整数据筛选/多列排序 → 有界行窗口 →
+QAbstractTableModel/QTableView”的专业只读 Table 工作区。Filter/Sort/Columns
+均为类型化可视控件，不再以 JSON 作为用户输入界面；同时包含固定 `ezqcid`、
+计数、分页、精确查找、稳定选择和 QC 身份安全门。Qt 的 Table、QC 与项目配置
+已通过同一个共享 Core 上下文接通真实项目；仍保持显式 Preview，是因为完整
+第三方组件清单、三平台原生包和人工可访问性门禁尚未完成，而不是缺少产品路由。
+需要恢复当前生产界面时使用：
+
+```bash
+python easyqc.py --ui tk
+```
+
+该切换不转换项目文件；JSON/CSV 与完整旧版评分 payload 始终是权威事实。
+Qt 在 Table、QC、配置、打包及真机验证全部通过前不会成为默认入口。
+
+Linux 使用 Qt Preview 或构建 Qt 包前，Ubuntu/Debian 需要：
+
+```bash
+sudo apt install libxcb-cursor0
+./setup.sh --check
+```
+
+当前 50,000×300 合成表的 pandas query/window 基准为 p95 122.630 ms，低于
+300 ms 门禁；进程峰值 RSS 573.805 MiB，仍作为容量风险保留。Polars/Arrow
+条件后端因此暂不启用。
+
 如果已经完成安装，也可以：
 
 ```bash
@@ -83,7 +117,8 @@ easyqc_<PROJECT>/
 
 ## 4. 表格转换变化
 
-新版不再依赖外部 SQL 查询引擎。主线表格处理改为 JSON 结构化操作，由 `TableTransformEngine` 执行。
+新版不再依赖外部 SQL 查询引擎。用户界面使用类型化条件和操作控件；内部由
+`TableTransformEngine` 接收结构化操作契约执行，用户不需要编辑 JSON。
 
 支持的主要操作：
 
@@ -97,7 +132,7 @@ easyqc_<PROJECT>/
 
 兼容策略：
 
-- 推荐新规则使用 JSON。
+- 新规则通过 GUI 构建；JSON 仅是内部兼容/传输契约，不是用户编辑界面。
 - 简单旧文本 `SELECT * FROM df WHERE ...` 会被窄范围转换为结构化筛选。
 - 复杂 SQL 不兼容，包括 `JOIN`、`GROUP BY`、子查询、分号多语句、任意非 `SELECT * FROM df` 查询。
 - 不恢复 SQL 执行引擎，也不重新引入相关依赖。
@@ -128,7 +163,7 @@ easyqc_<PROJECT>/
 - 不要从 `easyqc_back/` 启动真实项目。
 - 不要在 `easyqc_back/` 中修复 bug 或新增功能。
 - 不要手工编辑评分 JSON 文件名，评分读取会校验文件名、目录和 JSON 内容是否一致。
-- 不要把复杂 SQL 当作新版表格处理入口；请改写为 JSON 结构化规则。
+- 不要把复杂 SQL 或 JSON 当作新版筛选入口；请使用类型化可视 Filter Builder。
 
 ---
 
