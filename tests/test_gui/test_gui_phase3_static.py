@@ -67,6 +67,8 @@ def test_cli_entrypoint_hides_root_window_for_qcpage_launch() -> None:
     source = inspect.getsource(entrypoint.open_qcpage_from_shell)
     assert "cli_root = tk.Tk()" in source
     assert "cli_root.withdraw()" in source
+    assert source.count("schedule_tk_startup_warning(") == 1
+    assert "get_logging_status().warning_message" in source
     assert "cli_root.mainloop()" in source
     assert "qcpage_instance.gui_qcpage.mainloop()" not in source
     assert 'protocol("WM_DELETE_WINDOW", close_cli_qcpage)' in source
@@ -97,8 +99,7 @@ def test_gui_app_owns_root_creation_and_shutdown_protocol() -> None:
 
 def test_gui_app_builds_services_context_for_legacy_main_window() -> None:
     init_source = inspect.getsource(gui_app.EasyQCApp.__init__)
-    assert "AppServices(" in init_source
-    assert "self.services = AppServices(" in init_source
+    assert "self.services = build_app_services(" in init_source
     assert "LegacyEasyQCApp(self.root, services=self.services)" in init_source
 
 
@@ -1050,9 +1051,12 @@ def test_gui_app_builds_shared_event_bus_and_injects_into_project_service() -> N
     """P1-D: the app wrapper builds ONE shared EventBus, passes it to
     ProjectService (so service emissions reach GUI subscribers), and stores it
     in AppServices."""
-    init_source = inspect.getsource(gui_app.EasyQCApp.__init__)
-    assert "EventBus(" in init_source
-    assert "event_bus=" in init_source or "event_bus =" in init_source
+    from core import app_services
+
+    factory_source = inspect.getsource(app_services.build_app_services)
+    assert "EventBus(" in factory_source
+    assert "event_bus=" in factory_source or "event_bus =" in factory_source
+    assert "event_bus=event_bus" in factory_source
 
 
 def test_main_window_subscribes_project_and_modules_events_in_init() -> None:

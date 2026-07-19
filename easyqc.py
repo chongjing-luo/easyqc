@@ -19,9 +19,9 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 # 导入日志系统
-from utils.logger import log_info, log_error, log_warning, log_exception, log_debug, LogContext, log_function, clear_old_logs
+from utils.logger import log_info, log_error, log_warning, log_exception, log_debug, LogContext, log_function, clear_old_logs, get_logging_status
 
-def parse_arguments():
+def parse_arguments(argv=None):
     """
     解析命令行参数
     """
@@ -42,12 +42,19 @@ def parse_arguments():
     )
     
     parser.add_argument(
+        '--ui',
+        choices=('tk', 'qt-preview'),
+        default='tk',
+        help='界面实现：tk（当前默认）或 qt-preview（迁移预览）',
+    )
+
+    parser.add_argument(
         'args', 
         nargs='*', 
         help='可选参数：project module rater ezqcid'
     )
     
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 @log_function("EasyQC")
 def open_qcpage_from_shell(project, module, rater, ezqcid):
@@ -64,6 +71,7 @@ def open_qcpage_from_shell(project, module, rater, ezqcid):
         from core.project_service import ProjectService
         from core.table_service import TableService
         from core.session_state import SessionState
+        from gui.app import schedule_tk_startup_warning
         from gui.gui_qcpage import gui_qcpage
         from gui.qc_page import QCPageRuntimeContext
         launch_context = resolve_qcpage_launch(
@@ -101,6 +109,10 @@ def open_qcpage_from_shell(project, module, rater, ezqcid):
         # CLI 模式没有主窗口；显式创建并隐藏 root，避免 Toplevel 触发 tkinter 隐式空白根窗口。
         cli_root = tk.Tk()
         cli_root.withdraw()
+        schedule_tk_startup_warning(
+            cli_root,
+            get_logging_status().warning_message,
+        )
 
         # 创建QC页面实例
         qcpage_instance = gui_qcpage()
@@ -189,14 +201,25 @@ def open_qcpage_from_shell(project, module, rater, ezqcid):
         return False
 
 @log_function("EasyQC")
-def main():
+def main(argv=None):
     """
     主启动函数
     负责初始化和启动EasyQC应用程序
     """
     try:
         # 解析命令行参数
-        args = parse_arguments()
+        args = parse_arguments(argv)
+
+        if args.ui == 'qt-preview':
+            if args.args:
+                print("错误：Qt Preview 当前不接受直接 QC 的位置参数")
+                return 2
+            from gui_qt.application import launch_qt_preview
+
+            log_info("启动显式 Qt Preview（tkinter 仍为默认入口）")
+            clear_old_logs()
+            launch_argv = sys.argv if argv is None else [sys.argv[0], *argv]
+            return launch_qt_preview(launch_argv, registry_path=project_root / "projects.json")
         
         # 检查是否有4个参数（project, module, rater, ezqcid）
         if len(args.args) == 4:
@@ -207,7 +230,7 @@ def main():
             success = open_qcpage_from_shell(project, module, rater, ezqcid)
             if not success:
                 sys.exit(1)
-            return
+            return 0
         elif len(args.args) > 0:
             print("错误：参数数量不正确")
             print("用法：python3 easyqc.py [project module rater ezqcid]")
@@ -242,4 +265,4 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

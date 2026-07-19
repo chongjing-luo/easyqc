@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
+
+# Qt tests must be safe to run individually on headless CI/workstations. This
+# test-only default is applied before pytest-qt creates QApplication; product
+# launch never imports tests/conftest.py and therefore keeps the real platform.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
