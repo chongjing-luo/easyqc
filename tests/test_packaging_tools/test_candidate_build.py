@@ -251,20 +251,40 @@ def _install_mock_build(
         "_release_tool_versions",
         lambda _runtime: {"python": "3.10.17", "pyinstaller": "6.21.0"},
     )
-    monkeypatch.setattr(
-        build_script,
-        "_capture_distribution_metadata",
-        lambda: {
-            "schema": "easyqc-release-distribution-metadata-v1",
-            "distribution_count": 1,
-            "distributions": [
+    def fake_python_component_evidence(
+        artifact,
+        manifest,
+        evidence_index_path,
+        build_dir,
+    ):
+        events.append("python-component-evidence")
+        assert Path(artifact).is_dir()
+        assert manifest.candidate_id == create_artifact_manifest(artifact).candidate_id
+        assert Path(evidence_index_path).is_file()
+        assert Path(build_dir).name == "build"
+        return {
+            "schema": "easyqc-release-distribution-metadata-v2",
+            "collect_entry_count": 1,
+            "component_count": 0,
+            "assigned_collected_entry_count": 0,
+            "unassigned_collected_entry_count": 1,
+            "components": [],
+            "unassigned_collected_entries": [
                 {
-                    "canonical_name": "fixture",
-                    "name": "fixture",
-                    "version": "1.0.0",
+                    "entry_type": "regular-file",
+                    "final_path": "EasyQC",
+                    "raw_source_text_sha256": "a" * 64,
+                    "source_identity": {"entry_type": "unavailable"},
+                    "source_locator": "unassigned-source/" + "a" * 64,
+                    "toc_type": "EXECUTABLE",
                 }
             ],
-        },
+        }
+
+    monkeypatch.setattr(
+        build_script,
+        "capture_python_component_evidence",
+        fake_python_component_evidence,
     )
 
     def fake_pyinstaller(
@@ -340,7 +360,7 @@ def test_build_candidate_finalizes_retains_and_publishes_receipt_last(
     assert retained_policy["rules"][0]["notice_paths"] == [
         "THIRD_PARTY_LICENSES/fixture.txt"
     ]
-    assert events == ["pyinstaller", "manifest"]
+    assert events == ["pyinstaller", "manifest", "python-component-evidence"]
 
     build_dir = packet_root / "build"
     assert not (build_dir / "source").exists()
@@ -362,6 +382,12 @@ def test_build_candidate_finalizes_retains_and_publishes_receipt_last(
         "COLLECT",
     ]
     assert evidence_index["warning"]["disposition"] == "RETAINED_REVIEW_REQUIRED"
+    distribution_metadata = json.loads(
+        (build_dir / "distribution-metadata.json").read_text(encoding="utf-8")
+    )
+    assert distribution_metadata["schema"] == (
+        "easyqc-release-distribution-metadata-v2"
+    )
     receipt_path = build_dir / "build-receipt.json"
     receipt_payload = json.loads(receipt_path.read_text(encoding="utf-8"))
     assert receipt_payload == receipt.as_json_object()
@@ -590,6 +616,368 @@ def test_distribution_metadata_capture_is_canonical_and_deterministic() -> None:
     assert first["distribution_count"] == len(first["distributions"])
     assert canonical_json_bytes(first) == canonical_json_bytes(second)
     assert str(Path(sys.prefix)) not in canonical_json_bytes(first).decode("utf-8")
+
+
+def _path_distribution(
+    site: Path,
+    *,
+    name: str,
+    version: str,
+    owned_module: str,
+) -> object:
+    dist_info = site / f"{name}-{version}.dist-info"
+    metadata = (
+        "Metadata-Version: 2.4\n"
+        f"Name: {name}\n"
+        f"Version: {version}\n"
+        "Author: Demo Provider\n"
+        "Author-email: qc@example.invalid\n"
+        "License-Expression: MIT\n"
+        "License-File: LICENSE\n"
+        "Classifier: License :: OSI Approved :: MIT License\n"
+        "Requires-Python: >=3.10\n"
+        "\n"
+    ).encode()
+    _write(dist_info / "METADATA", metadata)
+    _write(dist_info / "LICENSE", b"Demo retained MIT license\n")
+    _write(
+        dist_info / "RECORD",
+        (
+            f"{owned_module},,\n"
+            f"{dist_info.name}/LICENSE,,\n"
+            f"{dist_info.name}/METADATA,,\n"
+            f"{dist_info.name}/RECORD,,\n"
+        ).encode(),
+    )
+    return build_script.importlib_metadata.PathDistribution(dist_info)
+
+
+def _python_capture_packet(
+    packet_root: Path,
+    *,
+    owned_source: Path,
+    unowned_source: Path,
+    owned_toc_type: str = "DATA",
+    warning_bytes: bytes = b"fixture warning\n",
+) -> tuple[Path, object, Path, Path]:
+    artifact = packet_root / "artifact/EasyQC-fixture"
+    _write(artifact / "_internal/demo.py", owned_source.read_bytes())
+    _write(artifact / "EasyQC", b"fixture executable\n").chmod(0o755)
+    manifest = create_artifact_manifest(artifact)
+
+    build_dir = packet_root / "build"
+    work = build_dir / "pyinstaller-work/easyqc"
+    for name in REQUIRED_TOCS:
+        content = b"[]\n"
+        if name == "COLLECT-00.toc":
+            content = repr(
+                ([
+                    ("demo.py", str(owned_source), owned_toc_type),
+                    ("EasyQC", str(unowned_source), "EXECUTABLE"),
+                ],)
+            ).encode()
+        _write(work / name, content)
+    _write(work / "warn-easyqc.txt", warning_bytes)
+    evidence_index = build_script.retain_pyinstaller_evidence(
+        build_dir / "pyinstaller-work",
+        build_dir,
+    )
+    return artifact, manifest, evidence_index, build_dir
+
+
+def test_python_component_evidence_is_artifact_aligned_private_and_deterministic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site = tmp_path / "site"
+    owned_source = _write(site / "demo.py", b"DEMO = 1\n")
+    unowned_source = _write(tmp_path / "generated/EasyQC", b"generated\n")
+    distribution = _path_distribution(
+        site,
+        name="demo",
+        version="1.0",
+        owned_module="demo.py",
+    )
+    monkeypatch.setattr(
+        build_script.importlib_metadata,
+        "distributions",
+        lambda: [distribution],
+    )
+
+    first_packet = _python_capture_packet(
+        tmp_path / "first/packet",
+        owned_source=owned_source,
+        unowned_source=unowned_source,
+    )
+    second_packet = _python_capture_packet(
+        tmp_path / "second/packet",
+        owned_source=owned_source,
+        unowned_source=unowned_source,
+    )
+    first = build_script.capture_python_component_evidence(*first_packet)
+    second = build_script.capture_python_component_evidence(*second_packet)
+
+    assert first["schema"] == "easyqc-release-distribution-metadata-v2"
+    assert first["collect_entry_count"] == 2
+    assert first["component_count"] == 1
+    assert first["assigned_collected_entry_count"] == 1
+    assert first["unassigned_collected_entry_count"] == 1
+    assert canonical_json_bytes(first) == canonical_json_bytes(second)
+    assert str(tmp_path).encode() not in canonical_json_bytes(first)
+
+    component = first["components"][0]
+    assert component["component_id"] == "library:demo@1.0"
+    assert component["provider_candidates"] == [
+        {"field": "Author", "value": "Demo Provider"},
+        {"field": "Author-email", "value": "qc@example.invalid"},
+    ]
+    assert component["license_candidates"] == {
+        "classifiers": ["License :: OSI Approved :: MIT License"],
+        "expression": "MIT",
+        "field_first_line": None,
+    }
+    assert len(component["collected_files"]) == 1
+    collected = component["collected_files"][0]
+    assert collected["final_path"] == "_internal/demo.py"
+    assert collected["distribution_path"] == "demo.py"
+    assert collected["source_locator"] == "python-distribution/demo/demo.py"
+    assert collected["source_identity"]["sha256"] == sha256_file(owned_source)
+
+    license_reference = component["license_files"][0]
+    retained_license = first_packet[3].parent / license_reference["retained_path"]
+    assert retained_license.read_bytes() == b"Demo retained MIT license\n"
+    assert license_reference["sha256"] == sha256_file(retained_license)
+    assert first["unassigned_collected_entries"][0]["final_path"] == "EasyQC"
+
+
+@pytest.mark.parametrize("owner_problem", ["duplicate", "ambiguous"])
+def test_python_component_evidence_rejects_duplicate_or_ambiguous_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    owner_problem: str,
+) -> None:
+    site = tmp_path / "site"
+    owned_source = _write(site / "demo.py", b"DEMO = 1\n")
+    unowned_source = _write(tmp_path / "generated/EasyQC", b"generated\n")
+    first = _path_distribution(
+        site,
+        name="demo",
+        version="1.0",
+        owned_module="demo.py",
+    )
+    distributions = [first]
+    if owner_problem == "duplicate":
+        record_path = site / "demo-1.0.dist-info/RECORD"
+        _write(record_path, record_path.read_bytes() + b"demo.py,,\n")
+    else:
+        distributions.append(
+            _path_distribution(
+                site,
+                name="other-demo",
+                version="2.0",
+                owned_module="demo.py",
+            )
+        )
+    monkeypatch.setattr(
+        build_script.importlib_metadata,
+        "distributions",
+        lambda: distributions,
+    )
+    packet = _python_capture_packet(
+        tmp_path / "packet",
+        owned_source=owned_source,
+        unowned_source=unowned_source,
+    )
+
+    with pytest.raises(
+        ReleaseContractError,
+        match=f"{owner_problem} Python distribution",
+    ):
+        build_script.capture_python_component_evidence(*packet)
+
+    assert not (packet[3] / "distribution-metadata.json").exists()
+
+
+def test_python_component_evidence_rejects_symlinked_license_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site = tmp_path / "site"
+    owned_source = _write(site / "demo.py", b"DEMO = 1\n")
+    unowned_source = _write(tmp_path / "generated/EasyQC", b"generated\n")
+    distribution = _path_distribution(
+        site,
+        name="demo",
+        version="1.0",
+        owned_module="demo.py",
+    )
+    license_path = site / "demo-1.0.dist-info/LICENSE"
+    outside_license = _write(tmp_path / "outside-license.txt", b"outside\n")
+    license_path.unlink()
+    try:
+        license_path.symlink_to(outside_license)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks are unavailable on this platform: {exc}")
+    monkeypatch.setattr(
+        build_script.importlib_metadata,
+        "distributions",
+        lambda: [distribution],
+    )
+    packet = _python_capture_packet(
+        tmp_path / "packet",
+        owned_source=owned_source,
+        unowned_source=unowned_source,
+    )
+
+    with pytest.raises(ReleaseContractError, match="unsafe symlink"):
+        build_script.capture_python_component_evidence(*packet)
+
+    assert not (packet[3] / "distribution-metadata.json").exists()
+
+
+def test_python_component_evidence_rejects_symlinked_license_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site = tmp_path / "site"
+    owned_source = _write(site / "demo.py", b"DEMO = 1\n")
+    unowned_source = _write(tmp_path / "generated/EasyQC", b"generated\n")
+    distribution = _path_distribution(
+        site,
+        name="demo",
+        version="1.0",
+        owned_module="demo.py",
+    )
+    outside = tmp_path / "outside"
+    _write(outside / "LICENSE", b"must not be retained\n")
+    try:
+        (site / "linked").symlink_to(outside, target_is_directory=True)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks are unavailable on this platform: {exc}")
+    record_path = site / "demo-1.0.dist-info/RECORD"
+    _write(
+        record_path,
+        record_path.read_bytes().replace(
+            b"demo-1.0.dist-info/LICENSE,,\n",
+            b"linked/LICENSE,,\n",
+        ),
+    )
+    monkeypatch.setattr(
+        build_script.importlib_metadata,
+        "distributions",
+        lambda: [distribution],
+    )
+    packet = _python_capture_packet(
+        tmp_path / "packet",
+        owned_source=owned_source,
+        unowned_source=unowned_source,
+    )
+
+    with pytest.raises(ReleaseContractError, match="unsafe symlink"):
+        build_script.capture_python_component_evidence(*packet)
+
+    assert not list((packet[3] / "evidence/python-distributions").rglob("LICENSE"))
+
+
+def test_python_component_evidence_rejects_distribution_parent_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site = tmp_path / "site"
+    owned_source = _write(site / "nested/demo.py", b"DEMO = 1\n")
+    unowned_source = _write(tmp_path / "generated/EasyQC", b"generated\n")
+    outside = tmp_path / "outside"
+    _write(outside / "demo.py", b"DEMO = 1\n")
+    distribution = _path_distribution(
+        site,
+        name="demo",
+        version="1.0",
+        owned_module="nested/demo.py",
+    )
+    monkeypatch.setattr(
+        build_script.importlib_metadata,
+        "distributions",
+        lambda: [distribution],
+    )
+    packet = _python_capture_packet(
+        tmp_path / "packet",
+        owned_source=owned_source,
+        unowned_source=unowned_source,
+    )
+    original_open = build_script.os.open
+    swapped = False
+
+    def swap_parent_before_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        if path == "nested" and dir_fd is not None and not swapped:
+            swapped = True
+            (site / "nested").rename(site / "original-nested")
+            (site / "nested").symlink_to(outside, target_is_directory=True)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(build_script.os, "open", swap_parent_before_open)
+
+    with pytest.raises(ReleaseContractError, match="unsafe symlink"):
+        build_script.capture_python_component_evidence(*packet)
+
+
+def test_python_component_evidence_rejects_unsupported_collect_type(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site = tmp_path / "site"
+    owned_source = _write(site / "demo.py", b"DEMO = 1\n")
+    unowned_source = _write(tmp_path / "generated/EasyQC", b"generated\n")
+    distribution = _path_distribution(
+        site,
+        name="demo",
+        version="1.0",
+        owned_module="demo.py",
+    )
+    monkeypatch.setattr(
+        build_script.importlib_metadata,
+        "distributions",
+        lambda: [distribution],
+    )
+    packet = _python_capture_packet(
+        tmp_path / "packet",
+        owned_source=owned_source,
+        unowned_source=unowned_source,
+        owned_toc_type="BOGUS",
+    )
+
+    with pytest.raises(ReleaseContractError, match="unsupported COLLECT TOC type"):
+        build_script.capture_python_component_evidence(*packet)
+
+
+def test_python_component_evidence_accepts_authenticated_empty_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site = tmp_path / "site"
+    owned_source = _write(site / "demo.py", b"DEMO = 1\n")
+    unowned_source = _write(tmp_path / "generated/EasyQC", b"generated\n")
+    distribution = _path_distribution(
+        site,
+        name="demo",
+        version="1.0",
+        owned_module="demo.py",
+    )
+    monkeypatch.setattr(
+        build_script.importlib_metadata,
+        "distributions",
+        lambda: [distribution],
+    )
+    packet = _python_capture_packet(
+        tmp_path / "packet",
+        owned_source=owned_source,
+        unowned_source=unowned_source,
+        warning_bytes=b"",
+    )
+
+    evidence = build_script.capture_python_component_evidence(*packet)
+
+    assert evidence["schema"] == "easyqc-release-distribution-metadata-v2"
 
 
 def test_build_receipt_rejects_non_pass_or_uncontained_references() -> None:

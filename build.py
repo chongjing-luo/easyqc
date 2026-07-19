@@ -24,6 +24,7 @@ EasyQC 一键打包脚本 — 支持 Linux / macOS / Windows
 """
 
 import argparse
+import ast
 import hashlib
 from importlib import metadata as importlib_metadata
 import json
@@ -33,6 +34,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tarfile
@@ -101,6 +103,7 @@ PLATFORMDIRS_VERSION = "4.10.1"
 PLATFORMDIRS_NOTICE = SCRIPT_DIR / "packaging" / "licenses" / "platformdirs.txt"
 PYINSTALLER_EVIDENCE_SCHEMA = "easyqc-release-pyinstaller-evidence-index-v1"
 DISTRIBUTION_METADATA_SCHEMA = "easyqc-release-distribution-metadata-v1"
+DISTRIBUTION_METADATA_V2_SCHEMA = "easyqc-release-distribution-metadata-v2"
 COMPONENT_POLICY_SCHEMA = "easyqc-component-policy-v1"
 _REQUIRED_PYINSTALLER_TOC_KINDS = (
     "Analysis",
@@ -109,10 +112,19 @@ _REQUIRED_PYINSTALLER_TOC_KINDS = (
     "EXE",
     "COLLECT",
 )
+_PYINSTALLER_COLLECT_TYPES = frozenset(
+    {"BINARY", "DATA", "EXECUTABLE", "EXTENSION", "SYMLINK"}
+)
+_PYINSTALLER_WARNING_DISPOSITIONS = frozenset(
+    {"RETAINED_NO_WARNINGS", "RETAINED_REVIEW_REQUIRED"}
+)
+_SUPPORTS_OPENAT = os.open in os.supports_dir_fd and hasattr(os, "O_DIRECTORY")
 _LICENSE_FILE_PATTERN = re.compile(
     r"(^|/)(licen[cs]e|copying|notice|authors?|copyright)([._-]|$)",
     re.IGNORECASE,
 )
+_DISTRIBUTION_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+!-]*$")
+_MAX_RETAINED_TOC_BYTES = 16 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -1122,6 +1134,782 @@ def _capture_distribution_metadata() -> dict[str, object]:
     }
 
 
+def _raw_source_text_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _source_identity(path: Path, label: str) -> dict[str, object]:
+    """Return a no-follow identity for one regular source file."""
+
+    try:
+        before = Path(path).lstat()
+    except OSError as exc:
+        raise ReleaseContractError(f"cannot inspect {label}: {exc}") from exc
+    if stat.S_ISLNK(before.st_mode):
+        raise ReleaseContractError(f"{label} is an unsafe symlink")
+    if not stat.S_ISREG(before.st_mode):
+        raise ReleaseContractError(f"{label} is not a regular file")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ReleaseContractError(f"cannot open {label} without following links: {exc}") from exc
+    identity_fields = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")
+    try:
+        stream = os.fdopen(descriptor, "rb")
+        descriptor = -1
+        with stream:
+            opened = os.fstat(stream.fileno())
+            if not stat.S_ISREG(opened.st_mode) or any(
+                getattr(before, field) != getattr(opened, field)
+                for field in identity_fields
+            ):
+                raise ReleaseContractError(f"{label} changed before it was opened")
+            digest_builder = hashlib.sha256()
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest_builder.update(chunk)
+            after_read = os.fstat(stream.fileno())
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    try:
+        after_path = Path(path).lstat()
+    except OSError as exc:
+        raise ReleaseContractError(f"cannot re-inspect {label}: {exc}") from exc
+    if any(
+        getattr(opened, field) != getattr(after_read, field)
+        or getattr(opened, field) != getattr(after_path, field)
+        for field in identity_fields
+    ):
+        raise ReleaseContractError(f"{label} changed while evidence was captured")
+    return {
+        "entry_type": "regular-file",
+        "sha256": digest_builder.hexdigest(),
+        "size": opened.st_size,
+    }
+
+
+def _open_distribution_regular_file(
+    distribution: importlib_metadata.Distribution,
+    distribution_path: str,
+    located_path: Path,
+    label: str,
+) -> int:
+    """Open one distribution-relative file without following any path link."""
+
+    relative = _canonical_relative_path(distribution_path, label)
+    root = Path(os.path.abspath(os.fspath(distribution.locate_file(""))))
+    try:
+        root_metadata = root.lstat()
+    except OSError as exc:
+        raise ReleaseContractError(f"cannot inspect {label} root: {exc}") from exc
+    if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(root_metadata.st_mode):
+        raise ReleaseContractError(f"{label} root is not a real directory")
+    expected_path = root.joinpath(*relative.parts)
+    if _host_source_key(expected_path) != _host_source_key(located_path):
+        raise ReleaseContractError(f"{label} locate_file result is inconsistent")
+
+    file_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    if _SUPPORTS_OPENAT:
+        directory_flags = file_flags | os.O_DIRECTORY
+        try:
+            current_descriptor = os.open(root, directory_flags)
+        except OSError as exc:
+            raise ReleaseContractError(f"cannot open {label} root: {exc}") from exc
+        try:
+            opened_root = os.fstat(current_descriptor)
+            if (
+                not stat.S_ISDIR(opened_root.st_mode)
+                or (opened_root.st_dev, opened_root.st_ino)
+                != (root_metadata.st_dev, root_metadata.st_ino)
+            ):
+                raise ReleaseContractError(f"{label} root changed while opening")
+            for part in relative.parts[:-1]:
+                try:
+                    next_descriptor = os.open(
+                        part,
+                        directory_flags,
+                        dir_fd=current_descriptor,
+                    )
+                except OSError as exc:
+                    raise ReleaseContractError(
+                        f"{label} parent is missing, changed, or an unsafe symlink: {part}"
+                    ) from exc
+                next_metadata = os.fstat(next_descriptor)
+                if not stat.S_ISDIR(next_metadata.st_mode):
+                    os.close(next_descriptor)
+                    raise ReleaseContractError(f"{label} parent is not a directory")
+                os.close(current_descriptor)
+                current_descriptor = next_descriptor
+            try:
+                descriptor = os.open(
+                    relative.parts[-1],
+                    file_flags,
+                    dir_fd=current_descriptor,
+                )
+            except OSError as exc:
+                raise ReleaseContractError(
+                    f"{label} is missing, changed, or an unsafe symlink"
+                ) from exc
+        finally:
+            os.close(current_descriptor)
+    else:
+        current = root
+        final_metadata: os.stat_result | None = None
+        for index, part in enumerate(relative.parts):
+            current = current / part
+            try:
+                metadata = current.lstat()
+            except OSError as exc:
+                raise ReleaseContractError(f"cannot inspect {label}: {exc}") from exc
+            if stat.S_ISLNK(metadata.st_mode):
+                raise ReleaseContractError(f"{label} contains an unsafe symlink")
+            if index < len(relative.parts) - 1 and not stat.S_ISDIR(
+                metadata.st_mode
+            ):
+                raise ReleaseContractError(f"{label} parent is not a directory")
+            final_metadata = metadata
+        try:
+            descriptor = os.open(current, file_flags)
+        except OSError as exc:
+            raise ReleaseContractError(f"cannot open {label}: {exc}") from exc
+        opened = os.fstat(descriptor)
+        if final_metadata is None or (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_mode,
+        ) != (
+            final_metadata.st_dev,
+            final_metadata.st_ino,
+            final_metadata.st_mode,
+        ):
+            os.close(descriptor)
+            raise ReleaseContractError(f"{label} changed while opening")
+
+    opened_file = os.fstat(descriptor)
+    if not stat.S_ISREG(opened_file.st_mode):
+        os.close(descriptor)
+        raise ReleaseContractError(f"{label} is not a regular file")
+    return descriptor
+
+
+def _descriptor_identity(descriptor: int, label: str) -> dict[str, object]:
+    before = os.fstat(descriptor)
+    try:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        digest = hashlib.sha256()
+        for chunk in iter(lambda: os.read(descriptor, 1024 * 1024), b""):
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+    except OSError as exc:
+        raise ReleaseContractError(f"cannot hash {label}: {exc}") from exc
+    identity_fields = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")
+    if any(getattr(before, field) != getattr(after, field) for field in identity_fields):
+        raise ReleaseContractError(f"{label} changed while evidence was captured")
+    return {
+        "entry_type": "regular-file",
+        "sha256": digest.hexdigest(),
+        "size": before.st_size,
+    }
+
+
+def _revalidate_distribution_descriptor(
+    distribution: importlib_metadata.Distribution,
+    distribution_path: str,
+    located_path: Path,
+    expected_descriptor: os.stat_result,
+    label: str,
+) -> None:
+    descriptor = _open_distribution_regular_file(
+        distribution,
+        distribution_path,
+        located_path,
+        label,
+    )
+    try:
+        observed = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if (observed.st_dev, observed.st_ino) != (
+        expected_descriptor.st_dev,
+        expected_descriptor.st_ino,
+    ):
+        raise ReleaseContractError(f"{label} changed after evidence capture")
+
+
+def _distribution_source_identity(
+    distribution: importlib_metadata.Distribution,
+    distribution_path: str,
+    located_path: Path,
+    label: str,
+) -> dict[str, object]:
+    descriptor = _open_distribution_regular_file(
+        distribution,
+        distribution_path,
+        located_path,
+        label,
+    )
+    try:
+        opened = os.fstat(descriptor)
+        identity = _descriptor_identity(descriptor, label)
+    finally:
+        os.close(descriptor)
+    _revalidate_distribution_descriptor(
+        distribution,
+        distribution_path,
+        located_path,
+        opened,
+        label,
+    )
+    return identity
+
+
+def _copy_distribution_evidence_file(
+    distribution: importlib_metadata.Distribution,
+    distribution_path: str,
+    located_path: Path,
+    destination: Path,
+    label: str,
+) -> dict[str, object]:
+    descriptor = _open_distribution_regular_file(
+        distribution,
+        distribution_path,
+        located_path,
+        label,
+    )
+    try:
+        opened = os.fstat(descriptor)
+        if destination.exists() or destination.is_symlink():
+            raise ReleaseContractError(f"{label} already exists: {destination}")
+        digest = hashlib.sha256()
+        try:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            with destination.open("xb") as writer:
+                for chunk in iter(lambda: os.read(descriptor, 1024 * 1024), b""):
+                    digest.update(chunk)
+                    writer.write(chunk)
+                writer.flush()
+                os.fsync(writer.fileno())
+            after = os.fstat(descriptor)
+        except OSError as exc:
+            raise ReleaseContractError(f"cannot retain {label}: {exc}") from exc
+    finally:
+        os.close(descriptor)
+    identity_fields = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")
+    if any(getattr(opened, field) != getattr(after, field) for field in identity_fields):
+        raise ReleaseContractError(f"{label} changed while it was retained")
+    if sha256_file(destination) != digest.hexdigest():
+        raise ReleaseContractError(f"retained {label} digest mismatch")
+    _revalidate_distribution_descriptor(
+        distribution,
+        distribution_path,
+        located_path,
+        opened,
+        label,
+    )
+    return {
+        "entry_type": "regular-file",
+        "sha256": digest.hexdigest(),
+        "size": opened.st_size,
+    }
+
+
+def _optional_source_identity(raw_source: str) -> dict[str, object]:
+    if not os.path.isabs(raw_source):
+        return {"entry_type": "unavailable"}
+    path = Path(raw_source)
+    try:
+        metadata = path.lstat()
+    except OSError:
+        return {"entry_type": "unavailable"}
+    if stat.S_ISREG(metadata.st_mode):
+        return _source_identity(path, "unassigned COLLECT source")
+    if stat.S_ISLNK(metadata.st_mode):
+        try:
+            target = os.readlink(path)
+        except OSError as exc:
+            raise ReleaseContractError(
+                f"cannot read unassigned COLLECT symlink: {exc}"
+            ) from exc
+        return {
+            "entry_type": "symlink",
+            "size": metadata.st_size,
+            "target_text_sha256": _raw_source_text_sha256(target),
+        }
+    return {"entry_type": "unavailable"}
+
+
+def _retained_evidence_reference(
+    packet_root: Path,
+    row: object,
+    label: str,
+) -> Path:
+    if not isinstance(row, dict) or set(row) != {"path", "sha256"}:
+        raise ReleaseContractError(f"{label} reference fields are invalid")
+    expected = row["sha256"]
+    if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise ReleaseContractError(f"{label} SHA-256 is invalid")
+    path = _contained_regular_file(packet_root, row["path"], label)
+    actual = sha256_file(path)
+    if actual != expected:
+        raise ReleaseContractError(
+            f"{label} SHA-256 mismatch: expected {expected}, got {actual}"
+        )
+    return path
+
+
+def _load_collect_rows_for_capture(
+    evidence_index_path: Path,
+    build_dir: Path,
+    manifest: ArtifactManifest,
+) -> list[dict[str, object]]:
+    build_dir = Path(build_dir)
+    packet_root = build_dir.parent.resolve(strict=True)
+    index_path = Path(evidence_index_path)
+    if index_path.is_symlink() or not index_path.is_file():
+        raise ReleaseContractError("PyInstaller evidence index is not a regular file")
+    try:
+        if (
+            index_path.resolve(strict=True) != index_path
+            or index_path.parent.resolve(strict=True) != build_dir.resolve(strict=True)
+        ):
+            raise ReleaseContractError(
+                "PyInstaller evidence index must be a direct build child"
+            )
+    except OSError as exc:
+        raise ReleaseContractError(
+            f"cannot resolve PyInstaller evidence index: {exc}"
+        ) from exc
+    index = _read_canonical_json_object(index_path, "PyInstaller evidence index")
+    if set(index) != {"schema", "tocs", "warning"}:
+        raise ReleaseContractError("PyInstaller evidence index fields are invalid")
+    if index["schema"] != PYINSTALLER_EVIDENCE_SCHEMA:
+        raise ReleaseContractError("PyInstaller evidence index schema is invalid")
+    toc_rows = index["tocs"]
+    if not isinstance(toc_rows, list) or len(toc_rows) != len(
+        _REQUIRED_PYINSTALLER_TOC_KINDS
+    ):
+        raise ReleaseContractError("PyInstaller evidence must contain five TOCs")
+    retained: dict[str, Path] = {}
+    observed_kinds: list[str] = []
+    for row in toc_rows:
+        if not isinstance(row, dict) or set(row) != {"kind", "path", "sha256"}:
+            raise ReleaseContractError("PyInstaller TOC evidence fields are invalid")
+        kind = row["kind"]
+        if not isinstance(kind, str):
+            raise ReleaseContractError("PyInstaller TOC kind is invalid")
+        observed_kinds.append(kind)
+        retained_path = _retained_evidence_reference(
+            packet_root,
+            {"path": row["path"], "sha256": row["sha256"]},
+            f"{kind} TOC",
+        )
+        if (
+            retained_path.parent
+            != build_dir.resolve(strict=True) / "evidence/pyinstaller"
+            or retained_path.suffix != ".toc"
+        ):
+            raise ReleaseContractError(
+                f"{kind} TOC must be retained below build/evidence/pyinstaller"
+            )
+        retained[kind] = retained_path
+    if observed_kinds != list(_REQUIRED_PYINSTALLER_TOC_KINDS) or len(
+        retained
+    ) != len(observed_kinds):
+        raise ReleaseContractError("PyInstaller TOC kinds/order are invalid")
+    warning = index["warning"]
+    if not isinstance(warning, dict) or set(warning) != {
+        "disposition",
+        "path",
+        "sha256",
+    }:
+        raise ReleaseContractError("PyInstaller warning evidence fields are invalid")
+    if warning["disposition"] not in _PYINSTALLER_WARNING_DISPOSITIONS:
+        raise ReleaseContractError("PyInstaller warning disposition is invalid")
+    warning_path = _retained_evidence_reference(
+        packet_root,
+        {"path": warning["path"], "sha256": warning["sha256"]},
+        "PyInstaller warning evidence",
+    )
+    if warning_path.parent != build_dir.resolve(strict=True) / "evidence/pyinstaller":
+        raise ReleaseContractError(
+            "PyInstaller warning must be retained below build/evidence/pyinstaller"
+        )
+    warning_has_bytes = warning_path.stat().st_size > 0
+    if warning_has_bytes != (
+        warning["disposition"] == "RETAINED_REVIEW_REQUIRED"
+    ):
+        raise ReleaseContractError(
+            "PyInstaller warning disposition disagrees with retained bytes"
+        )
+
+    collect_path = retained["COLLECT"]
+    try:
+        if collect_path.stat().st_size > _MAX_RETAINED_TOC_BYTES:
+            raise ReleaseContractError(
+                f"COLLECT TOC exceeds {_MAX_RETAINED_TOC_BYTES} bytes"
+            )
+        parsed = ast.literal_eval(collect_path.read_text(encoding="utf-8"))
+    except ReleaseContractError:
+        raise
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ReleaseContractError(f"cannot read COLLECT TOC: {exc}") from exc
+    except (MemoryError, RecursionError, SyntaxError, ValueError) as exc:
+        raise ReleaseContractError("COLLECT TOC is not a safe Python literal") from exc
+    if (
+        not isinstance(parsed, tuple)
+        or len(parsed) != 1
+        or not isinstance(parsed[0], list)
+    ):
+        raise ReleaseContractError("COLLECT TOC root shape is invalid")
+
+    manifest_entries = {
+        entry.path: entry
+        for entry in manifest.entries
+        if entry.entry_type != "directory"
+    }
+    records: list[dict[str, object]] = []
+    final_paths: set[str] = set()
+    for raw_row in parsed[0]:
+        if (
+            not isinstance(raw_row, (tuple, list))
+            or len(raw_row) != 3
+            or any(not isinstance(item, str) or not item for item in raw_row)
+        ):
+            raise ReleaseContractError("COLLECT TOC entry is invalid")
+        destination, raw_source, toc_type = raw_row
+        if toc_type not in _PYINSTALLER_COLLECT_TYPES:
+            raise ReleaseContractError(
+                f"unsupported COLLECT TOC type: {toc_type}"
+            )
+        destination_path = _canonical_relative_path(
+            destination,
+            "COLLECT destination",
+        ).as_posix()
+        candidates = [
+            path
+            for path in (destination_path, f"_internal/{destination_path}")
+            if path in manifest_entries
+        ]
+        if len(candidates) != 1:
+            raise ReleaseContractError(
+                f"COLLECT destination has no unique candidate path: {destination_path}"
+            )
+        final_path = candidates[0]
+        if final_path in final_paths:
+            raise ReleaseContractError(f"duplicate COLLECT final path: {final_path}")
+        final_paths.add(final_path)
+        entry_type = "symlink" if toc_type == "SYMLINK" else "regular-file"
+        if manifest_entries[final_path].entry_type != entry_type:
+            raise ReleaseContractError(
+                f"COLLECT entry type disagrees with candidate: {final_path}"
+            )
+        records.append(
+            {
+                "entry_type": entry_type,
+                "final_path": final_path,
+                "raw_source": raw_source,
+                "raw_source_text_sha256": _raw_source_text_sha256(raw_source),
+                "toc_type": toc_type,
+            }
+        )
+    return sorted(records, key=lambda row: str(row["final_path"]))
+
+
+def _host_source_key(value: object) -> str:
+    return os.path.normcase(os.path.abspath(os.fspath(value)))
+
+
+def _provider_candidates(
+    distribution: importlib_metadata.Distribution,
+) -> list[dict[str, str]]:
+    candidates: set[tuple[str, str]] = set()
+    for field in ("Author", "Author-email", "Maintainer", "Maintainer-email"):
+        value = distribution.metadata.get(field)
+        if isinstance(value, str) and value:
+            candidates.add((field, value))
+    return [
+        {"field": field, "value": value}
+        for field, value in sorted(candidates)
+    ]
+
+
+def _capture_contributor_license_files(
+    distribution: importlib_metadata.Distribution,
+    canonical_name: str,
+    version: str,
+    evidence_root: Path,
+    packet_root: Path,
+) -> list[dict[str, object]]:
+    component_directory = f"{canonical_name}-{version}"
+    _canonical_relative_path(component_directory, "distribution evidence directory")
+    records: list[dict[str, object]] = []
+    observed_paths: set[str] = set()
+    for item in distribution.files or ():
+        distribution_path = item.as_posix()
+        if not _LICENSE_FILE_PATTERN.search(distribution_path):
+            continue
+        canonical_path = _canonical_relative_path(
+            distribution_path,
+            f"{canonical_name} license distribution_path",
+        ).as_posix()
+        if canonical_path in observed_paths:
+            raise ReleaseContractError(
+                f"duplicate {canonical_name} license distribution path: {canonical_path}"
+            )
+        observed_paths.add(canonical_path)
+        source = Path(distribution.locate_file(item))
+        relative_destination = PurePosixPath(component_directory) / PurePosixPath(
+            canonical_path
+        )
+        destination = _candidate_output_path(
+            evidence_root,
+            relative_destination.as_posix(),
+            f"{canonical_name} retained license",
+        )
+        source_identity = _copy_distribution_evidence_file(
+            distribution,
+            canonical_path,
+            source,
+            destination,
+            f"{canonical_name} retained license",
+        )
+        records.append(
+            {
+                "distribution_path": canonical_path,
+                "retained_path": destination.relative_to(packet_root).as_posix(),
+                "sha256": source_identity["sha256"],
+                "size": source_identity["size"],
+            }
+        )
+    return sorted(records, key=lambda row: str(row["distribution_path"]))
+
+
+def capture_python_component_evidence(
+    artifact: Path,
+    manifest: ArtifactManifest,
+    evidence_index_path: Path,
+    build_dir: Path,
+) -> dict[str, object]:
+    """Capture receipt-ready Python contributor evidence for one candidate.
+
+    Input: one finalized artifact/manifest and its retained PyInstaller index.
+    Output: one canonicalizable v2 metadata object containing only Python
+    distributions that own an observed COLLECT source.
+    Side effects: exclusively copies those distributions' regular license files
+    below ``build/evidence/python-distributions``.
+    Errors: malformed evidence, unsafe/changing sources, duplicate or ambiguous
+    ownership, and path/hash/count mismatches fail loud.
+    Split trigger: Conda, Debian, application, cursor, and source-template
+    ownership remain separate evidence collectors.
+    """
+
+    artifact = Path(artifact)
+    build_dir = Path(build_dir)
+    if artifact.is_symlink() or not artifact.is_dir():
+        raise ReleaseContractError("candidate artifact is not a real directory")
+    try:
+        if artifact.resolve(strict=True) != manifest.artifact_root.resolve(strict=True):
+            raise ReleaseContractError("candidate artifact and manifest roots disagree")
+    except OSError as exc:
+        raise ReleaseContractError(f"cannot resolve candidate artifact: {exc}") from exc
+    current_manifest = create_artifact_manifest(artifact)
+    if current_manifest.canonical_bytes != manifest.canonical_bytes:
+        raise ReleaseContractError("candidate artifact changed before metadata capture")
+    collect_rows = _load_collect_rows_for_capture(
+        evidence_index_path,
+        build_dir,
+        manifest,
+    )
+
+    distributions: dict[str, dict[str, object]] = {}
+    source_owners: dict[str, list[tuple[str, str, Path]]] = {}
+    for distribution in importlib_metadata.distributions():
+        name = distribution.metadata.get("Name")
+        version = distribution.version
+        if not isinstance(name, str) or not name:
+            raise ReleaseContractError("installed distribution has no Name metadata")
+        if not isinstance(version, str) or not version:
+            raise ReleaseContractError(f"installed distribution {name} has no version")
+        if not _DISTRIBUTION_VERSION_PATTERN.fullmatch(version):
+            raise ReleaseContractError(
+                f"installed distribution {name} has an unsafe version: {version}"
+            )
+        canonical_name = _normalized_distribution_name(name)
+        if not canonical_name or not re.fullmatch(
+            r"[a-z0-9]+(?:-[a-z0-9]+)*",
+            canonical_name,
+        ):
+            raise ReleaseContractError(
+                f"installed distribution name cannot be normalized: {name}"
+            )
+        component_id = f"library:{canonical_name}@{version}"
+        if component_id in distributions:
+            raise ReleaseContractError(
+                f"duplicate installed Python distribution: {component_id}"
+            )
+        distributions[component_id] = {
+            "canonical_name": canonical_name,
+            "component_id": component_id,
+            "distribution": distribution,
+            "name": name,
+            "version": version,
+        }
+        for item in distribution.files or ():
+            located = Path(distribution.locate_file(item))
+            source_owners.setdefault(_host_source_key(located), []).append(
+                (component_id, item.as_posix(), located)
+            )
+
+    assigned: dict[str, list[dict[str, object]]] = {}
+    unassigned: list[dict[str, object]] = []
+    for row in collect_rows:
+        raw_source = str(row["raw_source"])
+        owners = source_owners.get(_host_source_key(raw_source), []) if os.path.isabs(
+            raw_source
+        ) else []
+        unique_owners = {
+            (component_id, distribution_path, _host_source_key(located)):
+            (component_id, distribution_path, located)
+            for component_id, distribution_path, located in owners
+        }
+        if len(owners) != len(unique_owners):
+            raise ReleaseContractError(
+                "duplicate Python distribution owner for COLLECT path "
+                f"{row['final_path']}"
+            )
+        if len(unique_owners) > 1:
+            raise ReleaseContractError(
+                "ambiguous Python distribution owner for COLLECT path "
+                f"{row['final_path']}"
+            )
+        common = {
+            "entry_type": row["entry_type"],
+            "final_path": row["final_path"],
+            "raw_source_text_sha256": row["raw_source_text_sha256"],
+            "toc_type": row["toc_type"],
+        }
+        if unique_owners:
+            component_id, distribution_path, located = next(
+                iter(unique_owners.values())
+            )
+            canonical_distribution_path = _canonical_relative_path(
+                distribution_path,
+                f"{component_id} distribution_path",
+            ).as_posix()
+            distribution = distributions[component_id]["distribution"]
+            source_identity = _distribution_source_identity(
+                distribution,
+                canonical_distribution_path,
+                located,
+                f"{component_id} COLLECT source",
+            )
+            canonical_name = str(distributions[component_id]["canonical_name"])
+            assigned.setdefault(component_id, []).append(
+                {
+                    **common,
+                    "distribution_path": canonical_distribution_path,
+                    "source_identity": source_identity,
+                    "source_locator": (
+                        f"python-distribution/{canonical_name}/"
+                        f"{canonical_distribution_path}"
+                    ),
+                }
+            )
+        else:
+            digest = str(row["raw_source_text_sha256"])
+            unassigned.append(
+                {
+                    **common,
+                    "source_identity": _optional_source_identity(raw_source),
+                    "source_locator": f"unassigned-source/{digest}",
+                }
+            )
+
+    evidence_parent = build_dir / "evidence"
+    if evidence_parent.is_symlink() or not evidence_parent.is_dir():
+        raise ReleaseContractError("build evidence directory is not a real directory")
+    evidence_root = evidence_parent / "python-distributions"
+    if evidence_root.exists() or evidence_root.is_symlink():
+        raise ReleaseContractError("Python distribution evidence already exists")
+    evidence_root.mkdir()
+    packet_root = build_dir.parent.resolve(strict=True)
+
+    components: list[dict[str, object]] = []
+    for component_id in sorted(assigned):
+        descriptor = distributions[component_id]
+        distribution = descriptor["distribution"]
+        canonical_name = str(descriptor["canonical_name"])
+        version = str(descriptor["version"])
+        license_field = distribution.metadata.get("License")
+        first_line = None
+        if isinstance(license_field, str) and license_field.splitlines():
+            first_line = license_field.splitlines()[0] or None
+        expression = distribution.metadata.get("License-Expression")
+        if not isinstance(expression, str) or not expression:
+            expression = None
+        classifiers = sorted(
+            set(
+                value
+                for value in distribution.metadata.get_all("Classifier", [])
+                if isinstance(value, str) and value.startswith("License ::")
+            )
+        )
+        requires_python = distribution.metadata.get("Requires-Python")
+        if not isinstance(requires_python, str) or not requires_python:
+            requires_python = None
+        collected_files = sorted(
+            assigned[component_id],
+            key=lambda value: str(value["final_path"]),
+        )
+        components.append(
+            {
+                "canonical_name": canonical_name,
+                "collected_files": collected_files,
+                "component_id": component_id,
+                "license_candidates": {
+                    "classifiers": classifiers,
+                    "expression": expression,
+                    "field_first_line": first_line,
+                },
+                "license_files": _capture_contributor_license_files(
+                    distribution,
+                    canonical_name,
+                    version,
+                    evidence_root,
+                    packet_root,
+                ),
+                "name": descriptor["name"],
+                "provider_candidates": _provider_candidates(distribution),
+                "purl": f"pkg:pypi/{canonical_name}@{version}",
+                "requires_python": requires_python,
+                "version": version,
+            }
+        )
+
+    assigned_count = sum(
+        len(component["collected_files"]) for component in components
+    )
+    return {
+        "schema": DISTRIBUTION_METADATA_V2_SCHEMA,
+        "collect_entry_count": len(collect_rows),
+        "component_count": len(components),
+        "assigned_collected_entry_count": assigned_count,
+        "unassigned_collected_entry_count": len(unassigned),
+        "components": components,
+        "unassigned_collected_entries": sorted(
+            unassigned,
+            key=lambda value: str(value["final_path"]),
+        ),
+    }
+
+
 def _stage_candidate(
     generated_dist: Path,
     artifact_parent: Path,
@@ -1191,9 +1979,6 @@ def build_candidate(
             validated_inputs.component_policy.read_bytes(),
             "retained component policy",
         )
-        metadata_path = build_dir / "distribution-metadata.json"
-        write_canonical_json(metadata_path, _capture_distribution_metadata())
-
         if validated_inputs.bundle.target == "linux-x86_64":
             if validated_inputs.linux_cursor_deb is None:
                 raise ReleaseContractError("Linux release has no cursor deb")
@@ -1224,6 +2009,16 @@ def build_candidate(
         manifest = create_artifact_manifest(artifact)
         manifest_path = build_dir / "artifact-manifest.json"
         write_artifact_manifest(manifest_path, manifest)
+        metadata_path = build_dir / "distribution-metadata.json"
+        write_canonical_json(
+            metadata_path,
+            capture_python_component_evidence(
+                artifact,
+                manifest,
+                evidence_index_path,
+                build_dir,
+            ),
+        )
 
         _cleanup_release_intermediates(
             (
