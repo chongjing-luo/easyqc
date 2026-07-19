@@ -102,6 +102,30 @@ class CodeExecutor:
             )
         return result
 
+    def render_command_plan(
+        self,
+        template: str,
+        variables: Mapping[str, Any],
+    ) -> tuple[str, dict[int, str]]:
+        """Expand one viewer template into an ordered, explicit command plan."""
+
+        rendered = self.parse_template(template, variables)
+        if rendered.startswith("MULTICMD"):
+            command_text = rendered.replace("MULTICMD", "", 1).strip()
+            commands = [part.strip() for part in command_text.split(";|") if part.strip()]
+            return command_text, {index: command for index, command in enumerate(commands)}
+        if "MULTICMD" in rendered:
+            prefix, command_text = rendered.split("MULTICMD", 1)
+            prefix = prefix.strip()
+            if prefix and not prefix.endswith(";"):
+                prefix += ";"
+            commands = [part.strip() for part in command_text.strip().split(";|") if part.strip()]
+            return rendered, {
+                index: f"{prefix}{command}"
+                for index, command in enumerate(commands)
+            }
+        return rendered, {0: rendered}
+
     def split_command(self, command: str | Sequence[str]) -> list[str]:
         if isinstance(command, str):
             command = self._normalize_command_text(command)

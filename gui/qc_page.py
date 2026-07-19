@@ -234,24 +234,7 @@ class QCPageController:
     ) -> tuple[str, dict[int, str]]:
         code_vars = table.loc[table["ezqcid"] == ezqcid].to_dict("records")[0]
         code_vars = {**code_vars, **settings["constants"]}
-        code = self.code_executor.parse_template(module["code"], code_vars)
-
-        if code.startswith("MULTICMD"):
-            code = code.replace("MULTICMD", "", 1).strip()
-            commands = [cmd.strip() for cmd in code.split(";|") if cmd.strip()]
-            code_exe = {i: cmd for i, cmd in enumerate(commands)}
-        elif "MULTICMD" in code:
-            code_parts = code.split("MULTICMD", 1)
-            code_pre = code_parts[0].strip()
-            if not code_pre.endswith(";"):
-                code_pre += ";"
-            code_pos = code_parts[1].strip() if len(code_parts) > 1 else ""
-            commands = [cmd.strip() for cmd in code_pos.split(";|") if cmd.strip()]
-            code_exe = {i: code_pre + cmd for i, cmd in enumerate(commands)}
-        else:
-            code_exe = {0: code}
-
-        return code, code_exe
+        return self.code_executor.render_command_plan(module["code"], code_vars)
 
 
 class QCPage:
