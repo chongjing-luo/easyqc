@@ -214,7 +214,15 @@ def _build_synthetic_packet(
     )
     policy_path = root / "inputs/component-policy.json"
     for rule in rules:
-        rule["notice_sha256"] = {NOTICE_PATH: sha256_file(notice)}
+        notice_digest = sha256_file(notice)
+        rule["notice_sha256"] = {NOTICE_PATH: notice_digest}
+        rule["notice_sources"] = [
+            {
+                "source_path": "packaging/licenses/easyqc-fixture.txt",
+                "destination_path": NOTICE_PATH,
+                "sha256": notice_digest,
+            }
+        ]
     _write_json(
         policy_path,
         {
@@ -431,6 +439,26 @@ def test_unresolved_or_ambiguous_ledger_never_emits_a_pass_receipt(
     assert ledger.unresolved
     assert (packet.inventory_dir / "component-ledger.json").is_file()
     assert (packet.inventory_dir / "unresolved-components.json").is_file()
+    with pytest.raises(InventoryOutputError, match="complete PASS ledger"):
+        emit_inventory_outputs(ledger, packet.inventory_dir)
+    assert not (packet.inventory_dir / "inventory-receipt.json").exists()
+
+
+def test_tracked_metadata_capture_seed_cannot_emit_pass_inventory(
+    tmp_path: Path,
+) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    policy_path = (
+        Path(__file__).resolve().parents[2] / "packaging/component_policy.json"
+    )
+    seed_policy = json.loads(policy_path.read_text(encoding="utf-8"))
+
+    ledger = generate_component_ledger(
+        _rewrite_policy_and_receipt(packet, seed_policy)
+    )
+
+    assert ledger.release_status == "FAIL"
+    assert ledger.unresolved
     with pytest.raises(InventoryOutputError, match="complete PASS ledger"):
         emit_inventory_outputs(ledger, packet.inventory_dir)
     assert not (packet.inventory_dir / "inventory-receipt.json").exists()
@@ -665,3 +693,40 @@ def test_policy_rejects_duplicate_component_ids_and_ledgers_unused_rules(
     assert any(
         item.code == "unused-non-component-rule" for item in unused_ledger.unresolved
     )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_error"),
+    [
+        ("duplicate", "notice source destinations must be unique"),
+        ("source-escape", "notice_sources.source_path"),
+        ("destination-escape", "notice_sources.destination_path"),
+        ("unused", "notice_sources must cover notice_paths exactly"),
+        ("digest-mismatch", "notice_sources SHA-256 must match notice_sha256"),
+    ],
+)
+def test_shared_policy_rejects_invalid_or_unused_notice_sources(
+    tmp_path: Path,
+    mutation: str,
+    expected_error: str,
+) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    policy_path = packet.root / "inputs/component-policy.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    sources = policy["rules"][0]["notice_sources"]
+
+    if mutation == "duplicate":
+        sources.append(dict(sources[0]))
+    elif mutation == "source-escape":
+        sources[0]["source_path"] = "../outside-license.txt"
+    elif mutation == "destination-escape":
+        sources[0]["destination_path"] = "../outside-license.txt"
+    elif mutation == "unused":
+        sources[0]["destination_path"] = "THIRD_PARTY_LICENSES/unused.txt"
+    elif mutation == "digest-mismatch":
+        sources[0]["sha256"] = "0" * 64
+    else:  # pragma: no cover - parametrization is the closed mutation contract.
+        raise AssertionError(f"unknown mutation: {mutation}")
+
+    with pytest.raises(ComponentInventoryError, match=expected_error):
+        generate_component_ledger(_rewrite_policy_and_receipt(packet, policy))

@@ -31,6 +31,36 @@ REQUIRED_TOCS = (
 )
 
 
+def test_tracked_component_policy_is_canonical_metadata_capture_seed() -> None:
+    policy_path = build_script.SCRIPT_DIR / "packaging/component_policy.json"
+    policy_bytes = policy_path.read_bytes()
+    policy = json.loads(policy_bytes)
+
+    assert policy_bytes == canonical_json_bytes(policy)
+    assert policy["schema"] == "easyqc-component-policy-v1"
+    assert policy["version"] == 1
+    assert policy["targets"] == ["linux-x86_64"]
+    assert policy["non_component_rules"] == []
+    assert [rule["component_id"] for rule in policy["rules"]] == [
+        "application:easyqc@1.0.0",
+        "library:libxcb-cursor0@0.1.1-4ubuntu1",
+        "library:platformdirs@4.10.1",
+    ]
+    for rule in policy["rules"]:
+        assert rule["file_paths"] == []
+        assert rule["toc_sources"] == []
+        assert rule["origin_evidence"] == []
+        assert len(rule["notice_sources"]) == 1
+        notice = rule["notice_sources"][0]
+        assert rule["notice_paths"] == [notice["destination_path"]]
+        assert rule["notice_sha256"] == {
+            notice["destination_path"]: notice["sha256"]
+        }
+        assert sha256_file(build_script.SCRIPT_DIR / notice["source_path"]) == (
+            notice["sha256"]
+        )
+
+
 def _write(path: Path, data: bytes) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
@@ -95,6 +125,21 @@ def _validated_inputs(
         "rules": [
             {
                 "component_id": "application:easyqc-fixture@1.0.0",
+                "type": "application",
+                "name": "EasyQC fixture",
+                "version": "1.0.0",
+                "purl": "pkg:generic/easyqc-fixture@1.0.0",
+                "provider": "synthetic exact policy",
+                "file_paths": [],
+                "toc_sources": [],
+                "origin_evidence": [],
+                "dependencies": [],
+                "license_declared": "MIT",
+                "license_concluded": "MIT",
+                "notice_paths": ["THIRD_PARTY_LICENSES/fixture.txt"],
+                "notice_sha256": {
+                    "THIRD_PARTY_LICENSES/fixture.txt": expected_digest,
+                },
                 "notice_sources": [
                     {
                         "source_path": "packaging/licenses/fixture.txt",
@@ -289,6 +334,12 @@ def test_build_candidate_finalizes_retains_and_publishes_receipt_last(
     assert (artifact / "THIRD_PARTY_LICENSES/fixture.txt").read_bytes() == (
         b"Exact fixture notice\n"
     )
+    retained_policy = json.loads(
+        (packet_root / receipt.component_policy_path).read_text(encoding="utf-8")
+    )
+    assert retained_policy["rules"][0]["notice_paths"] == [
+        "THIRD_PARTY_LICENSES/fixture.txt"
+    ]
     assert events == ["pyinstaller", "manifest"]
 
     build_dir = packet_root / "build"

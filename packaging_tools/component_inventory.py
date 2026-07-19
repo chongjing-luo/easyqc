@@ -592,6 +592,7 @@ def _load_policy(
                 "license_concluded",
                 "notice_paths",
                 "notice_sha256",
+                "notice_sources",
             },
             label,
         )
@@ -623,6 +624,63 @@ def _load_policy(
             )
         for path, digest in notice_sha256.items():
             _validate_sha256(digest, f"{label}.notice_sha256.{path}")
+        notice_sources = _object_list(
+            rule["notice_sources"], f"{label}.notice_sources"
+        )
+        if not notice_sources:
+            raise ComponentInventoryError(f"{label}.notice_sources must not be empty")
+        normalized_notice_sources: list[dict[str, str]] = []
+        notice_destinations: list[str] = []
+        for source in notice_sources:
+            _expect_fields(
+                source,
+                {"source_path", "destination_path", "sha256"},
+                f"{label}.notice_source",
+            )
+            source_path = _canonical_path(
+                source["source_path"], f"{label}.notice_sources.source_path"
+            )
+            destination_path = _canonical_path(
+                source["destination_path"],
+                f"{label}.notice_sources.destination_path",
+            )
+            if not destination_path.startswith("THIRD_PARTY_LICENSES/"):
+                raise ComponentInventoryError(
+                    f"{label}.notice_sources.destination_path must be below "
+                    "THIRD_PARTY_LICENSES/"
+                )
+            digest = _validate_sha256(
+                source["sha256"], f"{label}.notice_sources.sha256"
+            )
+            notice_destinations.append(destination_path)
+            normalized_notice_sources.append(
+                {
+                    "source_path": source_path,
+                    "destination_path": destination_path,
+                    "sha256": digest,
+                }
+            )
+        if len(notice_destinations) != len(set(notice_destinations)):
+            raise ComponentInventoryError(
+                f"{label} notice source destinations must be unique"
+            )
+        if normalized_notice_sources != sorted(
+            normalized_notice_sources,
+            key=lambda item: (item["destination_path"], item["source_path"]),
+        ):
+            raise ComponentInventoryError(f"{label}.notice_sources must be sorted")
+        if set(notice_destinations) != set(rule["notice_paths"]):
+            raise ComponentInventoryError(
+                f"{label}.notice_sources must cover notice_paths exactly"
+            )
+        if any(
+            notice_sha256[item["destination_path"]] != item["sha256"]
+            for item in normalized_notice_sources
+        ):
+            raise ComponentInventoryError(
+                f"{label}.notice_sources SHA-256 must match notice_sha256"
+            )
+        rule["notice_sources"] = normalized_notice_sources
         toc_sources = _object_list(rule["toc_sources"], f"{label}.toc_sources")
         normalized_sources: list[dict[str, str]] = []
         for source in toc_sources:
