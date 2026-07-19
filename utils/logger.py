@@ -6,12 +6,132 @@ EasyQC 日志和错误处理系统
 """
 
 import logging
+import os
 import sys
 import traceback
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from typing import Any
+
+from platformdirs import PlatformDirs
+
+
+LOG_DIR_ENV = "EASYQC_LOG_DIR"
+
+
+@dataclass(frozen=True)
+class LogDirectoryDecision:
+    """One validated runtime-log destination decision."""
+
+    source: str
+    path: Path | None
+    attempted_path: Path | None
+    problem: str | None = None
+
+
+@dataclass(frozen=True)
+class LoggingStatus:
+    """Immutable, toolkit-neutral result of configuring EasyQC logging."""
+
+    directory_source: str
+    file_logging_enabled: bool
+    stream_logging_enabled: bool
+    active_log_file: Path | None
+    attempted_log_dir: Path | None
+    warning_message: str | None
+
+
+def _decision_problem(
+    source: str,
+    attempted_path: Path | None,
+    problem: str,
+) -> LogDirectoryDecision:
+    return LogDirectoryDecision(
+        source=source,
+        path=None,
+        attempted_path=attempted_path,
+        problem=problem,
+    )
+
+
+def _normalize_log_path(
+    source: str,
+    candidate: Path,
+    *,
+    non_absolute_problem: str | None,
+) -> LogDirectoryDecision:
+    """Expand and resolve one candidate, degrading only expected path errors."""
+
+    attempted_path = candidate
+    try:
+        attempted_path = candidate.expanduser()
+        if non_absolute_problem is not None and not attempted_path.is_absolute():
+            return _decision_problem(
+                source,
+                attempted_path,
+                non_absolute_problem,
+            )
+        path = attempted_path.resolve()
+    except (OSError, RuntimeError) as exc:
+        return _decision_problem(
+            source,
+            attempted_path,
+            f"path resolution failed: {type(exc).__name__}: {exc}",
+        )
+    return LogDirectoryDecision(source, path, attempted_path)
+
+
+def resolve_log_dir(
+    project_root: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> LogDirectoryDecision:
+    """Select one log directory without creating or writing it."""
+
+    if project_root is not None:
+        return _normalize_log_path(
+            "project_root",
+            Path(project_root) / "logs",
+            non_absolute_problem=None,
+        )
+
+    environment = os.environ if environ is None else environ
+    override = environment.get(LOG_DIR_ENV, "").strip()
+    if override:
+        return _normalize_log_path(
+            "environment",
+            Path(override),
+            non_absolute_problem=(
+                f"{LOG_DIR_ENV} must be an absolute path after expanding '~'"
+            ),
+        )
+
+    try:
+        native_path = Path(PlatformDirs("EasyQC", appauthor=False).user_log_path)
+    except (OSError, RuntimeError) as exc:
+        return _decision_problem(
+            "platformdirs",
+            None,
+            f"native log directory lookup failed: {type(exc).__name__}: {exc}",
+        )
+
+    return _normalize_log_path(
+        "platformdirs",
+        native_path,
+        non_absolute_problem="platformdirs returned a non-absolute log path",
+    )
+
+
+def _logging_warning(decision: LogDirectoryDecision, problem: str) -> str:
+    attempted = str(decision.attempted_path) if decision.attempted_path else "unavailable"
+    return (
+        "File logging is unavailable; EasyQC will continue, but diagnostic "
+        f"records may not be saved. Source: {decision.source}; attempted: "
+        f"{attempted}; reason: {problem}"
+    )
+
 
 class EasyQCLogger:
     """EasyQC统一日志管理器"""
@@ -30,44 +150,70 @@ class EasyQCLogger:
         if self._initialized and project_root is None:
             return
 
+        self.logger = logging.getLogger("EasyQC")
         if self._initialized:
-            for handler in self.logger.handlers:
+            for handler in list(self.logger.handlers):
                 handler.close()
 
-        self.project_root = Path(project_root) if project_root is not None else Path(__file__).parent.parent
-        self.log_dir = self.project_root / "logs"
-        self.log_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 设置日志文件路径
-        self.log_file = self.log_dir / f"easyqc_{datetime.now().strftime('%Y%m%d')}.log"
-        
+        self.logger.handlers.clear()
+        for name, candidate in logging.Logger.manager.loggerDict.items():
+            if name.startswith("EasyQC.") and isinstance(candidate, logging.Logger):
+                candidate.handlers.clear()
+                candidate.propagate = True
+
+        self.project_root = Path(project_root) if project_root is not None else None
+        decision = resolve_log_dir(project_root=project_root)
+        self.log_dir = decision.path
+        self.log_file: Path | None = None
+
         # 配置日志格式
         self.log_format = "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
         self.date_format = "%Y-%m-%d %H:%M:%S"
-        
-        # 初始化日志器
-        self.logger = logging.getLogger("EasyQC")
         self.logger.setLevel(logging.DEBUG)
-        
-        # 清除已有的处理器
-        self.logger.handlers.clear()
-        
-        # 文件处理器
-        file_handler = logging.FileHandler(self.log_file, encoding='utf-8')
-        file_handler.setLevel(logging.DEBUG)
-        file_formatter = logging.Formatter(self.log_format, self.date_format)
-        file_handler.setFormatter(file_formatter)
-        self.logger.addHandler(file_handler)
-        
-        # 控制台处理器
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.INFO)
-        console_formatter = logging.Formatter("%(levelname)s - %(message)s")
-        console_handler.setFormatter(console_formatter)
-        self.logger.addHandler(console_handler)
-        
+
+        stream = sys.stdout if sys.stdout is not None else sys.stderr
+        stream_logging_enabled = stream is not None
+        if stream is not None:
+            console_handler = logging.StreamHandler(stream)
+            console_handler.setLevel(logging.INFO)
+            console_formatter = logging.Formatter("%(levelname)s - %(message)s")
+            console_handler.setFormatter(console_formatter)
+            self.logger.addHandler(console_handler)
+
+        file_problem = decision.problem
+        if decision.path is not None:
+            candidate_log_file = decision.path / f"easyqc_{datetime.now().strftime('%Y%m%d')}.log"
+            try:
+                decision.path.mkdir(parents=True, exist_ok=True)
+                file_handler = logging.FileHandler(candidate_log_file, encoding="utf-8")
+            except OSError as exc:
+                file_problem = f"{type(exc).__name__}: {exc}"
+            else:
+                file_handler.setLevel(logging.DEBUG)
+                file_formatter = logging.Formatter(self.log_format, self.date_format)
+                file_handler.setFormatter(file_formatter)
+                self.logger.addHandler(file_handler)
+                self.log_file = candidate_log_file
+
+        file_logging_enabled = self.log_file is not None
+        warning_message = (
+            None
+            if file_logging_enabled
+            else _logging_warning(decision, file_problem or "unknown file logging error")
+        )
+        self.status = LoggingStatus(
+            directory_source=decision.source,
+            file_logging_enabled=file_logging_enabled,
+            stream_logging_enabled=stream_logging_enabled,
+            active_log_file=self.log_file,
+            attempted_log_dir=decision.attempted_path,
+            warning_message=warning_message,
+        )
+
         self._initialized = True
         self.info("EasyQC日志系统初始化完成")
+        if warning_message is not None:
+            self.warning(warning_message, "Logger")
     
     def debug(self, message: str, module: str = None):
         """记录调试信息"""
@@ -116,10 +262,8 @@ class EasyQCLogger:
             logger_name = f"EasyQC.{module}"
             module_logger = logging.getLogger(logger_name)
             module_logger.setLevel(self.logger.level)
-            # 确保模块日志器使用相同的处理器
-            if not module_logger.handlers:
-                for handler in self.logger.handlers:
-                    module_logger.addHandler(handler)
+            module_logger.handlers.clear()
+            module_logger.propagate = True
             module_logger.log(level, message)
         else:
             self.logger.log(level, message)
@@ -161,12 +305,14 @@ class EasyQCLogger:
         message = f"文件操作: {operation} - {file_path}"
         self.info(message, module)
     
-    def get_log_file_path(self) -> str:
+    def get_log_file_path(self) -> str | None:
         """获取当前日志文件路径"""
-        return str(self.log_file)
+        return str(self.log_file) if self.log_file is not None else None
     
     def clear_old_logs(self, days: int = 30):
         """清理旧日志文件"""
+        if self.log_dir is None or not self.status.file_logging_enabled:
+            return
         try:
             current_time = datetime.now()
             for log_file in self.log_dir.glob("easyqc_*.log"):
@@ -174,11 +320,16 @@ class EasyQCLogger:
                 if (current_time - file_time).days > days:
                     log_file.unlink()
                     self.info(f"删除旧日志文件: {log_file.name}")
-        except Exception as e:
-            self.error(f"清理旧日志文件时发生错误: {e}")
+        except OSError as e:
+            self.warning(f"清理旧日志文件时发生错误: {e}")
 
 # 全局日志器实例
 logger = EasyQCLogger()
+
+
+def get_logging_status() -> LoggingStatus:
+    """Return the current immutable logging-health snapshot."""
+    return logger.status
 
 # 便捷函数
 def log_debug(message: str, module: str = None):
