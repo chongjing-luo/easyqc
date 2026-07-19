@@ -1,9 +1,12 @@
 import inspect
+import tkinter as tk
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from core.table_transform import TableTransformEngine
+from gui import gui_table
 from gui.gui_table import TableDisplay
 from gui.state_bridge import GUIStateBridge
 from gui.table_view import TableTransformDialog
@@ -170,16 +173,145 @@ def test_table_transform_dialog_rejects_invalid_structured_operation() -> None:
         raise AssertionError("Expected ValueError")
 
 
-def test_filter_sorter_window_creation_moved_to_table_transform_dialog() -> None:
+def test_product_table_entrypoints_route_to_unified_workspace_not_transform_dialog() -> None:
+    show_source = inspect.getsource(TableDisplay.show_df)
     filter_sorter_source = inspect.getsource(TableDisplay.filter_sorter)
     transform_dialog_source = inspect.getsource(TableTransformDialog.open_filter_dialog)
 
-    assert ".open_filter_dialog(" in filter_sorter_source
+    assert "open_table_workspace" in show_source
+    assert "open_table_workspace" in filter_sorter_source
+    assert ".open_filter_dialog(" not in show_source
+    assert ".open_filter_dialog(" not in filter_sorter_source
+    assert "save_filter_result" not in filter_sorter_source
     assert "tk.Toplevel" not in filter_sorter_source
     assert "ttk.Button" not in filter_sorter_source
     assert "scrolledtext" not in filter_sorter_source
     assert "tk.Toplevel" in transform_dialog_source
     assert "scrolledtext.ScrolledText" in transform_dialog_source
+
+
+@pytest.fixture
+def tk_root():
+    root = tk.Tk()
+    root.withdraw()
+    yield root
+    for child in root.winfo_children():
+        if child.winfo_exists():
+            child.destroy()
+    root.destroy()
+
+
+def _workspace_display(tk_root) -> TableDisplay:
+    display = TableDisplay.__new__(TableDisplay)
+    display.app = SimpleNamespace(root=tk_root)
+    return display
+
+
+def test_show_df_returns_the_unified_workspace_window(monkeypatch, tk_root) -> None:
+    source = pd.DataFrame({"ezqcid": ["SUB001"], "score": [1]})
+    calls = []
+
+    class FakeWorkspace:
+        def __init__(self, parent, frame, **kwargs):
+            calls.append((parent, frame.copy(), kwargs))
+            self.window = object()
+            self.table = SimpleNamespace(main_tree="tree")
+
+    monkeypatch.setattr(gui_table, "TableWorkspace", FakeWorkspace)
+    display = _workspace_display(tk_root)
+
+    window = display.show_df(source)
+
+    assert window is display.table_workspace.window
+    assert calls[0][0] is tk_root
+    pd.testing.assert_frame_equal(calls[0][1], source)
+    assert calls[0][2]["on_open_qc"] == display.show_right_menu
+    assert display.tree_df == "tree"
+
+
+def test_filter_sorter_uses_same_workspace_and_never_persists_result(monkeypatch, tk_root) -> None:
+    source = pd.DataFrame({"ezqcid": ["SUB001"], "score": [1]})
+    display = _workspace_display(tk_root)
+    display.resolve_filter_source = lambda result_type, frame: (
+        source.copy(),
+        "SELECT * FROM df WHERE score >= 1",
+    )
+    calls = []
+    display.open_table_workspace = lambda frame, legacy_filter=None: calls.append(
+        (frame.copy(), legacy_filter)
+    ) or "workspace-window"
+    display.save_filter_result = lambda *args: pytest.fail("read-only workspace must not persist")
+
+    result = display.filter_sorter("qctable")
+
+    assert result == "workspace-window"
+    pd.testing.assert_frame_equal(calls[0][0], source)
+    assert calls[0][1] == "SELECT * FROM df WHERE score >= 1"
+
+
+def test_supported_legacy_select_becomes_typed_applied_filters(tk_root) -> None:
+    source = pd.DataFrame(
+        {
+            "ezqcid": ["SUB001", "SUB002", "SUB003"],
+            "site": ["A", "B", "B"],
+            "score": [1, 2, 3],
+        }
+    )
+    display = _workspace_display(tk_root)
+
+    display.open_table_workspace(
+        source,
+        "SELECT * FROM df WHERE site = 'B' and score >= 3",
+    )
+    workspace = display.table_workspace
+
+    assert [(item.column, item.operator, item.value) for item in workspace.applied_state.conditions] == [
+        ("site", "==", "B"),
+        ("score", ">=", 3),
+    ]
+    assert workspace.result.dataframe["ezqcid"].tolist() == ["SUB003"]
+    assert workspace.result.source_total == 3
+    assert workspace.result.matched_total == 1
+
+
+def test_unsupported_legacy_filter_opens_complete_source_with_specific_safe_warning(tk_root) -> None:
+    source = pd.DataFrame({"ezqcid": ["SUB001", "SUB002"], "score": [1, 2]})
+    display = _workspace_display(tk_root)
+    raw_legacy = '{"operations": [{"operation": "drop_columns"}]}'
+
+    display.open_table_workspace(source, raw_legacy)
+    workspace = display.table_workspace
+
+    assert workspace.result.dataframe["ezqcid"].tolist() == ["SUB001", "SUB002"]
+    assert workspace.applied_state.conditions == ()
+    warning = workspace.action_error_var.get()
+    assert "legacy" in warning.lower() or "旧版" in warning
+    assert raw_legacy not in workspace.action_error_var.get()
+
+
+def test_legacy_null_comparisons_map_to_missing_value_controls() -> None:
+    display = TableDisplay.__new__(TableDisplay)
+
+    is_missing = display.legacy_filter_conditions(
+        "SELECT * FROM df WHERE score = null"
+    )
+    is_present = display.legacy_filter_conditions(
+        "SELECT * FROM df WHERE score != none"
+    )
+
+    assert [(item.operator, item.value) for item in is_missing] == [("isna", None)]
+    assert [(item.operator, item.value) for item in is_present] == [("notna", None)]
+
+
+def test_qc_menu_popup_coordinates_accept_a_workspace_button_anchor() -> None:
+    display = TableDisplay.__new__(TableDisplay)
+    anchor = SimpleNamespace(
+        winfo_rootx=lambda: 120,
+        winfo_rooty=lambda: 80,
+        winfo_height=lambda: 24,
+    )
+
+    assert display.popup_coordinates(anchor) == (120, 104)
 
 
 

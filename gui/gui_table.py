@@ -18,6 +18,11 @@ _T = {
     "缺乏必要参数":   {"zh": "参数错误",       "en": "Invalid parameters"},
     "输入数据为空":   {"zh": "输入数据为空",   "en": "Input data is empty"},
     "取消":           {"zh": "取消",           "en": "Cancel"},
+    "数据工作区":     {"zh": "数据工作区 - EasyQC", "en": "Data Workspace - EasyQC"},
+    "旧版筛选无法迁移": {
+        "zh": "无法迁移此项目的旧版筛选；已显示全部记录。请在右侧筛选器中重新设置。",
+        "en": "This project's legacy filter could not be migrated. All records are shown; recreate the filter in the inspector.",
+    },
 }
 
 from tkinter import messagebox
@@ -32,8 +37,11 @@ sys.path.insert(0, str(project_root))
 from utils.logger import log_info, log_error, log_warning, log_exception, log_debug, LogContext, log_function
 
 from utils.data_manager import DataManager 
+from core.table_transform import TableTransformError, legacy_select_filter_to_operations
 from gui.state_bridge import GUIStateBridge
-from gui.table_view import TableTransformDialog, TableView, open_qc_subprocess
+from gui.table_view import TableTransformDialog, open_qc_subprocess
+from gui.table_workspace import TableWorkspace
+from models.table_view_state import FilterCondition
 
 class TableDisplay:
     """表格显示功能类"""
@@ -67,18 +75,73 @@ class TableDisplay:
     
     def show_df(self, df):
         """
-        在新窗口中显示DataFrame，带有滚动条和列处理
-        创建独立的表格窗口，可以脱离主应用程序存在
+        在统一的只读表格工作区中显示 DataFrame。
+        """
+        if df is None or df.empty:
+            messagebox.showinfo(_tr(_T, "信息"), _tr(_T, "输入数据为空"))
+            return None
+        return self.open_table_workspace(df)
+
+    def open_table_workspace(self, df, legacy_filter=None):
+        """Open one read-only workspace and optionally migrate a legacy filter.
+
+        The legacy value is read only.  A supported narrow SELECT subset is
+        normalized into typed conditions; no view action is persisted.
         """
         parent = self.app.root if hasattr(self, 'app') and hasattr(self.app, 'root') else None
-        self.table_view = TableView(
+        self.table_workspace = TableWorkspace(
             parent,
-            table_transform=getattr(self, 'table_transform', None),
-            on_ezqcid_right_click=self.show_right_menu,
+            df,
+            on_open_qc=self.show_right_menu,
+            title=_tr(_T, "数据工作区"),
         )
-        window = self.table_view.show_df(df)
-        self.tree_df = self.table_view.tree
-        return window
+        # Compatibility aliases for callers that only need the owning window
+        # or keyboard Treeview. They no longer expose the retired table dialog.
+        self.table_view = self.table_workspace
+        self.tree_df = self.table_workspace.table.main_tree
+
+        if legacy_filter:
+            try:
+                conditions = self.legacy_filter_conditions(legacy_filter)
+            except (TableTransformError, TypeError, ValueError):
+                self.table_workspace.action_error_var.set(_tr(_T, "旧版筛选无法迁移"))
+            else:
+                if conditions:
+                    self.table_workspace.begin_filter_edit()
+                    self.table_workspace.set_filter_draft(conditions)
+                    if not self.table_workspace.apply_filter_draft():
+                        self.table_workspace.cancel_filter_draft()
+                        self.table_workspace.action_error_var.set(_tr(_T, "旧版筛选无法迁移"))
+
+        return self.table_workspace.window
+
+    @staticmethod
+    def legacy_filter_conditions(legacy_filter):
+        """Convert the supported stored SELECT subset into typed conditions."""
+        operations = legacy_select_filter_to_operations(str(legacy_filter))
+        if operations is None:
+            raise TableTransformError("旧版筛选不是受支持的 SELECT 子集")
+        if not operations:
+            return ()
+        if len(operations) != 1 or operations[0].get("operation") != "filter_rows":
+            raise TableTransformError("旧版筛选包含不支持的表格操作")
+
+        typed = []
+        for item in operations[0].get("conditions", ()):
+            operator = item.get("operator")
+            value = item.get("value")
+            if value is None and operator in {"==", "!="}:
+                operator = "isna" if operator == "==" else "notna"
+            elif value is None:
+                raise TableTransformError("旧版空值筛选使用了不支持的比较符")
+            typed.append(
+                FilterCondition(
+                    column=str(item.get("column", "")),
+                    operator=str(operator or ""),
+                    value=value,
+                )
+            )
+        return tuple(typed)
 
     def module_names_for_menu(self):
         return self.state_adapter().module_names()
@@ -92,7 +155,7 @@ class TableDisplay:
         return self.gui_state
 
 
-    def show_right_menu(self, ezqcid, event):
+    def show_right_menu(self, ezqcid, anchor):
         """
         显示右键菜单，显示该ezqcid的所有质控结果
         """
@@ -129,9 +192,22 @@ class TableDisplay:
             
         # 在鼠标位置显示菜单
         try:
-            menu.tk_popup(event.x_root, event.y_root)
+            x_root, y_root = self.popup_coordinates(anchor)
+            menu.tk_popup(x_root, y_root)
         finally:
             menu.grab_release()
+
+    @staticmethod
+    def popup_coordinates(anchor):
+        """Return popup coordinates for either a pointer event or Tk widget."""
+        if hasattr(anchor, "x_root") and hasattr(anchor, "y_root"):
+            return int(anchor.x_root), int(anchor.y_root)
+        if all(hasattr(anchor, name) for name in ("winfo_rootx", "winfo_rooty", "winfo_height")):
+            return (
+                int(anchor.winfo_rootx()),
+                int(anchor.winfo_rooty()) + int(anchor.winfo_height()),
+            )
+        raise ValueError("无法确定 QC 菜单的显示位置")
 
     def open_gui(self, ezqcid, module_name, rater):
         """
@@ -201,7 +277,7 @@ class TableDisplay:
     
     def filter_sorter(self, type=None, df=None):
         """
-        使用 JSON 结构化操作过滤、排序和转换表格数据
+        打开与表格浏览相同的只读筛选/排序工作区。
         """
         try:
             df, select_filter = self.resolve_filter_source(type, df)
@@ -213,15 +289,7 @@ class TableDisplay:
             messagebox.showinfo(_tr(_T, "信息"), _tr(_T, "输入数据为空"))
             return
 
-        return self.create_table_transform_dialog().open_filter_dialog(
-            df,
-            select_filter=select_filter,
-            result_type=type,
-            on_show_df=self.show_df,
-            on_save_result=self.save_filter_result,
-            on_restore_source=self.restore_filter_source,
-            on_empty_result=lambda: log_error("筛选后是空数据集"),
-        )
+        return self.open_table_workspace(df, legacy_filter=select_filter)
 
 
         
