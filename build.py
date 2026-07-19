@@ -2386,8 +2386,18 @@ def _capture_python_components_v3(
         distribution_files: dict[str, Path] = {}
         metadata_paths: list[str] = []
         for item in distribution.files or ():
+            distribution_path = item.as_posix()
+            raw_path = PurePosixPath(distribution_path)
+            is_metadata = (
+                raw_path.name == "METADATA"
+                and raw_path.parent.name.endswith(".dist-info")
+            )
+            if not is_metadata and not _LICENSE_FILE_PATTERN.search(
+                distribution_path
+            ):
+                continue
             canonical_path = _canonical_relative_path(
-                item.as_posix(),
+                distribution_path,
                 f"{component_id} distribution evidence path",
             ).as_posix()
             if canonical_path in distribution_files:
@@ -2397,10 +2407,7 @@ def _capture_python_components_v3(
             distribution_files[canonical_path] = Path(
                 distribution.locate_file(item)
             )
-            if (
-                PurePosixPath(canonical_path).name == "METADATA"
-                and PurePosixPath(canonical_path).parent.name.endswith(".dist-info")
-            ):
+            if is_metadata:
                 metadata_paths.append(canonical_path)
         if len(metadata_paths) != 1:
             raise ReleaseContractError(

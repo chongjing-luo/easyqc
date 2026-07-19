@@ -648,6 +648,7 @@ def _path_distribution(
     name: str,
     version: str,
     owned_module: str,
+    extra_record_paths: tuple[str, ...] = (),
 ) -> object:
     dist_info = site / f"{name}-{version}.dist-info"
     metadata = (
@@ -666,11 +667,15 @@ def _path_distribution(
     _write(dist_info / "LICENSE", b"Demo retained MIT license\n")
     _write(
         dist_info / "RECORD",
-        (
-            f"{owned_module},,\n"
-            f"{dist_info.name}/LICENSE,,\n"
-            f"{dist_info.name}/METADATA,,\n"
-            f"{dist_info.name}/RECORD,,\n"
+        "".join(
+            f"{path},,\n"
+            for path in (
+                owned_module,
+                f"{dist_info.name}/LICENSE",
+                f"{dist_info.name}/METADATA",
+                f"{dist_info.name}/RECORD",
+                *extra_record_paths,
+            )
         ).encode(),
     )
     return build_script.importlib_metadata.PathDistribution(dist_info)
@@ -2974,6 +2979,90 @@ def test_python_v3_projection_is_distinct_from_v2(
     )
     assert not (build_dir / "evidence/python-distributions").exists()
     assert artifact.is_dir()
+
+
+def test_python_v3_projection_ignores_external_non_evidence_record_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site = tmp_path / "runtime/lib/python3.10/site-packages"
+    owned_source = _write(site / "demo.py", b"DEMO = 1\n")
+    external_header = "../../../include/site/python3.10/demo/demo.h"
+    _write(site / external_header, b"/* installed development header */\n")
+    distribution = _path_distribution(
+        site,
+        name="demo",
+        version="1.0",
+        owned_module="demo.py",
+        extra_record_paths=(external_header,),
+    )
+    monkeypatch.setattr(
+        build_script.importlib_metadata,
+        "distributions",
+        lambda: [distribution],
+    )
+    artifact, manifest, evidence_index, build_dir = _python_capture_packet(
+        tmp_path / "packet",
+        owned_source=owned_source,
+        unowned_source=_write(tmp_path / "generated/EasyQC", b"generated\n"),
+    )
+    collect_rows = build_script._load_collect_rows_for_capture(
+        evidence_index,
+        build_dir,
+        manifest,
+    )
+    (build_dir / "evidence/components").mkdir()
+
+    components = build_script._capture_python_components_v3(
+        collect_rows,
+        build_dir,
+    )
+
+    component = components["library:demo@1.0"]
+    assert [row["kind"] for row in component["evidence_files"]] == [
+        "python-license",
+        "python-metadata",
+    ]
+    assert external_header not in canonical_json_bytes(components).decode("utf-8")
+    assert not list((build_dir / "evidence/components/python").rglob("demo.h"))
+    assert artifact.is_dir()
+
+
+def test_python_v3_projection_rejects_external_license_record_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site = tmp_path / "runtime/lib/python3.10/site-packages"
+    owned_source = _write(site / "demo.py", b"DEMO = 1\n")
+    distribution = _path_distribution(
+        site,
+        name="demo",
+        version="1.0",
+        owned_module="demo.py",
+        extra_record_paths=("../../../licenses/LICENSE.external",),
+    )
+    monkeypatch.setattr(
+        build_script.importlib_metadata,
+        "distributions",
+        lambda: [distribution],
+    )
+    _artifact, manifest, evidence_index, build_dir = _python_capture_packet(
+        tmp_path / "packet",
+        owned_source=owned_source,
+        unowned_source=_write(tmp_path / "generated/EasyQC", b"generated\n"),
+    )
+    collect_rows = build_script._load_collect_rows_for_capture(
+        evidence_index,
+        build_dir,
+        manifest,
+    )
+    (build_dir / "evidence/components").mkdir()
+
+    with pytest.raises(
+        ReleaseContractError,
+        match="distribution evidence path must be a canonical relative path",
+    ):
+        build_script._capture_python_components_v3(collect_rows, build_dir)
 
 
 def test_component_evidence_v3_composes_all_seven_source_kinds(
