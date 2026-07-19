@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import hashlib
 import json
 from pathlib import Path
 import tarfile
@@ -18,6 +19,7 @@ from packaging_tools.component_inventory import (
     COMPONENT_LEDGER_SCHEMA,
     COMPONENT_POLICY_SCHEMA,
     DISTRIBUTION_METADATA_SCHEMA,
+    DISTRIBUTION_METADATA_V2_SCHEMA,
     PYINSTALLER_TOC_INDEX_SCHEMA,
     ComponentInventoryError,
     InventoryRequest,
@@ -319,11 +321,13 @@ def _rewrite_e4_raw_evidence(
     *,
     collect_bytes: bytes | None = None,
     bad_collect_hash: bool = False,
+    first_collect_type: str = "EXECUTABLE",
+    warning_bytes: bytes = b"fixture warning\n",
 ) -> InventoryRequest:
     build_dir = packet.root / "build"
     evidence_dir = build_dir / "evidence/pyinstaller"
     toc_rows = [
-        ("EasyQC", "/host/work/EasyQC", "EXECUTABLE"),
+        ("EasyQC", "/host/work/EasyQC", first_collect_type),
         ("EasyQC-link", "EasyQC", "SYMLINK"),
     ]
     toc_references: list[dict[str, str]] = []
@@ -345,7 +349,7 @@ def _rewrite_e4_raw_evidence(
         toc_references.append(reference)
 
     warning_path = evidence_dir / "warn-easyqc.txt"
-    warning_path.write_bytes(b"fixture warning\n")
+    warning_path.write_bytes(warning_bytes)
     toc_index_path = build_dir / "pyinstaller-toc-index.json"
     _write_json(
         toc_index_path,
@@ -353,7 +357,11 @@ def _rewrite_e4_raw_evidence(
             "schema": "easyqc-release-pyinstaller-evidence-index-v1",
             "tocs": toc_references,
             "warning": {
-                "disposition": "RETAINED_REVIEW_REQUIRED",
+                "disposition": (
+                    "RETAINED_REVIEW_REQUIRED"
+                    if warning_bytes
+                    else "RETAINED_NO_WARNINGS"
+                ),
                 **_reference(warning_path, packet.root),
             },
         },
@@ -401,6 +409,156 @@ def _rewrite_e4_raw_evidence(
     return replace(
         _inventory_request(packet),
         build_receipt_sha256=sha256_file(packet.build_receipt),
+    )
+
+
+def _raw_source_text_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _rewrite_e4_v2_python_origin_evidence(
+    packet: SyntheticPacket,
+    *,
+    first_collect_type: str = "EXECUTABLE",
+    raw_digest_mismatch: bool = False,
+    unauthenticated_origin: bool = False,
+    warning_bytes: bytes = b"fixture warning\n",
+) -> tuple[InventoryRequest, Path]:
+    request = _rewrite_e4_raw_evidence(
+        packet,
+        first_collect_type=first_collect_type,
+        warning_bytes=warning_bytes,
+    )
+    build_dir = packet.root / "build"
+    retained_license = build_dir / (
+        "evidence/python-distributions/easyqc-fixture-1.0.0/LICENSE"
+    )
+    retained_license.parent.mkdir(parents=True)
+    retained_license.write_bytes(b"EasyQC fixture retained MIT license\n")
+
+    collected = [
+        {
+            "distribution_path": "easyqc_fixture.py",
+            "entry_type": "regular-file",
+            "final_path": "EasyQC",
+            "raw_source_text_sha256": _raw_source_text_sha256(
+                "/wrong/source" if raw_digest_mismatch else "/host/work/EasyQC"
+            ),
+            "source_identity": {
+                "entry_type": "regular-file",
+                "sha256": "1" * 64,
+                "size": 42,
+            },
+            "source_locator": (
+                "python-distribution/easyqc-fixture/easyqc_fixture.py"
+            ),
+            "toc_type": first_collect_type,
+        },
+        {
+            "distribution_path": "easyqc_fixture.py",
+            "entry_type": "symlink",
+            "final_path": "EasyQC-link",
+            "raw_source_text_sha256": _raw_source_text_sha256("EasyQC"),
+            "source_identity": {"entry_type": "unavailable"},
+            "source_locator": (
+                "python-distribution/easyqc-fixture/easyqc_fixture.py"
+            ),
+            "toc_type": "SYMLINK",
+        },
+    ]
+    metadata_path = build_dir / "distribution-metadata.json"
+    _write_json(
+        metadata_path,
+        {
+            "schema": DISTRIBUTION_METADATA_V2_SCHEMA,
+            "collect_entry_count": 2,
+            "component_count": 1,
+            "assigned_collected_entry_count": 2,
+            "unassigned_collected_entry_count": 0,
+            "components": [
+                {
+                    "canonical_name": "easyqc-fixture",
+                    "collected_files": collected,
+                    "component_id": "library:easyqc-fixture@1.0.0",
+                    "license_candidates": {
+                        "classifiers": [
+                            "License :: OSI Approved :: MIT License"
+                        ],
+                        "expression": "MIT",
+                        "field_first_line": "MIT",
+                    },
+                    "license_files": [
+                        {
+                            "distribution_path": (
+                                "easyqc_fixture-1.0.0.dist-info/LICENSE"
+                            ),
+                            "retained_path": retained_license.relative_to(
+                                packet.root
+                            ).as_posix(),
+                            "sha256": sha256_file(retained_license),
+                            "size": retained_license.stat().st_size,
+                        }
+                    ],
+                    "name": "EasyQC fixture",
+                    "provider_candidates": [
+                        {
+                            "field": "Author",
+                            "value": "synthetic exact policy",
+                        }
+                    ],
+                    "purl": "pkg:pypi/easyqc-fixture@1.0.0",
+                    "requires_python": ">=3.10",
+                    "version": "1.0.0",
+                }
+            ],
+            "unassigned_collected_entries": [],
+        },
+    )
+
+    policy_path = packet.root / "inputs/component-policy.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    rule = policy["rules"][0]
+    rule.update(
+        {
+            "component_id": "library:easyqc-fixture@1.0.0",
+            "type": "library",
+            "name": "EasyQC fixture",
+            "version": "1.0.0",
+            "purl": "pkg:pypi/easyqc-fixture@1.0.0",
+            "provider": "synthetic exact policy",
+            "license_declared": "MIT",
+            "toc_sources": [
+                {
+                    "entry_type": row["entry_type"],
+                    "final_path": row["final_path"],
+                    "source_path": row["source_locator"],
+                }
+                for row in collected
+            ],
+            "origin_evidence": [
+                "build/distribution-metadata.json",
+                "build/pyinstaller-toc-index.json",
+            ],
+        }
+    )
+    if unauthenticated_origin:
+        rule["origin_evidence"].append("build/forged-origin.json")
+        rule["origin_evidence"].sort()
+    _write_json(policy_path, policy)
+
+    receipt = json.loads(packet.build_receipt.read_text(encoding="utf-8"))
+    receipt["component_policy"] = _reference(policy_path, packet.root)
+    receipt["evidence"]["distribution_metadata"] = _reference(
+        metadata_path,
+        packet.root,
+    )
+    _write_json(packet.build_receipt, receipt)
+    return (
+        replace(
+            request,
+            build_receipt_sha256=sha256_file(packet.build_receipt),
+        ),
+        retained_license,
     )
 
 
@@ -568,6 +726,169 @@ def test_e4_raw_evidence_reaches_a_diagnostic_fail_ledger(
         packet.inventory_dir / "component-ledger.json"
     ).read_bytes()
     assert not (packet.inventory_dir / "inventory-receipt.json").exists()
+
+
+def test_v2_python_origin_evidence_can_drive_exact_toc_ownership(
+    tmp_path: Path,
+) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    request, _retained_license = _rewrite_e4_v2_python_origin_evidence(packet)
+
+    ledger = generate_component_ledger(request)
+
+    assert ledger.release_status == "PASS"
+    assert ledger.unresolved == ()
+    assert [component.component_id for component in ledger.components] == [
+        "library:easyqc-fixture@1.0.0"
+    ]
+    assert ledger.components[0].file_paths == ("EasyQC", "EasyQC-link")
+    assert not any(
+        item.code == "unused-metadata-component" for item in ledger.unresolved
+    )
+
+
+def test_v2_python_origin_evidence_rejects_unsupported_collect_type(
+    tmp_path: Path,
+) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    request, _retained_license = _rewrite_e4_v2_python_origin_evidence(
+        packet,
+        first_collect_type="BOGUS",
+    )
+
+    with pytest.raises(
+        ComponentInventoryError,
+        match="toc_type is unsupported",
+    ):
+        generate_component_ledger(request)
+
+    assert not packet.inventory_dir.exists()
+
+
+def test_v2_python_origin_evidence_accepts_authenticated_empty_warning(
+    tmp_path: Path,
+) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    request, _retained_license = _rewrite_e4_v2_python_origin_evidence(
+        packet,
+        warning_bytes=b"",
+    )
+
+    ledger = generate_component_ledger(request)
+
+    assert ledger.release_status == "PASS"
+    assert ledger.unresolved == ()
+
+
+def test_v2_explicit_unassigned_collect_row_cannot_be_claimed_by_policy(
+    tmp_path: Path,
+) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    request, _retained_license = _rewrite_e4_v2_python_origin_evidence(packet)
+    metadata_path = packet.root / "build/distribution-metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    unassigned = metadata["components"][0]["collected_files"].pop()
+    unassigned.pop("distribution_path")
+    unassigned["source_locator"] = (
+        "unassigned-source/" + unassigned["raw_source_text_sha256"]
+    )
+    metadata["unassigned_collected_entries"] = [unassigned]
+    metadata["assigned_collected_entry_count"] = 1
+    metadata["unassigned_collected_entry_count"] = 1
+    _write_json(metadata_path, metadata)
+
+    policy_path = packet.root / "inputs/component-policy.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["rules"][0]["toc_sources"][1]["source_path"] = unassigned[
+        "source_locator"
+    ]
+    _write_json(policy_path, policy)
+    receipt = json.loads(packet.build_receipt.read_text(encoding="utf-8"))
+    receipt["component_policy"] = _reference(policy_path, packet.root)
+    receipt["evidence"]["distribution_metadata"] = _reference(
+        metadata_path,
+        packet.root,
+    )
+    _write_json(packet.build_receipt, receipt)
+    request = replace(
+        request,
+        build_receipt_sha256=sha256_file(packet.build_receipt),
+    )
+
+    ledger = generate_component_ledger(request)
+
+    assert ledger.release_status == "FAIL"
+    assert any(
+        item.reason == "TOC evidence mismatch for EasyQC-link"
+        for item in ledger.unresolved
+    )
+
+
+def test_v2_python_origin_evidence_rejects_nested_license_mutation(
+    tmp_path: Path,
+) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    request, retained_license = _rewrite_e4_v2_python_origin_evidence(packet)
+    retained_license.write_bytes(b"mutated retained license bytes\n")
+
+    with pytest.raises(ComponentInventoryError, match="retained license SHA-256"):
+        generate_component_ledger(request)
+
+    assert not packet.inventory_dir.exists()
+
+
+def test_v2_python_origin_evidence_rejects_raw_source_digest_mismatch(
+    tmp_path: Path,
+) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    request, _retained_license = _rewrite_e4_v2_python_origin_evidence(
+        packet,
+        raw_digest_mismatch=True,
+    )
+
+    with pytest.raises(ComponentInventoryError, match="raw source digest mismatch"):
+        generate_component_ledger(request)
+
+    assert not packet.inventory_dir.exists()
+
+
+def test_unauthenticated_origin_evidence_cannot_emit_inventory_receipt(
+    tmp_path: Path,
+) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    request, _retained_license = _rewrite_e4_v2_python_origin_evidence(
+        packet,
+        unauthenticated_origin=True,
+    )
+
+    ledger = generate_component_ledger(request)
+
+    assert ledger.release_status == "FAIL"
+    assert any(
+        "origin_evidence is not receipt-authenticated" in item.reason
+        for item in ledger.unresolved
+    )
+    with pytest.raises(InventoryOutputError, match="complete PASS ledger"):
+        emit_inventory_outputs(ledger, packet.inventory_dir)
+    assert not (packet.inventory_dir / "inventory-receipt.json").exists()
+
+
+def test_v2_python_license_conclusion_must_be_exact_raw_metadata(
+    tmp_path: Path,
+) -> None:
+    packet = _build_synthetic_packet(tmp_path / "packet")
+    _request, _retained_license = _rewrite_e4_v2_python_origin_evidence(packet)
+    policy_path = packet.root / "inputs/component-policy.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["rules"][0]["license_concluded"] = "Apache-2.0"
+
+    ledger = generate_component_ledger(_rewrite_policy_and_receipt(packet, policy))
+
+    assert ledger.release_status == "FAIL"
+    assert any(
+        "metadata does not establish license_concluded" in item.reason
+        for item in ledger.unresolved
+    )
 
 
 @pytest.mark.parametrize(

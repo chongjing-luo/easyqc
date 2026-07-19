@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
+import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -28,6 +29,7 @@ BUILD_RECEIPT_SCHEMA = "easyqc-release-build-receipt-v1"
 COMPONENT_LEDGER_SCHEMA = "easyqc-release-component-ledger-v1"
 COMPONENT_POLICY_SCHEMA = "easyqc-component-policy-v1"
 DISTRIBUTION_METADATA_SCHEMA = "easyqc-release-distribution-metadata-v1"
+DISTRIBUTION_METADATA_V2_SCHEMA = "easyqc-release-distribution-metadata-v2"
 PYINSTALLER_TOC_INDEX_SCHEMA = "easyqc-release-pyinstaller-toc-index-v1"
 PYINSTALLER_EVIDENCE_INDEX_SCHEMA = (
     "easyqc-release-pyinstaller-evidence-index-v1"
@@ -37,12 +39,19 @@ UNRESOLVED_COMPONENTS_SCHEMA = "easyqc-release-unresolved-components-v1"
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _NORMALIZED_DISTRIBUTION_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_DISTRIBUTION_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+!-]*$")
 _REQUIRED_PYINSTALLER_TOC_KINDS = (
     "Analysis",
     "PYZ",
     "PKG",
     "EXE",
     "COLLECT",
+)
+_PYINSTALLER_COLLECT_TYPES = frozenset(
+    {"BINARY", "DATA", "EXECUTABLE", "EXTENSION", "SYMLINK"}
+)
+_PYINSTALLER_WARNING_DISPOSITIONS = frozenset(
+    {"RETAINED_NO_WARNINGS", "RETAINED_REVIEW_REQUIRED"}
 )
 _MAX_RETAINED_TOC_BYTES = 16 * 1024 * 1024
 
@@ -207,6 +216,15 @@ class _BuildContext:
     policy: dict[str, object]
     toc_index: dict[str, object]
     metadata: dict[str, object]
+    authenticated_origin_paths: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _MetadataEvidence:
+    components: dict[str, dict[str, object]]
+    assigned_collected_entries: tuple[dict[str, object], ...] = ()
+    unassigned_collected_entries: tuple[dict[str, object], ...] = ()
+    requires_exact_collect_coverage: bool = False
 
 
 def generate_component_ledger(request: InventoryRequest) -> ComponentLedger:
@@ -325,10 +343,15 @@ def _load_build_context(request: InventoryRequest) -> _BuildContext:
     )
     evidence = _required_object(receipt["evidence"], "evidence")
     _expect_fields(evidence, {"toc_index", "distribution_metadata"}, "evidence")
-    toc_path = _reference_path(packet_root, evidence["toc_index"], "evidence.toc_index")
+    toc_reference = _required_object(evidence["toc_index"], "evidence.toc_index")
+    metadata_reference = _required_object(
+        evidence["distribution_metadata"],
+        "evidence.distribution_metadata",
+    )
+    toc_path = _reference_path(packet_root, toc_reference, "evidence.toc_index")
     metadata_path = _reference_path(
         packet_root,
-        evidence["distribution_metadata"],
+        metadata_reference,
         "evidence.distribution_metadata",
     )
     policy = _read_canonical_object(policy_path, "component policy")
@@ -343,6 +366,20 @@ def _load_build_context(request: InventoryRequest) -> _BuildContext:
         policy=policy,
         toc_index=toc_index,
         metadata=metadata,
+        authenticated_origin_paths=tuple(
+            sorted(
+                (
+                    _canonical_path(
+                        toc_reference["path"],
+                        "evidence.toc_index.path",
+                    ),
+                    _canonical_path(
+                        metadata_reference["path"],
+                        "evidence.distribution_metadata.path",
+                    ),
+                )
+            )
+        ),
     )
 
 
@@ -368,11 +405,13 @@ def _validate_build_identity(receipt: dict[str, object]) -> None:
 
 def _classify(context: _BuildContext, build_receipt_sha256: str) -> ComponentLedger:
     rules, non_component_rules = _load_policy(context.policy, context.target)
-    metadata = _load_metadata(context.metadata)
+    metadata_evidence = _load_metadata(context.metadata, context.packet_root)
+    metadata = metadata_evidence.components
     toc_entries = _load_toc_index(
         context.toc_index,
         packet_root=context.packet_root,
         manifest=context.manifest,
+        metadata_evidence=metadata_evidence,
     )
     manifest_entries = {
         entry.path: entry
@@ -452,6 +491,8 @@ def _classify(context: _BuildContext, build_receipt_sha256: str) -> ComponentLed
             owners,
             context.artifact_root,
             notice_hashes,
+            frozenset(context.authenticated_origin_paths),
+            not metadata_evidence.requires_exact_collect_coverage,
         )
         if not assigned_components[component_id]:
             reasons.append("component rule owns no uniquely classified path")
@@ -741,16 +782,22 @@ def _load_policy(
     return rules, non_component_rules
 
 
-def _load_metadata(metadata: dict[str, object]) -> dict[str, dict[str, object]]:
-    if metadata.get("schema") != DISTRIBUTION_METADATA_SCHEMA:
-        raise ComponentInventoryError(
-            f"distribution metadata schema must be {DISTRIBUTION_METADATA_SCHEMA}"
-        )
+def _load_metadata(
+    metadata: dict[str, object],
+    packet_root: Path,
+) -> _MetadataEvidence:
+    schema = metadata.get("schema")
+    if schema == DISTRIBUTION_METADATA_V2_SCHEMA:
+        return _load_python_contributor_metadata(metadata, packet_root)
+    if schema != DISTRIBUTION_METADATA_SCHEMA:
+        raise ComponentInventoryError("unsupported distribution metadata schema")
     fields = set(metadata)
     if fields == {"schema", "components"}:
-        return _load_normalized_metadata(metadata)
+        return _MetadataEvidence(components=_load_normalized_metadata(metadata))
     if fields == {"schema", "distribution_count", "distributions"}:
-        return _load_installed_distribution_metadata(metadata)
+        return _MetadataEvidence(
+            components=_load_installed_distribution_metadata(metadata)
+        )
     raise ComponentInventoryError(
         "distribution metadata fields do not match a normalized fixture or "
         "retained build-environment record"
@@ -901,17 +948,409 @@ def _load_installed_distribution_metadata(
     return result
 
 
+def _metadata_count(value: object, expected: int, label: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value != expected:
+        raise ComponentInventoryError(f"{label} must equal {expected}")
+
+
+def _nullable_metadata_string(value: object, label: str) -> str | None:
+    if value is None:
+        return None
+    return _required_string(value, label)
+
+
+def _validate_source_identity(value: object, label: str) -> None:
+    identity = _required_object(value, label)
+    entry_type = identity.get("entry_type")
+    if entry_type == "unavailable":
+        _expect_fields(identity, {"entry_type"}, label)
+        return
+    if entry_type == "regular-file":
+        _expect_fields(identity, {"entry_type", "sha256", "size"}, label)
+        _validate_sha256(identity["sha256"], f"{label}.sha256")
+    elif entry_type == "symlink":
+        _expect_fields(
+            identity,
+            {"entry_type", "size", "target_text_sha256"},
+            label,
+        )
+        _validate_sha256(
+            identity["target_text_sha256"],
+            f"{label}.target_text_sha256",
+        )
+    else:
+        raise ComponentInventoryError(f"{label}.entry_type is invalid")
+    size = identity["size"]
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        raise ComponentInventoryError(f"{label}.size is invalid")
+
+
+def _load_v2_collected_row(
+    record: dict[str, object],
+    label: str,
+    *,
+    assigned: bool,
+) -> dict[str, object]:
+    expected_fields = {
+        "entry_type",
+        "final_path",
+        "raw_source_text_sha256",
+        "source_identity",
+        "source_locator",
+        "toc_type",
+    }
+    if assigned:
+        expected_fields.add("distribution_path")
+    _expect_fields(record, expected_fields, label)
+    entry_type = _required_string(record["entry_type"], f"{label}.entry_type")
+    if entry_type not in {"regular-file", "symlink"}:
+        raise ComponentInventoryError(f"{label}.entry_type is invalid")
+    final_path = _canonical_path(record["final_path"], f"{label}.final_path")
+    toc_type = _required_string(record["toc_type"], f"{label}.toc_type")
+    if toc_type not in _PYINSTALLER_COLLECT_TYPES:
+        raise ComponentInventoryError(f"{label}.toc_type is unsupported")
+    if (toc_type == "SYMLINK") != (entry_type == "symlink"):
+        raise ComponentInventoryError(f"{label} TOC/entry type mismatch")
+    raw_digest = _validate_sha256(
+        record["raw_source_text_sha256"],
+        f"{label}.raw_source_text_sha256",
+    )
+    source_locator = _canonical_path(
+        record["source_locator"],
+        f"{label}.source_locator",
+    )
+    _validate_source_identity(record["source_identity"], f"{label}.source_identity")
+    normalized: dict[str, object] = {
+        "entry_type": entry_type,
+        "final_path": final_path,
+        "raw_source_text_sha256": raw_digest,
+        "source_identity": record["source_identity"],
+        "source_locator": source_locator,
+        "toc_type": toc_type,
+    }
+    if assigned:
+        normalized["distribution_path"] = _canonical_path(
+            record["distribution_path"],
+            f"{label}.distribution_path",
+        )
+    return normalized
+
+
+def _load_python_contributor_metadata(
+    metadata: dict[str, object],
+    packet_root: Path,
+) -> _MetadataEvidence:
+    _expect_fields(
+        metadata,
+        {
+            "schema",
+            "collect_entry_count",
+            "component_count",
+            "assigned_collected_entry_count",
+            "unassigned_collected_entry_count",
+            "components",
+            "unassigned_collected_entries",
+        },
+        "Python contributor metadata",
+    )
+    components = _object_list(metadata["components"], "Python components")
+    unassigned_rows = _object_list(
+        metadata["unassigned_collected_entries"],
+        "unassigned collected entries",
+    )
+    _metadata_count(metadata["component_count"], len(components), "component_count")
+
+    result: dict[str, dict[str, object]] = {}
+    assigned: list[dict[str, object]] = []
+    observed_component_order: list[str] = []
+    expected_component_fields = {
+        "canonical_name",
+        "collected_files",
+        "component_id",
+        "license_candidates",
+        "license_files",
+        "name",
+        "provider_candidates",
+        "purl",
+        "requires_python",
+        "version",
+    }
+    for component_index, component in enumerate(components):
+        label = f"Python component {component_index}"
+        _expect_fields(component, expected_component_fields, label)
+        canonical_name = _required_string(
+            component["canonical_name"],
+            f"{label}.canonical_name",
+        )
+        if not _NORMALIZED_DISTRIBUTION_PATTERN.fullmatch(canonical_name):
+            raise ComponentInventoryError(
+                f"{label}.canonical_name is not normalized"
+            )
+        version = _required_string(component["version"], f"{label}.version")
+        if not _DISTRIBUTION_VERSION_PATTERN.fullmatch(version):
+            raise ComponentInventoryError(f"{label}.version is unsafe")
+        component_id = _required_string(
+            component["component_id"],
+            f"{label}.component_id",
+        )
+        if component_id != f"library:{canonical_name}@{version}":
+            raise ComponentInventoryError(f"{label}.component_id is inconsistent")
+        if component_id in result:
+            raise ComponentInventoryError(
+                f"duplicate metadata component: {component_id}"
+            )
+        name = _required_string(component["name"], f"{label}.name")
+        purl = _required_string(component["purl"], f"{label}.purl")
+        if purl != f"pkg:pypi/{canonical_name}@{version}":
+            raise ComponentInventoryError(f"{label}.purl is inconsistent")
+        _nullable_metadata_string(
+            component["requires_python"],
+            f"{label}.requires_python",
+        )
+
+        provider_rows = _object_list(
+            component["provider_candidates"],
+            f"{label}.provider_candidates",
+        )
+        provider_pairs: list[tuple[str, str]] = []
+        for provider in provider_rows:
+            _expect_fields(provider, {"field", "value"}, f"{label}.provider")
+            field = _required_string(provider["field"], f"{label}.provider.field")
+            if field not in {
+                "Author",
+                "Author-email",
+                "Maintainer",
+                "Maintainer-email",
+            }:
+                raise ComponentInventoryError(
+                    f"{label}.provider field is not an accepted raw metadata field"
+                )
+            provider_pairs.append(
+                (field, _required_string(provider["value"], f"{label}.provider.value"))
+            )
+        if provider_pairs != sorted(provider_pairs) or len(provider_pairs) != len(
+            set(provider_pairs)
+        ):
+            raise ComponentInventoryError(
+                f"{label}.provider_candidates must be unique and sorted"
+            )
+
+        license_candidates = _required_object(
+            component["license_candidates"],
+            f"{label}.license_candidates",
+        )
+        _expect_fields(
+            license_candidates,
+            {"classifiers", "expression", "field_first_line"},
+            f"{label}.license_candidates",
+        )
+        classifiers = _sorted_strings(
+            license_candidates["classifiers"],
+            f"{label}.license_candidates.classifiers",
+        )
+        expression = _nullable_metadata_string(
+            license_candidates["expression"],
+            f"{label}.license_candidates.expression",
+        )
+        first_line = _nullable_metadata_string(
+            license_candidates["field_first_line"],
+            f"{label}.license_candidates.field_first_line",
+        )
+        exact_license_candidates = tuple(
+            sorted(
+                set(
+                    classifiers
+                    + ([expression] if expression is not None else [])
+                    + ([first_line] if first_line is not None else [])
+                )
+            )
+        )
+
+        license_rows = _object_list(
+            component["license_files"],
+            f"{label}.license_files",
+        )
+        observed_license_order: list[str] = []
+        retained_paths: set[str] = set()
+        for license_row in license_rows:
+            _expect_fields(
+                license_row,
+                {"distribution_path", "retained_path", "sha256", "size"},
+                f"{label}.license_file",
+            )
+            distribution_path = _canonical_path(
+                license_row["distribution_path"],
+                f"{label}.license_file.distribution_path",
+            )
+            retained_path = _canonical_path(
+                license_row["retained_path"],
+                f"{label}.license_file.retained_path",
+            )
+            if not retained_path.startswith("build/evidence/python-distributions/"):
+                raise ComponentInventoryError(
+                    f"{label}.license_file must be retained below Python evidence"
+                )
+            if retained_path in retained_paths:
+                raise ComponentInventoryError(
+                    f"{label}.license_file retained paths must be unique"
+                )
+            retained_paths.add(retained_path)
+            expected_sha256 = _validate_sha256(
+                license_row["sha256"],
+                f"{label}.license_file.sha256",
+            )
+            expected_size = license_row["size"]
+            if (
+                isinstance(expected_size, bool)
+                or not isinstance(expected_size, int)
+                or expected_size < 0
+            ):
+                raise ComponentInventoryError(f"{label}.license_file.size is invalid")
+            retained_file = _contained_path(
+                packet_root,
+                retained_path,
+                f"{label}.retained license",
+                expected="file",
+            )
+            actual_sha256 = sha256_file(retained_file)
+            if actual_sha256 != expected_sha256:
+                raise ComponentInventoryError(
+                    f"{label} retained license SHA-256 mismatch"
+                )
+            if retained_file.stat().st_size != expected_size:
+                raise ComponentInventoryError(
+                    f"{label} retained license size mismatch"
+                )
+            observed_license_order.append(distribution_path)
+        if observed_license_order != sorted(observed_license_order) or len(
+            observed_license_order
+        ) != len(set(observed_license_order)):
+            raise ComponentInventoryError(
+                f"{label}.license_files must be unique and sorted"
+            )
+
+        collected_rows = _object_list(
+            component["collected_files"],
+            f"{label}.collected_files",
+        )
+        if not collected_rows:
+            raise ComponentInventoryError(
+                f"{label} must contain at least one collected contributor"
+            )
+        normalized_collected = [
+            {
+                **_load_v2_collected_row(
+                    row,
+                    f"{label}.collected_file",
+                    assigned=True,
+                ),
+                "component_id": component_id,
+            }
+            for row in collected_rows
+        ]
+        for row in normalized_collected:
+            expected_locator = (
+                f"python-distribution/{canonical_name}/{row['distribution_path']}"
+            )
+            if row["source_locator"] != expected_locator:
+                raise ComponentInventoryError(
+                    f"{label}.collected_file source_locator is inconsistent"
+                )
+        collected_order = [str(row["final_path"]) for row in normalized_collected]
+        if collected_order != sorted(collected_order) or len(collected_order) != len(
+            set(collected_order)
+        ):
+            raise ComponentInventoryError(
+                f"{label}.collected_files must be unique and sorted"
+            )
+        assigned.extend(normalized_collected)
+        result[component_id] = {
+            "_evidence_schema": DISTRIBUTION_METADATA_V2_SCHEMA,
+            "component_id": component_id,
+            "type": "library",
+            "name": name,
+            "version": version,
+            "purl": purl,
+            "provider_candidates": tuple(value for _field, value in provider_pairs),
+            "license_declared_candidates": exact_license_candidates,
+        }
+        observed_component_order.append(component_id)
+
+    if observed_component_order != sorted(observed_component_order):
+        raise ComponentInventoryError("Python components must be sorted")
+
+    normalized_unassigned = [
+        _load_v2_collected_row(
+            row,
+            "unassigned collected entry",
+            assigned=False,
+        )
+        for row in unassigned_rows
+    ]
+    for row in normalized_unassigned:
+        expected_locator = (
+            "unassigned-source/" + str(row["raw_source_text_sha256"])
+        )
+        if row["source_locator"] != expected_locator:
+            raise ComponentInventoryError(
+                "unassigned collected source_locator is inconsistent"
+            )
+    unassigned_order = [str(row["final_path"]) for row in normalized_unassigned]
+    if unassigned_order != sorted(unassigned_order) or len(unassigned_order) != len(
+        set(unassigned_order)
+    ):
+        raise ComponentInventoryError(
+            "unassigned collected entries must be unique and sorted"
+        )
+    assigned_paths = [str(row["final_path"]) for row in assigned]
+    if len(assigned_paths) != len(set(assigned_paths)) or set(assigned_paths).intersection(
+        unassigned_order
+    ):
+        raise ComponentInventoryError(
+            "v2 assigned/unassigned collected paths must be globally unique"
+        )
+    _metadata_count(
+        metadata["assigned_collected_entry_count"],
+        len(assigned),
+        "assigned_collected_entry_count",
+    )
+    _metadata_count(
+        metadata["unassigned_collected_entry_count"],
+        len(normalized_unassigned),
+        "unassigned_collected_entry_count",
+    )
+    _metadata_count(
+        metadata["collect_entry_count"],
+        len(assigned) + len(normalized_unassigned),
+        "collect_entry_count",
+    )
+    return _MetadataEvidence(
+        components=result,
+        assigned_collected_entries=tuple(assigned),
+        unassigned_collected_entries=tuple(normalized_unassigned),
+        requires_exact_collect_coverage=True,
+    )
+
+
 def _load_toc_index(
     toc: dict[str, object],
     *,
     packet_root: Path,
     manifest: ArtifactManifest,
+    metadata_evidence: _MetadataEvidence,
 ) -> dict[tuple[str, str], dict[str, str]]:
     schema = toc.get("schema")
     if schema == PYINSTALLER_TOC_INDEX_SCHEMA:
+        if metadata_evidence.requires_exact_collect_coverage:
+            raise ComponentInventoryError(
+                "v2 Python contributor metadata requires retained raw COLLECT evidence"
+            )
         return _load_normalized_toc_index(toc)
     if schema == PYINSTALLER_EVIDENCE_INDEX_SCHEMA:
-        return _load_retained_pyinstaller_evidence(toc, packet_root, manifest)
+        raw_entries = _load_retained_pyinstaller_evidence(toc, packet_root, manifest)
+        if metadata_evidence.requires_exact_collect_coverage:
+            return _apply_v2_collect_ownership(raw_entries, metadata_evidence)
+        return raw_entries
     raise ComponentInventoryError(
         "unsupported PyInstaller TOC/evidence index schema"
     )
@@ -1002,10 +1441,8 @@ def _load_retained_pyinstaller_evidence(
         {"disposition", "path", "sha256"},
         "PyInstaller warning evidence",
     )
-    if warning["disposition"] != "RETAINED_REVIEW_REQUIRED":
-        raise ComponentInventoryError(
-            "PyInstaller warning disposition must require retained review"
-        )
+    if warning["disposition"] not in _PYINSTALLER_WARNING_DISPOSITIONS:
+        raise ComponentInventoryError("PyInstaller warning disposition is invalid")
     warning_path = _reference_path(
         packet_root,
         {"path": warning["path"], "sha256": warning["sha256"]},
@@ -1015,7 +1452,108 @@ def _load_retained_pyinstaller_evidence(
         raise ComponentInventoryError(
             "PyInstaller warning must be retained below build/evidence/pyinstaller/"
         )
+    warning_has_bytes = warning_path.stat().st_size > 0
+    if warning_has_bytes != (
+        warning["disposition"] == "RETAINED_REVIEW_REQUIRED"
+    ):
+        raise ComponentInventoryError(
+            "PyInstaller warning disposition disagrees with retained bytes"
+        )
     return _load_collect_toc(toc_paths["COLLECT"], manifest)
+
+
+def _apply_v2_collect_ownership(
+    raw_entries: dict[tuple[str, str], dict[str, str]],
+    metadata: _MetadataEvidence,
+) -> dict[tuple[str, str], dict[str, str]]:
+    observed_by_key: dict[tuple[str, str, str], dict[str, str]] = {}
+    observed_by_path_type: dict[tuple[str, str], dict[str, str]] = {}
+    for row in raw_entries.values():
+        key = (
+            row["final_path"],
+            row["raw_source_text_sha256"],
+            row["toc_type"],
+        )
+        if key in observed_by_key:
+            raise ComponentInventoryError("duplicate retained raw COLLECT identity")
+        observed_by_key[key] = row
+        observed_by_path_type[(row["final_path"], row["toc_type"])] = row
+
+    evidence_rows = (
+        metadata.assigned_collected_entries + metadata.unassigned_collected_entries
+    )
+    evidence_keys = {
+        (
+            str(row["final_path"]),
+            str(row["raw_source_text_sha256"]),
+            str(row["toc_type"]),
+        )
+        for row in evidence_rows
+    }
+    if evidence_keys != set(observed_by_key):
+        for row in evidence_rows:
+            observed = observed_by_path_type.get(
+                (str(row["final_path"]), str(row["toc_type"]))
+            )
+            if (
+                observed is not None
+                and observed["raw_source_text_sha256"]
+                != row["raw_source_text_sha256"]
+            ):
+                raise ComponentInventoryError(
+                    "v2 raw source digest mismatch for " + str(row["final_path"])
+                )
+        raise ComponentInventoryError(
+            "v2 contributor evidence does not exactly cover retained COLLECT"
+        )
+
+    result: dict[tuple[str, str], dict[str, str]] = {}
+    for row in metadata.assigned_collected_entries:
+        observed = observed_by_key[
+            (
+                str(row["final_path"]),
+                str(row["raw_source_text_sha256"]),
+                str(row["toc_type"]),
+            )
+        ]
+        if observed["entry_type"] != row["entry_type"]:
+            raise ComponentInventoryError(
+                "v2 contributor entry type mismatch for " + str(row["final_path"])
+            )
+        component_id = str(row["component_id"])
+        key = (component_id, str(row["final_path"]))
+        if key in result:
+            raise ComponentInventoryError("duplicate v2 assigned COLLECT entry")
+        result[key] = {
+            "component_id": component_id,
+            "entry_type": observed["entry_type"],
+            "final_path": observed["final_path"],
+            "source_path": str(row["source_locator"]),
+            "raw_source_text_sha256": observed["raw_source_text_sha256"],
+            "toc_type": observed["toc_type"],
+        }
+    for row in metadata.unassigned_collected_entries:
+        observed = observed_by_key[
+            (
+                str(row["final_path"]),
+                str(row["raw_source_text_sha256"]),
+                str(row["toc_type"]),
+            )
+        ]
+        if observed["entry_type"] != row["entry_type"]:
+            raise ComponentInventoryError(
+                "v2 unassigned entry type mismatch for " + str(row["final_path"])
+            )
+        key = ("unassigned", str(row["final_path"]))
+        result[key] = {
+            "component_id": "unassigned",
+            "entry_type": observed["entry_type"],
+            "final_path": observed["final_path"],
+            "source_path": str(row["source_locator"]),
+            "raw_source_text_sha256": observed["raw_source_text_sha256"],
+            "toc_type": observed["toc_type"],
+        }
+    return result
 
 
 def _load_collect_toc(
@@ -1058,7 +1596,11 @@ def _load_collect_toc(
             or any(not isinstance(item, str) or not item for item in raw_row)
         ):
             raise ComponentInventoryError("COLLECT TOC entry is invalid")
-        destination, _raw_source, toc_type = raw_row
+        destination, raw_source, toc_type = raw_row
+        if toc_type not in _PYINSTALLER_COLLECT_TYPES:
+            raise ComponentInventoryError(
+                f"unsupported COLLECT TOC type: {toc_type}"
+            )
         destination = _canonical_path(destination, "COLLECT destination")
         direct_path = destination
         internal_path = f"_internal/{destination}"
@@ -1087,6 +1629,10 @@ def _load_collect_toc(
             "entry_type": entry_type,
             "final_path": final_path,
             "source_path": f"artifact/{final_path}",
+            "raw_source_text_sha256": hashlib.sha256(
+                raw_source.encode("utf-8")
+            ).hexdigest(),
+            "toc_type": toc_type,
         }
     return result
 
@@ -1100,11 +1646,23 @@ def _component_reasons(
     owners: dict[str, list[tuple[str, str]]],
     artifact_root: Path,
     notice_hashes: dict[str, str],
+    authenticated_origin_paths: frozenset[str],
+    allow_unassigned_toc_fallback: bool,
 ) -> list[str]:
     component_id = str(rule["component_id"])
     reasons: list[str] = []
     if metadata is None:
         reasons.append("exact distribution metadata is missing")
+    elif metadata.get("_evidence_schema") == DISTRIBUTION_METADATA_V2_SCHEMA:
+        for field in ("type", "name", "version", "purl"):
+            if metadata[field] != rule[field]:
+                reasons.append(f"metadata disagrees with policy field {field}")
+        if rule["provider"] not in metadata["provider_candidates"]:
+            reasons.append("distribution metadata does not establish provider")
+        if rule["license_declared"] not in metadata["license_declared_candidates"]:
+            reasons.append("distribution metadata does not establish license_declared")
+        if rule["license_concluded"] not in metadata["license_declared_candidates"]:
+            reasons.append("distribution metadata does not establish license_concluded")
     else:
         for field in (
             "type",
@@ -1118,12 +1676,22 @@ def _component_reasons(
                 reasons.append(f"distribution metadata does not establish {field}")
             elif metadata[field] != rule[field]:
                 reasons.append(f"metadata disagrees with policy field {field}")
+    origin_evidence = tuple(str(item) for item in rule["origin_evidence"])
+    if not origin_evidence:
+        reasons.append("policy origin_evidence is empty")
+    for origin_path in origin_evidence:
+        if origin_path not in authenticated_origin_paths:
+            reasons.append(
+                f"origin_evidence is not receipt-authenticated: {origin_path}"
+            )
     if rule["license_concluded"] == "NOASSERTION":
         reasons.append("license_concluded cannot be NOASSERTION")
     for source in rule["toc_sources"]:
         final_path = str(source["final_path"])
         key = (component_id, final_path)
-        observed_key = key if key in toc_entries else ("unassigned", final_path)
+        observed_key = key
+        if key not in toc_entries and allow_unassigned_toc_fallback:
+            observed_key = ("unassigned", final_path)
         observed = toc_entries.get(observed_key)
         expected = {
             "entry_type": source["entry_type"],
