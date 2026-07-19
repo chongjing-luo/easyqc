@@ -30,7 +30,7 @@ from importlib import metadata as importlib_metadata
 import json
 import os
 import platform
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shutil
 import signal
@@ -47,6 +47,7 @@ from packaging_tools.artifact_manifest import (
     write_artifact_manifest,
 )
 from packaging_tools.contracts import (
+    APPROVED_RUNTIME_VERSION,
     BuildReceipt,
     ReleaseContractError,
     ValidatedReleaseInputs,
@@ -125,6 +126,24 @@ _LICENSE_FILE_PATTERN = re.compile(
 )
 _DISTRIBUTION_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+!-]*$")
 _MAX_RETAINED_TOC_BYTES = 16 * 1024 * 1024
+_EXPLICIT_BUILD_ROLES = {
+    "EasyQC": (
+        "pyinstaller-generated",
+        "pyinstaller-generated/EasyQC",
+    ),
+    "_internal/base_library.zip": (
+        "pyinstaller-generated",
+        "pyinstaller-generated/base_library.zip",
+    ),
+    "_internal/libxcb-cursor.so.0": (
+        "verified-cursor-deb",
+        "verified-cursor-deb/libxcb-cursor.so.0",
+    ),
+    "_internal/template/hcpall_template.scene": (
+        "easyqc-source-file",
+        "easyqc-source/template/hcpall_template.scene",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -1620,6 +1639,350 @@ def _load_collect_rows_for_capture(
             }
         )
     return sorted(records, key=lambda row: str(row["final_path"]))
+
+
+def _normalize_manifest_link_target(final_path: str, target: str) -> str:
+    """Resolve one manifest link target against its final candidate parent."""
+
+    link_path = _canonical_relative_path(final_path, "manifest symlink path")
+    if not isinstance(target, str) or not target or "\\" in target:
+        raise ReleaseContractError("manifest symlink target is not a valid path")
+    posix_target = PurePosixPath(target)
+    windows_target = PureWindowsPath(target)
+    if (
+        posix_target.is_absolute()
+        or windows_target.is_absolute()
+        or bool(windows_target.drive)
+    ):
+        raise ReleaseContractError("manifest symlink target is absolute")
+
+    normalized_parts = list(link_path.parent.parts)
+    for part in posix_target.parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if not normalized_parts:
+                raise ReleaseContractError("manifest symlink target escapes candidate")
+            normalized_parts.pop()
+            continue
+        normalized_parts.append(part)
+    if not normalized_parts:
+        raise ReleaseContractError("manifest symlink target escapes candidate")
+    normalized = PurePosixPath(*normalized_parts).as_posix()
+    _canonical_relative_path(normalized, "normalized manifest symlink target")
+    return normalized
+
+
+def _collect_row_index(
+    collect_rows: list[dict[str, object]],
+) -> dict[str, dict[str, object]]:
+    if not isinstance(collect_rows, list):
+        raise ReleaseContractError("COLLECT rows must be a list")
+    result: dict[str, dict[str, object]] = {}
+    expected_fields = {
+        "entry_type",
+        "final_path",
+        "raw_source",
+        "raw_source_text_sha256",
+        "toc_type",
+    }
+    for row in collect_rows:
+        if not isinstance(row, dict) or set(row) != expected_fields:
+            raise ReleaseContractError("COLLECT assignment row fields are invalid")
+        final_path = _canonical_relative_path(
+            row["final_path"],
+            "COLLECT assignment final path",
+        ).as_posix()
+        if final_path in result:
+            raise ReleaseContractError(
+                f"duplicate COLLECT final path: {final_path}"
+            )
+        raw_source = row["raw_source"]
+        if not isinstance(raw_source, str) or not raw_source:
+            raise ReleaseContractError(
+                f"COLLECT assignment raw source is invalid: {final_path}"
+            )
+        if row["raw_source_text_sha256"] != _raw_source_text_sha256(raw_source):
+            raise ReleaseContractError(
+                f"COLLECT assignment raw source digest mismatch: {final_path}"
+            )
+        toc_type = row["toc_type"]
+        entry_type = row["entry_type"]
+        if toc_type not in _PYINSTALLER_COLLECT_TYPES or (
+            (toc_type == "SYMLINK") != (entry_type == "symlink")
+        ):
+            raise ReleaseContractError(
+                f"COLLECT assignment type mismatch: {final_path}"
+            )
+        if entry_type not in {"regular-file", "symlink"}:
+            raise ReleaseContractError(
+                f"COLLECT assignment entry type is invalid: {final_path}"
+            )
+        result[final_path] = row
+    return result
+
+
+def _component_collected_owners(
+    components: dict[str, dict[str, object]],
+) -> dict[str, tuple[str, dict[str, object]]]:
+    if not isinstance(components, dict):
+        raise ReleaseContractError("authenticated components must be an object")
+    owners: dict[str, tuple[str, dict[str, object]]] = {}
+    for component_id in sorted(components):
+        component = components[component_id]
+        if (
+            not isinstance(component_id, str)
+            or not component_id
+            or not isinstance(component, dict)
+            or component.get("component_id") != component_id
+        ):
+            raise ReleaseContractError("authenticated component identity is invalid")
+        collected_files = component.get("collected_files")
+        if not isinstance(collected_files, list):
+            raise ReleaseContractError(
+                f"authenticated component collected files are invalid: {component_id}"
+            )
+        for row in collected_files:
+            if not isinstance(row, dict):
+                raise ReleaseContractError(
+                    f"authenticated component collected row is invalid: {component_id}"
+                )
+            final_path = _canonical_relative_path(
+                row.get("final_path"),
+                f"{component_id} collected final path",
+            ).as_posix()
+            if final_path in owners:
+                raise ReleaseContractError(
+                    f"duplicate authenticated component owner: {final_path}"
+                )
+            owners[final_path] = (component_id, row)
+    return owners
+
+
+def _manifest_entry_index(manifest: ArtifactManifest) -> dict[str, object]:
+    if not isinstance(manifest, ArtifactManifest):
+        raise ReleaseContractError("assignment requires an ArtifactManifest")
+    return {entry.path: entry for entry in manifest.entries}
+
+
+def _assign_python_symlink_aliases(
+    collect_rows: list[dict[str, object]],
+    manifest: ArtifactManifest,
+    components: dict[str, dict[str, object]],
+    python_component_ids: set[str] | frozenset[str],
+) -> list[dict[str, object]]:
+    """Bind every COLLECT symlink to its exact authenticated Python target.
+
+    Inputs are immutable-by-contract producer state. The result is a sorted
+    internal assignment list; it performs no distribution-name or path-prefix
+    inference and has no side effects.
+    """
+
+    collect_by_path = _collect_row_index(collect_rows)
+    manifest_by_path = _manifest_entry_index(manifest)
+    owners = _component_collected_owners(components)
+    if not isinstance(python_component_ids, (set, frozenset)) or any(
+        not isinstance(component_id, str) or not component_id
+        for component_id in python_component_ids
+    ):
+        raise ReleaseContractError("authenticated Python component IDs are invalid")
+    for component_id in python_component_ids:
+        component = components.get(component_id)
+        if component is None or component.get("ecosystem") != "python":
+            raise ReleaseContractError(
+                f"authenticated Python component is missing: {component_id}"
+            )
+
+    assignments: list[dict[str, object]] = []
+    for final_path in sorted(collect_by_path):
+        row = collect_by_path[final_path]
+        if row["entry_type"] != "symlink":
+            continue
+        if final_path in owners:
+            raise ReleaseContractError(
+                f"Python symlink alias is already assigned: {final_path}"
+            )
+        manifest_entry = manifest_by_path.get(final_path)
+        if manifest_entry is None or manifest_entry.entry_type != "symlink":
+            raise ReleaseContractError(
+                f"Python symlink alias has no manifest entry: {final_path}"
+            )
+        target_final_path = _normalize_manifest_link_target(
+            final_path,
+            manifest_entry.target,
+        )
+        target_entry = manifest_by_path.get(target_final_path)
+        if target_entry is None or target_entry.entry_type != "regular-file":
+            raise ReleaseContractError(
+                "Python symlink alias has no regular manifest target: "
+                f"{final_path} -> {target_final_path}"
+            )
+        target_owner = owners.get(target_final_path)
+        if target_owner is None:
+            raise ReleaseContractError(
+                f"Python symlink target has no authenticated Python component: "
+                f"{target_final_path}"
+            )
+        component_id, target_row = target_owner
+        if (
+            component_id not in python_component_ids
+            or target_row.get("entry_type") != "regular-file"
+            or target_row.get("source_kind") != "python-distribution-file"
+        ):
+            raise ReleaseContractError(
+                f"Python symlink target is outside an authenticated Python component: "
+                f"{target_final_path}"
+            )
+        assignments.append(
+            {
+                "collected_file": {
+                    "entry_type": "symlink",
+                    "final_path": final_path,
+                    "package_path": None,
+                    "raw_source_text_sha256": row["raw_source_text_sha256"],
+                    "source_identity": {
+                        "entry_type": "symlink",
+                        "size": manifest_entry.size,
+                        "target_text_sha256": _raw_source_text_sha256(
+                            manifest_entry.target
+                        ),
+                    },
+                    "source_kind": "python-symlink-alias",
+                    "source_locator": f"python-symlink-alias/{final_path}",
+                    "target_final_path": target_final_path,
+                    "toc_type": row["toc_type"],
+                },
+                "component_id": component_id,
+            }
+        )
+    return assignments
+
+
+def _require_exact_role_component(
+    final_path: str,
+    component_id: str,
+    components: dict[str, dict[str, object]],
+) -> None:
+    component = components.get(component_id)
+    if component is None:
+        raise ReleaseContractError(
+            f"explicit build role has no authenticated component: {final_path}"
+        )
+    if final_path in {"EasyQC", "_internal/template/hcpall_template.scene"}:
+        expected = {
+            "ecosystem": "easyqc",
+            "name": "EasyQC",
+            "type": "application",
+        }
+        label = "EasyQC application"
+    elif final_path == "_internal/base_library.zip":
+        expected = {
+            "ecosystem": "conda",
+            "name": "python",
+            "type": "library",
+            "version": APPROVED_RUNTIME_VERSION,
+        }
+        label = "Conda Python"
+        if component_id != f"library:python@{APPROVED_RUNTIME_VERSION}":
+            raise ReleaseContractError(
+                f"explicit build role requires the exact {label} component"
+            )
+    else:
+        expected = {
+            "ecosystem": "debian",
+            "name": LINUX_CURSOR_PACKAGE,
+            "type": "library",
+            "version": LINUX_CURSOR_VERSION,
+        }
+        label = "verified cursor deb"
+        if component_id != (
+            f"library:{LINUX_CURSOR_PACKAGE}@{LINUX_CURSOR_VERSION}"
+        ):
+            raise ReleaseContractError(
+                f"explicit build role requires the exact {label} component"
+            )
+    if any(component.get(field) != value for field, value in expected.items()):
+        raise ReleaseContractError(
+            f"explicit build role requires an authenticated {label} component"
+        )
+
+
+def _assign_explicit_build_roles(
+    collect_rows: list[dict[str, object]],
+    manifest: ArtifactManifest,
+    components: dict[str, dict[str, object]],
+    role_component_ids: dict[str, str],
+) -> list[dict[str, object]]:
+    """Assign the four closed-world build roles to authenticated components."""
+
+    collect_by_path = _collect_row_index(collect_rows)
+    manifest_by_path = _manifest_entry_index(manifest)
+    owners = _component_collected_owners(components)
+    expected_paths = set(_EXPLICIT_BUILD_ROLES)
+    if not isinstance(role_component_ids, dict) or set(role_component_ids) != (
+        expected_paths
+    ):
+        raise ReleaseContractError("explicit build role component map is not exact")
+    if any(path not in collect_by_path for path in owners):
+        raise ReleaseContractError(
+            "authenticated component owns a path outside retained COLLECT"
+        )
+    unmatched_paths = set(collect_by_path).difference(owners)
+    if unmatched_paths != expected_paths:
+        raise ReleaseContractError(
+            "exact unmatched build roles required: "
+            f"expected {sorted(expected_paths)}, got {sorted(unmatched_paths)}"
+        )
+    app_component_id = role_component_ids["EasyQC"]
+    if role_component_ids["_internal/template/hcpall_template.scene"] != (
+        app_component_id
+    ):
+        raise ReleaseContractError(
+            "EasyQC executable and source template must share one application component"
+        )
+
+    assignments: list[dict[str, object]] = []
+    for final_path in sorted(expected_paths):
+        component_id = role_component_ids[final_path]
+        if not isinstance(component_id, str) or not component_id:
+            raise ReleaseContractError(
+                f"explicit build role component ID is invalid: {final_path}"
+            )
+        _require_exact_role_component(final_path, component_id, components)
+        collect_row = collect_by_path[final_path]
+        manifest_entry = manifest_by_path.get(final_path)
+        if (
+            collect_row["entry_type"] != "regular-file"
+            or manifest_entry is None
+            or manifest_entry.entry_type != "regular-file"
+        ):
+            raise ReleaseContractError(
+                f"explicit build role is not a regular manifest file: {final_path}"
+            )
+        source_kind, source_locator = _EXPLICIT_BUILD_ROLES[final_path]
+        assignments.append(
+            {
+                "collected_file": {
+                    "entry_type": "regular-file",
+                    "final_path": final_path,
+                    "package_path": None,
+                    "raw_source_text_sha256": collect_row[
+                        "raw_source_text_sha256"
+                    ],
+                    "source_identity": {
+                        "entry_type": "regular-file",
+                        "sha256": manifest_entry.sha256,
+                        "size": manifest_entry.size,
+                    },
+                    "source_kind": source_kind,
+                    "source_locator": source_locator,
+                    "target_final_path": None,
+                    "toc_type": collect_row["toc_type"],
+                },
+                "component_id": component_id,
+            }
+        )
+    return assignments
 
 
 def _host_source_key(value: object) -> str:

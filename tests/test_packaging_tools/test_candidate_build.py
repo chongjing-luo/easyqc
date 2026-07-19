@@ -685,6 +685,421 @@ def _python_capture_packet(
     return artifact, manifest, evidence_index, build_dir
 
 
+def _raw_collect_row(
+    final_path: str,
+    *,
+    raw_source: str,
+    toc_type: str,
+) -> dict[str, object]:
+    return {
+        "entry_type": "symlink" if toc_type == "SYMLINK" else "regular-file",
+        "final_path": final_path,
+        "raw_source": raw_source,
+        "raw_source_text_sha256": build_script._raw_source_text_sha256(raw_source),
+        "toc_type": toc_type,
+    }
+
+
+def _manifest_regular_row(
+    manifest: object,
+    final_path: str,
+    *,
+    source_kind: str = "python-distribution-file",
+) -> dict[str, object]:
+    entry = next(item for item in manifest.entries if item.path == final_path)
+    assert entry.entry_type == "regular-file"
+    return {
+        "entry_type": "regular-file",
+        "final_path": final_path,
+        "package_path": final_path,
+        "raw_source_text_sha256": "a" * 64,
+        "source_identity": {
+            "entry_type": "regular-file",
+            "sha256": entry.sha256,
+            "size": entry.size,
+        },
+        "source_kind": source_kind,
+        "source_locator": f"fixture-source/{final_path}",
+        "target_final_path": None,
+        "toc_type": "DATA",
+    }
+
+
+def _authenticated_component(
+    component_id: str,
+    *,
+    ecosystem: str,
+    component_type: str,
+    name: str,
+    version: str,
+    collected_files: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    return {
+        "collected_files": list(collected_files or []),
+        "component_id": component_id,
+        "ecosystem": ecosystem,
+        "evidence_files": [{"kind": "fixture-authenticated-evidence"}],
+        "license_candidates": [{"field": "fixture", "value": "MIT"}],
+        "name": name,
+        "provider_candidates": [
+            {"field": "fixture", "value": "authenticated fixture"}
+        ],
+        "purl": f"pkg:generic/{name.lower()}@{version}",
+        "type": component_type,
+        "version": version,
+    }
+
+
+def test_python_symlink_aliases_inherit_only_exact_manifest_target_component(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "artifact"
+    target = _write(artifact / "_internal/demo/libdemo.so", b"python target\n")
+    alias = artifact / "_internal/demo/aliases/libdemo.so"
+    alias.parent.mkdir(parents=True)
+    try:
+        alias.symlink_to("../libdemo.so")
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks are unavailable on this platform: {exc}")
+    manifest = create_artifact_manifest(artifact)
+    component_id = "library:demo@1.0"
+    components = {
+        component_id: _authenticated_component(
+            component_id,
+            ecosystem="python",
+            component_type="library",
+            name="demo",
+            version="1.0",
+            collected_files=[
+                _manifest_regular_row(manifest, target.relative_to(artifact).as_posix())
+            ],
+        )
+    }
+    collect_rows = [
+        _raw_collect_row(
+            "_internal/demo/libdemo.so",
+            raw_source=str(target),
+            toc_type="BINARY",
+        ),
+        _raw_collect_row(
+            "_internal/demo/aliases/libdemo.so",
+            raw_source="../libdemo.so",
+            toc_type="SYMLINK",
+        ),
+    ]
+    before_components = canonical_json_bytes(components)
+    before_collect = canonical_json_bytes(collect_rows)
+
+    assignments = build_script._assign_python_symlink_aliases(
+        collect_rows,
+        manifest,
+        components,
+        {component_id},
+    )
+
+    assert assignments == [
+        {
+            "collected_file": {
+                "entry_type": "symlink",
+                "final_path": "_internal/demo/aliases/libdemo.so",
+                "package_path": None,
+                "raw_source_text_sha256": build_script._raw_source_text_sha256(
+                    "../libdemo.so"
+                ),
+                "source_identity": {
+                    "entry_type": "symlink",
+                    "size": len("../libdemo.so".encode()),
+                    "target_text_sha256": build_script._raw_source_text_sha256(
+                        "../libdemo.so"
+                    ),
+                },
+                "source_kind": "python-symlink-alias",
+                "source_locator": (
+                    "python-symlink-alias/_internal/demo/aliases/libdemo.so"
+                ),
+                "target_final_path": "_internal/demo/libdemo.so",
+                "toc_type": "SYMLINK",
+            },
+            "component_id": component_id,
+        }
+    ]
+    assert canonical_json_bytes(components) == before_components
+    assert canonical_json_bytes(collect_rows) == before_collect
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "absolute",
+        "escape",
+        "missing",
+        "directory",
+        "cycle",
+        "cross-component",
+        "duplicate-owner",
+    ],
+)
+def test_python_symlink_aliases_reject_invalid_target_or_component(
+    tmp_path: Path,
+    problem: str,
+) -> None:
+    if problem in {"absolute", "escape"}:
+        target = "/outside.so" if problem == "absolute" else "../../../outside.so"
+        with pytest.raises(ReleaseContractError, match="absolute|escapes"):
+            build_script._normalize_manifest_link_target(
+                "_internal/demo/alias.so",
+                target,
+            )
+        return
+
+    artifact = tmp_path / "artifact"
+    owned = _write(artifact / "_internal/demo/owned.so", b"owned\n")
+    alias = artifact / "_internal/demo/alias.so"
+    if problem == "missing":
+        target_text = "missing.so"
+    elif problem == "directory":
+        (artifact / "_internal/demo/directory").mkdir(parents=True)
+        target_text = "directory"
+    elif problem == "cycle":
+        target_text = "cycle.so"
+        try:
+            (artifact / "_internal/demo/cycle.so").symlink_to("alias.so")
+        except (NotImplementedError, OSError) as exc:
+            pytest.skip(f"symlinks are unavailable on this platform: {exc}")
+    else:
+        target_text = "owned.so"
+    try:
+        alias.symlink_to(target_text)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks are unavailable on this platform: {exc}")
+
+    manifest = create_artifact_manifest(artifact)
+    owner_id = "library:foreign@1.0"
+    approved_id = "library:approved@1.0"
+    owner_ecosystem = "conda" if problem == "cross-component" else "python"
+    components = {
+        owner_id: _authenticated_component(
+            owner_id,
+            ecosystem=owner_ecosystem,
+            component_type="library",
+            name="foreign",
+            version="1.0",
+            collected_files=[
+                _manifest_regular_row(manifest, owned.relative_to(artifact).as_posix())
+            ],
+        ),
+        approved_id: _authenticated_component(
+            approved_id,
+            ecosystem="python",
+            component_type="library",
+            name="approved",
+            version="1.0",
+        ),
+    }
+    if problem == "duplicate-owner":
+        components[approved_id]["collected_files"] = [
+            _manifest_regular_row(manifest, owned.relative_to(artifact).as_posix())
+        ]
+    collect_rows = [
+        _raw_collect_row(
+            "_internal/demo/owned.so",
+            raw_source=str(owned),
+            toc_type="BINARY",
+        ),
+        _raw_collect_row(
+            "_internal/demo/alias.so",
+            raw_source=target_text,
+            toc_type="SYMLINK",
+        ),
+    ]
+    python_ids = (
+        {approved_id}
+        if problem == "cross-component"
+        else {owner_id, approved_id}
+        if problem == "duplicate-owner"
+        else {owner_id}
+    )
+
+    with pytest.raises(
+        ReleaseContractError,
+        match=(
+            "regular manifest target|authenticated Python component|"
+            "duplicate authenticated component owner"
+        ),
+    ):
+        build_script._assign_python_symlink_aliases(
+            collect_rows,
+            manifest,
+            components,
+            python_ids,
+        )
+
+
+def _explicit_build_role_fixture(
+    tmp_path: Path,
+    *,
+    problem: str | None = None,
+) -> tuple[
+    object,
+    list[dict[str, object]],
+    dict[str, dict[str, object]],
+    dict[str, str],
+]:
+    artifact = tmp_path / "artifact"
+    paths = [
+        "EasyQC",
+        "_internal/base_library.zip",
+        "_internal/libxcb-cursor.so.0",
+        "_internal/template/hcpall_template.scene",
+    ]
+    if problem == "missing":
+        paths.remove("_internal/template/hcpall_template.scene")
+    elif problem == "renamed":
+        paths[-1] = "_internal/template/hcpall_template.scenex"
+    elif problem == "fifth":
+        paths.append("_internal/unmatched.bin")
+    for path in paths:
+        _write(artifact / path, f"fixture {path}\n".encode())
+    manifest = create_artifact_manifest(artifact)
+    rows = [
+        _raw_collect_row(
+            path,
+            raw_source=f"/authenticated/build/{path}",
+            toc_type="EXECUTABLE" if path == "EasyQC" else "DATA",
+        )
+        for path in paths
+    ]
+    if problem == "duplicate":
+        rows.append(dict(rows[0]))
+
+    app_id = "application:easyqc@1.0.0"
+    python_id = "library:python@3.10.17"
+    cursor_id = "library:libxcb-cursor0@0.1.1-4ubuntu1"
+    components = {
+        app_id: _authenticated_component(
+            app_id,
+            ecosystem="easyqc",
+            component_type="application",
+            name="EasyQC",
+            version="1.0.0",
+        ),
+        python_id: _authenticated_component(
+            python_id,
+            ecosystem="conda",
+            component_type="library",
+            name="python",
+            version="3.10.17",
+        ),
+        cursor_id: _authenticated_component(
+            cursor_id,
+            ecosystem="debian",
+            component_type="library",
+            name="libxcb-cursor0",
+            version="0.1.1-4ubuntu1",
+        ),
+    }
+    role_component_ids = {
+        "EasyQC": app_id,
+        "_internal/base_library.zip": python_id,
+        "_internal/libxcb-cursor.so.0": cursor_id,
+        "_internal/template/hcpall_template.scene": app_id,
+    }
+    if problem == "pre-owned":
+        components[app_id]["collected_files"] = [
+            _manifest_regular_row(
+                manifest,
+                "EasyQC",
+                source_kind="pyinstaller-generated",
+            )
+        ]
+    elif problem == "missing-component":
+        role_component_ids["_internal/base_library.zip"] = "library:missing@3.10.17"
+    elif problem == "wrong-component-kind":
+        components[python_id]["ecosystem"] = "generic-runtime"
+    elif problem == "wrong-python-version":
+        components[python_id]["version"] = "3.10.16"
+    return manifest, rows, components, role_component_ids
+
+
+def test_explicit_build_roles_bind_exact_authenticated_components(
+    tmp_path: Path,
+) -> None:
+    manifest, rows, components, role_component_ids = _explicit_build_role_fixture(
+        tmp_path
+    )
+    before_components = canonical_json_bytes(components)
+    before_rows = canonical_json_bytes(rows)
+
+    assignments = build_script._assign_explicit_build_roles(
+        rows,
+        manifest,
+        components,
+        role_component_ids,
+    )
+
+    assert [item["collected_file"]["final_path"] for item in assignments] == [
+        "EasyQC",
+        "_internal/base_library.zip",
+        "_internal/libxcb-cursor.so.0",
+        "_internal/template/hcpall_template.scene",
+    ]
+    assert [item["collected_file"]["source_kind"] for item in assignments] == [
+        "pyinstaller-generated",
+        "pyinstaller-generated",
+        "verified-cursor-deb",
+        "easyqc-source-file",
+    ]
+    assert assignments[0]["component_id"] == assignments[3]["component_id"]
+    assert assignments[1]["component_id"] == "library:python@3.10.17"
+    assert assignments[2]["component_id"] == (
+        "library:libxcb-cursor0@0.1.1-4ubuntu1"
+    )
+    for assignment in assignments:
+        row = assignment["collected_file"]
+        entry = next(item for item in manifest.entries if item.path == row["final_path"])
+        assert row["source_identity"] == {
+            "entry_type": "regular-file",
+            "sha256": entry.sha256,
+            "size": entry.size,
+        }
+        assert row["package_path"] is None
+        assert row["target_final_path"] is None
+    assert canonical_json_bytes(components) == before_components
+    assert canonical_json_bytes(rows) == before_rows
+
+
+@pytest.mark.parametrize(
+    ("problem", "message"),
+    [
+        ("missing", "exact unmatched build roles"),
+        ("renamed", "exact unmatched build roles"),
+        ("duplicate", "duplicate COLLECT final path"),
+        ("fifth", "exact unmatched build roles"),
+        ("pre-owned", "exact unmatched build roles"),
+        ("missing-component", "authenticated component"),
+        ("wrong-component-kind", "Conda Python"),
+        ("wrong-python-version", "Conda Python"),
+    ],
+)
+def test_explicit_build_roles_reject_missing_renamed_duplicate_or_fifth_role(
+    tmp_path: Path,
+    problem: str,
+    message: str,
+) -> None:
+    manifest, rows, components, role_component_ids = _explicit_build_role_fixture(
+        tmp_path,
+        problem=problem,
+    )
+
+    with pytest.raises(ReleaseContractError, match=message):
+        build_script._assign_explicit_build_roles(
+            rows,
+            manifest,
+            components,
+            role_component_ids,
+        )
+
+
 def test_python_component_evidence_is_artifact_aligned_private_and_deterministic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
