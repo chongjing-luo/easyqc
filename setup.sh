@@ -52,6 +52,26 @@ done
 OS_TYPE=$(uname)
 echo "检测到操作系统: $OS_TYPE"
 
+# 验证 Qt Widgets 在 Linux 原生 xcb 平台所需的系统运行库。
+check_qt_platform_dependencies() {
+    if [ "$OS_TYPE" != "Linux" ]; then
+        return 0
+    fi
+    QT_PLUGIN_ROOT=$(python -c "from PySide6.QtCore import QLibraryInfo; print(QLibraryInfo.path(QLibraryInfo.PluginsPath))" 2>/dev/null)
+    QT_XCB_PLUGIN="$QT_PLUGIN_ROOT/platforms/libqxcb.so"
+    if [ ! -f "$QT_XCB_PLUGIN" ]; then
+        echo "错误：未找到 Qt xcb 平台插件 libqxcb.so"
+        return 1
+    fi
+    QT_MISSING_LIBRARIES=$(ldd "$QT_XCB_PLUGIN" 2>/dev/null | awk '/=> not found/ {print $1}' | sort -u | tr '\n' ' ')
+    if [ -n "$QT_MISSING_LIBRARIES" ]; then
+        echo "错误：缺少 Qt xcb 系统运行库：$QT_MISSING_LIBRARIES"
+        echo "Ubuntu/Debian 请安装：sudo apt install libxcb-cursor0"
+        return 1
+    fi
+    echo "Qt xcb 系统运行库检查通过"
+}
+
 # 函数：检查环境是否可用
 check_environment() {
     echo "检查现有环境..."
@@ -108,10 +128,12 @@ check_environment() {
     
     # 检查关键依赖是否已安装
     echo "检查关键依赖..."
-    if ! python -c "import pandas, numpy, tkinter" >/dev/null 2>&1; then
+    if ! python -c "import pandas, numpy, tkinter; from PySide6.QtWidgets import QApplication" >/dev/null 2>&1; then
         echo "关键依赖缺失，需要重新安装"
         return 1
     fi
+
+    check_qt_platform_dependencies || return 1
     
     echo "环境检查通过，现有环境可用"
     return 0
@@ -264,6 +286,7 @@ verify_installation() {
     if ! python -c "
 import numpy; print('✓ numpy 可用')
 import pandas; print('✓ pandas 可用')
+from PySide6.QtWidgets import QApplication; print('✓ PySide6/Qt Widgets 可用')
 import scipy; print('✓ scipy 可用')
 import matplotlib; print('✓ matplotlib 可用')
 import seaborn; print('✓ seaborn 可用')
@@ -276,6 +299,8 @@ print('所有依赖验证完成')
         echo "错误：部分依赖验证失败"
         return 1
     fi
+
+    check_qt_platform_dependencies || return 1
     
     # 获取Python路径
     PYTHON_PATH=$(which python)

@@ -2,3 +2,5 @@
 
 # Test infrastructure
 pytest>=8.0.0
+pytest-qt==4.5.0
+PyInstaller==6.21.0
