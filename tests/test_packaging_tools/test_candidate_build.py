@@ -1681,6 +1681,634 @@ def test_conda_component_evidence_rejects_changed_metadata_or_license(
         )
 
 
+_DPKG_QUERY = "/usr/bin/dpkg-query"
+_DPKG_ENV = {
+    "LANG": "C.UTF-8",
+    "LANGUAGE": "C",
+    "LC_ALL": "C.UTF-8",
+}
+_DPKG_STATUS_FORMAT = (
+    "${Package}\\t${binary:Package}\\t${db:Status-Abbrev}\\t${Version}\\t"
+    "${Architecture}\\t${source:Package}\\t${source:Version}\\t${Maintainer}\\t"
+    "${Original-Maintainer}\\n"
+)
+_DPKG_VERSION_BYTES = (
+    b"Debian dpkg-query package management program query tool version "
+    b"1.21.1 (amd64).\n"
+    b"This is free software; see the GNU General Public License version 2 or\n"
+    b"later for copying conditions. There is NO warranty.\n"
+)
+
+
+def _debian_system_root(tmp_path: Path) -> Path:
+    root = tmp_path / "system-root"
+    (root / "usr/lib").mkdir(parents=True)
+    (root / "usr/share/doc").mkdir(parents=True)
+    return root
+
+
+def _debian_capture(
+    monkeypatch: pytest.MonkeyPatch,
+    system_root: Path,
+):
+    capture = build_script.capture_debian_component_evidence
+    monkeypatch.setitem(capture.__globals__, "_SYSTEM_ROOT", system_root)
+    return capture
+
+
+def _assert_dpkg_invocation(options: dict[str, object]) -> None:
+    assert options == {
+        "check": False,
+        "env": _DPKG_ENV,
+        "shell": False,
+        "stderr": subprocess.PIPE,
+        "stdout": subprocess.PIPE,
+        "timeout": 30,
+    }
+
+
+def _alpha_status(
+    *,
+    package: str = "alpha",
+    binary_package: str = "alpha:amd64",
+    status: str = "ii ",
+) -> bytes:
+    return (
+        f"{package}\t{binary_package}\t{status}\t1:2.0-3ubuntu1\tamd64\t"
+        "alpha-source\t1:2.0-3ubuntu1\t"
+        "Ubuntu Maintainer <ubuntu@example.invalid>\t"
+        "Debian Maintainer <debian@example.invalid>\n"
+    ).encode()
+
+
+def _alpha_system_source(root: Path) -> Path:
+    library = _write(root / "usr/lib/libalpha.so.1", b"alpha library\n")
+    soname = root / "usr/lib/libalpha.so.0"
+    soname.symlink_to(library.name)
+    (root / "lib").symlink_to("usr/lib", target_is_directory=True)
+    _write(
+        root / "usr/share/doc/alpha/copyright",
+        b"Format: fixture\nLicense: GPL-2+\nLicense: MIT\n",
+    )
+    return root / "lib/libalpha.so.0"
+
+
+def test_debian_component_evidence_assigns_exact_merged_usr_contributors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _debian_system_root(tmp_path)
+    source = _alpha_system_source(root)
+    excluded = _write(root / "etc/already-owned.conf", b"owned elsewhere\n")
+    collect_rows = [
+        _raw_collect_row(
+            "_internal/already-owned.conf",
+            raw_source=str(excluded),
+            toc_type="DATA",
+        ),
+        _raw_collect_row(
+            "_internal/libalpha.so.0",
+            raw_source=str(source),
+            toc_type="BINARY",
+        ),
+    ]
+    existing_id = "library:higher-precedence@1.0"
+    existing_components = {
+        existing_id: _authenticated_component(
+            existing_id,
+            ecosystem="conda",
+            component_type="library",
+            name="higher-precedence",
+            version="1.0",
+            collected_files=[
+                _existing_collected_row("_internal/already-owned.conf")
+            ],
+        )
+    }
+    owner_bytes = b"alpha:amd64: /usr/lib/libalpha.so.0\n"
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **options: object):
+        _assert_dpkg_invocation(options)
+        commands.append(command)
+        if command == [_DPKG_QUERY, "--version"]:
+            return subprocess.CompletedProcess(command, 0, _DPKG_VERSION_BYTES, b"")
+        if command == [
+            _DPKG_QUERY,
+            "-S",
+            "/lib/libalpha.so.0",
+            "/usr/lib/libalpha.so.0",
+        ]:
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                owner_bytes,
+                b"dpkg-query: no path found matching pattern /lib/libalpha.so.0\n",
+            )
+        if command == [
+            _DPKG_QUERY,
+            "-W",
+            f"--showformat={_DPKG_STATUS_FORMAT}",
+            "alpha:amd64",
+        ]:
+            return subprocess.CompletedProcess(command, 0, _alpha_status(), b"")
+        raise AssertionError(f"unexpected dpkg command: {command!r}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    capture = _debian_capture(monkeypatch, root)
+    before_collect = canonical_json_bytes(collect_rows)
+    before_components = canonical_json_bytes(existing_components)
+    first_build = _conda_build_dir(tmp_path / "first-packet")
+    second_build = _conda_build_dir(tmp_path / "second-packet")
+
+    first = capture(collect_rows, existing_components, first_build)
+    second = capture(collect_rows, existing_components, second_build)
+
+    assert commands == commands[:3] * 2
+    assert canonical_json_bytes(first) == canonical_json_bytes(second)
+    assert canonical_json_bytes(collect_rows) == before_collect
+    assert canonical_json_bytes(existing_components) == before_components
+    assert str(tmp_path).encode() not in canonical_json_bytes(first)
+    assert list(first) == ["library:alpha@1:2.0-3ubuntu1"]
+    component = first["library:alpha@1:2.0-3ubuntu1"]
+    assert component["ecosystem"] == "debian"
+    assert component["type"] == "library"
+    assert component["name"] == "alpha"
+    assert component["version"] == "1:2.0-3ubuntu1"
+    assert component["purl"] == (
+        "pkg:deb/ubuntu/alpha@1%3A2.0-3ubuntu1?arch=amd64"
+    )
+    assert component["license_candidates"] == [
+        {"field": "copyright-License", "value": "GPL-2+"},
+        {"field": "copyright-License", "value": "MIT"},
+    ]
+    assert component["provider_candidates"] == [
+        {
+            "field": "Maintainer",
+            "value": "Ubuntu Maintainer <ubuntu@example.invalid>",
+        },
+        {
+            "field": "Original-Maintainer",
+            "value": "Debian Maintainer <debian@example.invalid>",
+        },
+        {"field": "Source", "value": "alpha-source (1:2.0-3ubuntu1)"},
+    ]
+    assert component["collected_files"] == [
+        {
+            "entry_type": "regular-file",
+            "final_path": "_internal/libalpha.so.0",
+            "package_path": "usr/lib/libalpha.so.0",
+            "raw_source_text_sha256": build_script._raw_source_text_sha256(
+                str(source)
+            ),
+            "source_identity": {
+                "entry_type": "regular-file",
+                "sha256": sha256_file(root / "usr/lib/libalpha.so.1"),
+                "size": (root / "usr/lib/libalpha.so.1").stat().st_size,
+            },
+            "source_kind": "debian-package-file",
+            "source_locator": (
+                "debian-package/alpha-1:2.0-3ubuntu1-amd64/"
+                "usr/lib/libalpha.so.0"
+            ),
+            "target_final_path": None,
+            "toc_type": "BINARY",
+        }
+    ]
+    assert [row["kind"] for row in component["evidence_files"]] == [
+        "debian-copyright",
+        "debian-installed-status",
+        "debian-owner-query",
+        "dpkg-query-version",
+    ]
+    expected_evidence = {
+        "debian-copyright": (root / "usr/share/doc/alpha/copyright").read_bytes(),
+        "debian-installed-status": _alpha_status(),
+        "debian-owner-query": owner_bytes,
+        "dpkg-query-version": _DPKG_VERSION_BYTES,
+    }
+    for row in component["evidence_files"]:
+        retained = first_build.parent / row["retained_path"]
+        assert retained.is_file() and not retained.is_symlink()
+        assert retained.read_bytes() == expected_evidence[row["kind"]]
+        assert sha256_file(retained) == row["sha256"]
+
+
+def test_debian_component_evidence_sorts_multiple_components(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _debian_system_root(tmp_path)
+    alpha_source = _write(root / "etc/alpha.conf", b"alpha\n")
+    beta_source = _write(root / "etc/beta.conf", b"beta\n")
+    _write(root / "usr/share/doc/alpha/copyright", b"License: MIT\n")
+    _write(root / "usr/share/doc/beta/copyright", b"License: BSD-3-Clause\n")
+    beta_status = (
+        b"beta\tbeta:amd64\tii \t3.0-1\tamd64\tbeta-source\t3.0-1\t"
+        b"Beta Maintainer <beta@example.invalid>\t\n"
+    )
+
+    def fake_run(command: list[str], **options: object):
+        _assert_dpkg_invocation(options)
+        if command == [_DPKG_QUERY, "--version"]:
+            return subprocess.CompletedProcess(command, 0, _DPKG_VERSION_BYTES, b"")
+        if command[1] == "-S":
+            assert command[2:] == ["/etc/alpha.conf", "/etc/beta.conf"]
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                (
+                    b"beta:amd64: /etc/beta.conf\n"
+                    b"alpha:amd64: /etc/alpha.conf\n"
+                ),
+                b"",
+            )
+        assert command[1:3] == [
+            "-W",
+            f"--showformat={_DPKG_STATUS_FORMAT}",
+        ]
+        assert command[3:] == ["alpha:amd64", "beta:amd64"]
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            beta_status + _alpha_status(),
+            b"",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = _debian_capture(monkeypatch, root)(
+        [
+            _raw_collect_row(
+                "_internal/beta.conf",
+                raw_source=str(beta_source),
+                toc_type="DATA",
+            ),
+            _raw_collect_row(
+                "_internal/alpha.conf",
+                raw_source=str(alpha_source),
+                toc_type="DATA",
+            ),
+        ],
+        {},
+        _conda_build_dir(tmp_path / "packet"),
+    )
+
+    assert list(result) == [
+        "library:alpha@1:2.0-3ubuntu1",
+        "library:beta@3.0-1",
+    ]
+    assert [
+        result[component_id]["collected_files"][0]["final_path"]
+        for component_id in result
+    ] == ["_internal/alpha.conf", "_internal/beta.conf"]
+
+
+def test_debian_component_evidence_leaves_non_system_sources_unassigned(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _debian_system_root(tmp_path)
+    source = _write(root / "opt/vendor/libvendor.so", b"vendor\n")
+    build_dir = _conda_build_dir(tmp_path / "packet")
+    capture = _debian_capture(monkeypatch, root)
+
+    def unexpected_run(*_args: object, **_kwargs: object):
+        raise AssertionError("non-system sources must not invoke dpkg-query")
+
+    monkeypatch.setattr(subprocess, "run", unexpected_run)
+
+    assert capture(
+        [
+            _raw_collect_row(
+                "_internal/libvendor.so",
+                raw_source=str(source),
+                toc_type="BINARY",
+            )
+        ],
+        {},
+        build_dir,
+    ) == {}
+    assert not (build_dir / "evidence/components/debian").exists()
+
+
+@pytest.mark.parametrize("owner_problem", ["zero", "multiple"])
+def test_debian_component_evidence_rejects_zero_or_multiple_owners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    owner_problem: str,
+) -> None:
+    root = _debian_system_root(tmp_path)
+    source = _write(root / "etc/alpha.conf", b"alpha\n")
+    capture = _debian_capture(monkeypatch, root)
+
+    def fake_run(command: list[str], **options: object):
+        _assert_dpkg_invocation(options)
+        if command[1] == "--version":
+            return subprocess.CompletedProcess(command, 0, _DPKG_VERSION_BYTES, b"")
+        assert command == [_DPKG_QUERY, "-S", "/etc/alpha.conf"]
+        if owner_problem == "zero":
+            return subprocess.CompletedProcess(command, 1, b"", b"no match\n")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            b"alpha:amd64: /etc/alpha.conf\nbeta:amd64: /etc/alpha.conf\n",
+            b"",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(ReleaseContractError, match="unique installed owner"):
+        capture(
+            [
+                _raw_collect_row(
+                    "_internal/alpha.conf",
+                    raw_source=str(source),
+                    toc_type="DATA",
+                )
+            ],
+            {},
+            _conda_build_dir(tmp_path / "packet"),
+        )
+
+
+def test_debian_component_evidence_rejects_merged_usr_inode_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _debian_system_root(tmp_path)
+    source = _write(root / "lib/libalpha.so.0", b"unmerged source\n")
+    _write(root / "usr/lib/libalpha.so.0", b"different usr source\n")
+    capture = _debian_capture(monkeypatch, root)
+
+    def fake_run(command: list[str], **options: object):
+        _assert_dpkg_invocation(options)
+        if command[1] == "--version":
+            return subprocess.CompletedProcess(command, 0, _DPKG_VERSION_BYTES, b"")
+        assert command[1] == "-S"
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            b"alpha:amd64: /usr/lib/libalpha.so.0\n",
+            b"no match for /lib/libalpha.so.0\n",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(ReleaseContractError, match="same installed file"):
+        capture(
+            [
+                _raw_collect_row(
+                    "_internal/libalpha.so.0",
+                    raw_source=str(source),
+                    toc_type="BINARY",
+                )
+            ],
+            {},
+            _conda_build_dir(tmp_path / "packet"),
+        )
+
+
+@pytest.mark.parametrize("unsafe_suffix", ["alpha\x00.conf", "alpha*.conf"])
+def test_debian_component_evidence_rejects_malformed_system_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe_suffix: str,
+) -> None:
+    root = _debian_system_root(tmp_path)
+    capture = _debian_capture(monkeypatch, root)
+
+    def unexpected_run(*_args: object, **_kwargs: object):
+        raise AssertionError("malformed sources must fail before dpkg-query")
+
+    monkeypatch.setattr(subprocess, "run", unexpected_run)
+
+    with pytest.raises(ReleaseContractError, match="malformed|query syntax"):
+        capture(
+            [
+                _raw_collect_row(
+                    "_internal/alpha.conf",
+                    raw_source=f"{root.as_posix()}/etc/{unsafe_suffix}",
+                    toc_type="DATA",
+                )
+            ],
+            {},
+            _conda_build_dir(tmp_path / "packet"),
+        )
+
+
+@pytest.mark.parametrize(
+    "unsafe_link",
+    ["source-cycle", "copyright-escape", "copyright-cycle"],
+)
+def test_debian_component_evidence_rejects_unsafe_source_or_copyright_link(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe_link: str,
+) -> None:
+    root = _debian_system_root(tmp_path)
+    source = root / "etc/alpha.conf"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    if unsafe_link == "source-cycle":
+        source.symlink_to("alpha.conf")
+    else:
+        _write(source, b"alpha\n")
+        copyright_path = root / "usr/share/doc/alpha/copyright"
+        copyright_path.parent.mkdir(parents=True, exist_ok=True)
+        target = (
+            "../../../../../outside-copyright"
+            if unsafe_link == "copyright-escape"
+            else "copyright"
+        )
+        copyright_path.symlink_to(target)
+    capture = _debian_capture(monkeypatch, root)
+
+    def fake_run(command: list[str], **options: object):
+        _assert_dpkg_invocation(options)
+        if command[1] == "--version":
+            return subprocess.CompletedProcess(command, 0, _DPKG_VERSION_BYTES, b"")
+        if command[1] == "-S":
+            return subprocess.CompletedProcess(
+                command, 0, b"alpha:amd64: /etc/alpha.conf\n", b""
+            )
+        return subprocess.CompletedProcess(command, 0, _alpha_status(), b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(ReleaseContractError, match="symlink|cycle|escape"):
+        capture(
+            [
+                _raw_collect_row(
+                    "_internal/alpha.conf",
+                    raw_source=str(source),
+                    toc_type="DATA",
+                )
+            ],
+            {},
+            _conda_build_dir(tmp_path / "packet"),
+        )
+
+
+@pytest.mark.parametrize(
+    "evidence_problem",
+    [
+        "fatal-owner-command",
+        "malformed-owner",
+        "oversize-owner",
+        "oversize-query-path",
+        "timeout",
+        "unexpected-owner-path",
+        "wrong-status",
+        "status-owner-mismatch",
+        "malformed-version",
+    ],
+)
+def test_debian_component_evidence_rejects_invalid_dpkg_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    evidence_problem: str,
+) -> None:
+    root = _debian_system_root(tmp_path)
+    source = _write(root / "etc/alpha.conf", b"alpha\n")
+    _write(root / "usr/share/doc/alpha/copyright", b"License: MIT\n")
+    capture = _debian_capture(monkeypatch, root)
+    if evidence_problem == "oversize-owner":
+        monkeypatch.setitem(capture.__globals__, "_MAX_SUBPROCESS_BYTES", 16)
+    elif evidence_problem == "oversize-query-path":
+        monkeypatch.setitem(capture.__globals__, "_MAX_SYSTEM_PATH_BYTES", 8)
+
+    def fake_run(command: list[str], **options: object):
+        _assert_dpkg_invocation(options)
+        if evidence_problem == "timeout":
+            raise subprocess.TimeoutExpired(command, 30)
+        if command[1] == "--version":
+            stdout = (
+                b"not a dpkg-query version\n"
+                if evidence_problem == "malformed-version"
+                else _DPKG_VERSION_BYTES
+            )
+            return subprocess.CompletedProcess(command, 0, stdout, b"")
+        if command[1] == "-S":
+            if evidence_problem == "fatal-owner-command":
+                return subprocess.CompletedProcess(command, 2, b"", b"fatal\n")
+            owner = b"alpha:amd64: /etc/alpha.conf\n"
+            if evidence_problem == "malformed-owner":
+                owner = b"not an owner record\n"
+            elif evidence_problem == "oversize-owner":
+                owner = b"x" * 17
+            elif evidence_problem == "unexpected-owner-path":
+                owner = b"alpha:amd64: /etc/not-queried.conf\n"
+            return subprocess.CompletedProcess(command, 0, owner, b"")
+        status = _alpha_status()
+        if evidence_problem == "wrong-status":
+            status = _alpha_status(status="rc ")
+        elif evidence_problem == "status-owner-mismatch":
+            status = _alpha_status(package="beta", binary_package="beta:amd64")
+        return subprocess.CompletedProcess(command, 0, status, b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(ReleaseContractError):
+        capture(
+            [
+                _raw_collect_row(
+                    "_internal/alpha.conf",
+                    raw_source=str(source),
+                    toc_type="DATA",
+                )
+            ],
+            {},
+            _conda_build_dir(tmp_path / "packet"),
+        )
+
+
+def test_debian_component_evidence_rejects_changed_copyright(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _debian_system_root(tmp_path)
+    source = _write(root / "etc/alpha.conf", b"alpha\n")
+    copyright_path = _write(
+        root / "usr/share/doc/alpha/copyright",
+        b"License: before\n",
+    )
+    capture = _debian_capture(monkeypatch, root)
+
+    def fake_run(command: list[str], **options: object):
+        _assert_dpkg_invocation(options)
+        if command[1] == "--version":
+            return subprocess.CompletedProcess(command, 0, _DPKG_VERSION_BYTES, b"")
+        if command[1] == "-S":
+            return subprocess.CompletedProcess(
+                command, 0, b"alpha:amd64: /etc/alpha.conf\n", b""
+            )
+        return subprocess.CompletedProcess(command, 0, _alpha_status(), b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    original_open = build_script.os.open
+    opens = 0
+
+    def mutate_before_reopen(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal opens
+        if path == "copyright" and dir_fd is not None:
+            opens += 1
+            if opens == 2:
+                copyright_path.write_bytes(b"License: after\n")
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(build_script.os, "open", mutate_before_reopen)
+
+    with pytest.raises(ReleaseContractError, match="changed"):
+        capture(
+            [
+                _raw_collect_row(
+                    "_internal/alpha.conf",
+                    raw_source=str(source),
+                    toc_type="DATA",
+                )
+            ],
+            {},
+            _conda_build_dir(tmp_path / "packet"),
+        )
+
+
+def test_debian_component_evidence_preserves_empty_license_candidates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _debian_system_root(tmp_path)
+    source = _write(root / "etc/alpha.conf", b"alpha\n")
+    _write(
+        root / "usr/share/doc/alpha/copyright",
+        b"Format: fixture\nCopyright: fixture\n",
+    )
+    capture = _debian_capture(monkeypatch, root)
+
+    def fake_run(command: list[str], **options: object):
+        _assert_dpkg_invocation(options)
+        if command[1] == "--version":
+            return subprocess.CompletedProcess(command, 0, _DPKG_VERSION_BYTES, b"")
+        if command[1] == "-S":
+            return subprocess.CompletedProcess(
+                command, 0, b"alpha:amd64: /etc/alpha.conf\n", b""
+            )
+        return subprocess.CompletedProcess(command, 0, _alpha_status(), b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = capture(
+        [
+            _raw_collect_row(
+                "_internal/alpha.conf",
+                raw_source=str(source),
+                toc_type="DATA",
+            )
+        ],
+        {},
+        _conda_build_dir(tmp_path / "packet"),
+    )
+
+    assert result["library:alpha@1:2.0-3ubuntu1"]["license_candidates"] == []
+
+
 def test_python_component_evidence_is_artifact_aligned_private_and_deterministic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

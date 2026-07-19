@@ -49,6 +49,9 @@ from packaging_tools.artifact_manifest import (
 from packaging_tools.conda_component_evidence import (
     capture_conda_component_evidence,
 )
+from packaging_tools.debian_component_evidence import (
+    capture_debian_component_evidence,
+)
 from packaging_tools.contracts import (
     APPROVED_RUNTIME_VERSION,
     BuildReceipt,
