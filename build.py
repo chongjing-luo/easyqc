@@ -46,6 +46,9 @@ from packaging_tools.artifact_manifest import (
     create_artifact_manifest,
     write_artifact_manifest,
 )
+from packaging_tools.conda_component_evidence import (
+    capture_conda_component_evidence,
+)
 from packaging_tools.contracts import (
     APPROVED_RUNTIME_VERSION,
     BuildReceipt,

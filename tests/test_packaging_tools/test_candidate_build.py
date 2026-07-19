@@ -1100,6 +1100,587 @@ def test_explicit_build_roles_reject_missing_renamed_duplicate_or_fifth_role(
         )
 
 
+def _fixture_runtime_identity(root: Path, version: str = "3.10.17") -> RuntimeIdentity:
+    artifact = _write(root / "runtime/python", b"authenticated runtime\n")
+    identity_file = _write(root / "runtime-identity.json", b"identity\n")
+    return RuntimeIdentity(
+        implementation="CPython",
+        version=version,
+        target="linux-x86_64",
+        target_triple="x86_64-manylinux_2_34",
+        provider="fixture Conda runtime",
+        source_provenance="fixture://conda-runtime",
+        artifact=_reference("runtime artifact", artifact, "runtime/python"),
+        identity_file=_reference(
+            "runtime identity",
+            identity_file,
+            "runtime-identity.json",
+        ),
+    )
+
+
+def _write_conda_record(
+    base_prefix: Path,
+    *,
+    name: str,
+    version: str,
+    build: str,
+    files: list[str],
+    subdir: str = "linux-64",
+    overrides: dict[str, object] | None = None,
+) -> tuple[Path, dict[str, object]]:
+    package_name = f"{name}-{version}-{build}"
+    payload: dict[str, object] = {
+        "build": build,
+        "channel": "https://conda.example.invalid/conda-forge",
+        "files": sorted(files),
+        "license": "Fixture-License-1.0",
+        "name": name,
+        "sha256": build_script._raw_source_text_sha256(package_name),
+        "subdir": subdir,
+        "url": (
+            "https://conda.example.invalid/conda-forge/"
+            f"{subdir}/{package_name}.conda"
+        ),
+        "version": version,
+    }
+    if overrides:
+        payload.update(overrides)
+    path = base_prefix / "conda-meta" / f"{package_name}.json"
+    _write(path, (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode())
+    return path, payload
+
+
+def _conda_build_dir(packet_root: Path) -> Path:
+    build_dir = packet_root / "build"
+    (build_dir / "evidence/components").mkdir(parents=True)
+    return build_dir
+
+
+def _existing_collected_row(final_path: str) -> dict[str, object]:
+    return {
+        "entry_type": "regular-file",
+        "final_path": final_path,
+        "package_path": "fixture.py",
+        "raw_source_text_sha256": "a" * 64,
+        "source_identity": {
+            "entry_type": "regular-file",
+            "sha256": "b" * 64,
+            "size": 1,
+        },
+        "source_kind": "python-distribution-file",
+        "source_locator": "python-distribution/fixture/fixture.py",
+        "target_final_path": None,
+        "toc_type": "DATA",
+    }
+
+
+def test_conda_component_evidence_assigns_only_exact_contributors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_prefix = tmp_path / "conda"
+    python_files = [
+        "lib/python3.10/LICENSE.txt",
+        "lib/python3.10/os.py",
+        "lib/python3.10/site.py",
+    ]
+    tk_files = ["lib/libtk.so", "share/licenses/tk/LICENSE"]
+    unused_files = ["lib/libunused.so", "share/licenses/unused/LICENSE"]
+    python_meta, python_payload = _write_conda_record(
+        base_prefix,
+        name="python",
+        version="3.10.17",
+        build="h0_cpython",
+        files=python_files,
+    )
+    tk_meta, tk_payload = _write_conda_record(
+        base_prefix,
+        name="tk",
+        version="8.6.13",
+        build="h1",
+        files=tk_files,
+    )
+    _write_conda_record(
+        base_prefix,
+        name="unused",
+        version="1.0",
+        build="h2",
+        files=unused_files,
+    )
+    source_bytes = {
+        "lib/python3.10/LICENSE.txt": b"Python fixture license\n",
+        "lib/python3.10/os.py": b"OS = 'fixture'\n",
+        "lib/python3.10/site.py": b"SITE = 'owned by Python metadata'\n",
+        "lib/libtk.so": b"fixture tk library\n",
+        "share/licenses/tk/LICENSE": b"Tk fixture license\n",
+        "lib/libunused.so": b"unused\n",
+        "share/licenses/unused/LICENSE": b"Unused fixture license\n",
+    }
+    for relative, data in source_bytes.items():
+        _write(base_prefix / relative, data)
+
+    os_source = base_prefix / "lib/python3.10/os.py"
+    site_source = base_prefix / "lib/python3.10/site.py"
+    tk_source = base_prefix / "lib/libtk.so"
+    outside_source = _write(tmp_path / "system/libsystem.so", b"system\n")
+    collect_rows = [
+        _raw_collect_row(
+            "_internal/libsystem.so",
+            raw_source=str(outside_source),
+            toc_type="BINARY",
+        ),
+        _raw_collect_row(
+            "_internal/libtk.so",
+            raw_source=str(tk_source),
+            toc_type="BINARY",
+        ),
+        _raw_collect_row(
+            "_internal/os.py",
+            raw_source=str(os_source),
+            toc_type="DATA",
+        ),
+        _raw_collect_row(
+            "_internal/site.py",
+            raw_source=str(site_source),
+            toc_type="DATA",
+        ),
+    ]
+    existing_id = "library:python-fixture@1.0"
+    existing_components = {
+        existing_id: _authenticated_component(
+            existing_id,
+            ecosystem="python",
+            component_type="library",
+            name="python-fixture",
+            version="1.0",
+            collected_files=[_existing_collected_row("_internal/site.py")],
+        )
+    }
+    runtime = _fixture_runtime_identity(tmp_path / "runtime-input")
+    monkeypatch.setattr(build_script.sys, "base_prefix", str(base_prefix))
+    before_collect = canonical_json_bytes(collect_rows)
+    before_components = canonical_json_bytes(existing_components)
+
+    first_build = _conda_build_dir(tmp_path / "first-packet")
+    second_build = _conda_build_dir(tmp_path / "second-packet")
+    first = build_script.capture_conda_component_evidence(
+        collect_rows,
+        existing_components,
+        first_build,
+        runtime,
+    )
+    second = build_script.capture_conda_component_evidence(
+        collect_rows,
+        existing_components,
+        second_build,
+        runtime,
+    )
+
+    assert list(first) == ["library:python@3.10.17", "library:tk@8.6.13"]
+    assert canonical_json_bytes(first) == canonical_json_bytes(second)
+    assert str(tmp_path).encode() not in canonical_json_bytes(first)
+    assert canonical_json_bytes(collect_rows) == before_collect
+    assert canonical_json_bytes(existing_components) == before_components
+
+    python = first["library:python@3.10.17"]
+    assert python == {
+        "collected_files": [
+            {
+                "entry_type": "regular-file",
+                "final_path": "_internal/os.py",
+                "package_path": "lib/python3.10/os.py",
+                "raw_source_text_sha256": build_script._raw_source_text_sha256(
+                    str(os_source)
+                ),
+                "source_identity": {
+                    "entry_type": "regular-file",
+                    "sha256": sha256_file(os_source),
+                    "size": os_source.stat().st_size,
+                },
+                "source_kind": "conda-package-file",
+                "source_locator": (
+                    "conda-package/python-3.10.17-h0_cpython-linux-64/"
+                    "lib/python3.10/os.py"
+                ),
+                "target_final_path": None,
+                "toc_type": "DATA",
+            }
+        ],
+        "component_id": "library:python@3.10.17",
+        "ecosystem": "conda",
+        "evidence_files": [
+            {
+                "kind": "conda-license",
+                "retained_path": (
+                    "build/evidence/components/conda/"
+                    "python-3.10.17-h0_cpython-linux-64/licenses/"
+                    "lib/python3.10/LICENSE.txt"
+                ),
+                "sha256": sha256_file(
+                    base_prefix / "lib/python3.10/LICENSE.txt"
+                ),
+                "size": (base_prefix / "lib/python3.10/LICENSE.txt").stat().st_size,
+                "source_locator": (
+                    "conda-package/python-3.10.17-h0_cpython-linux-64/"
+                    "lib/python3.10/LICENSE.txt"
+                ),
+            },
+            {
+                "kind": "conda-meta",
+                "retained_path": (
+                    "build/evidence/components/conda/"
+                    "python-3.10.17-h0_cpython-linux-64/conda-meta.json"
+                ),
+                "sha256": sha256_file(python_meta),
+                "size": python_meta.stat().st_size,
+                "source_locator": (
+                    "conda-meta/python-3.10.17-h0_cpython.json"
+                ),
+            },
+        ],
+        "license_candidates": [
+            {"field": "license", "value": "Fixture-License-1.0"}
+        ],
+        "name": "python",
+        "provider_candidates": [
+            {
+                "field": "channel",
+                "value": "https://conda.example.invalid/conda-forge",
+            },
+            {"field": "url", "value": python_payload["url"]},
+        ],
+        "purl": "pkg:conda/python@3.10.17?build=h0_cpython&subdir=linux-64",
+        "type": "library",
+        "version": "3.10.17",
+    }
+    assert first["library:tk@8.6.13"]["provider_candidates"][1] == {
+        "field": "url",
+        "value": tk_payload["url"],
+    }
+    assert [
+        row["final_path"]
+        for component in first.values()
+        for row in component["collected_files"]
+    ] == ["_internal/os.py", "_internal/libtk.so"]
+    assert not (
+        first_build / "evidence/components/conda/unused-1.0-h2-linux-64"
+    ).exists()
+    first_packet = first_build.parent
+    for component in first.values():
+        for evidence in component["evidence_files"]:
+            retained = first_packet / evidence["retained_path"]
+            assert retained.is_file() and not retained.is_symlink()
+            assert sha256_file(retained) == evidence["sha256"]
+
+
+def test_conda_component_evidence_leaves_nonmembers_unassigned(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_prefix = tmp_path / "conda"
+    _write_conda_record(
+        base_prefix,
+        name="python",
+        version="3.10.17",
+        build="h0_cpython",
+        files=["lib/python3.10/LICENSE.txt"],
+    )
+    _write(base_prefix / "lib/python3.10/LICENSE.txt", b"license\n")
+    nonmember = _write(base_prefix / "lib/not-a-package-member.so", b"member?\n")
+    build_dir = _conda_build_dir(tmp_path / "packet")
+    runtime = _fixture_runtime_identity(tmp_path / "runtime-input")
+    monkeypatch.setattr(build_script.sys, "base_prefix", str(base_prefix))
+
+    result = build_script.capture_conda_component_evidence(
+        [
+            _raw_collect_row(
+                "_internal/not-a-package-member.so",
+                raw_source=str(nonmember),
+                toc_type="BINARY",
+            )
+        ],
+        {},
+        build_dir,
+        runtime,
+    )
+
+    assert result == {}
+    assert not (build_dir / "evidence/components/conda").exists()
+
+
+@pytest.mark.parametrize(
+    "metadata_shape",
+    ["unsorted-contributor-files", "license-less-empty-marker"],
+)
+def test_conda_component_evidence_accepts_real_installed_metadata_shapes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    metadata_shape: str,
+) -> None:
+    base_prefix = tmp_path / "conda"
+    member = "lib/member.so"
+    license_member = "share/licenses/python/LICENSE"
+    files = [member]
+    overrides = None
+    if metadata_shape == "unsorted-contributor-files":
+        files = [member, license_member]
+        overrides = {"files": [license_member, member]}
+    _write_conda_record(
+        base_prefix,
+        name="python",
+        version="3.10.17",
+        build="h0_cpython",
+        files=files,
+        overrides=overrides,
+    )
+    source = _write(base_prefix / member, b"member\n")
+    if metadata_shape == "unsorted-contributor-files":
+        _write(base_prefix / license_member, b"license\n")
+    else:
+        _write_conda_record(
+            base_prefix,
+            name="_libgcc_mutex",
+            version="0.1",
+            build="main",
+            files=[],
+            overrides={"license": None},
+        )
+    build_dir = _conda_build_dir(tmp_path / "packet")
+    runtime = _fixture_runtime_identity(tmp_path / "runtime-input")
+    monkeypatch.setattr(build_script.sys, "base_prefix", str(base_prefix))
+
+    result = build_script.capture_conda_component_evidence(
+        [
+            _raw_collect_row(
+                "_internal/member.so",
+                raw_source=str(source),
+                toc_type="BINARY",
+            )
+        ],
+        {},
+        build_dir,
+        runtime,
+    )
+
+    assert list(result) == ["library:python@3.10.17"]
+    assert result["library:python@3.10.17"]["collected_files"][0][
+        "package_path"
+    ] == member
+
+
+@pytest.mark.parametrize("duplicate_kind", ["within-package", "across-packages"])
+def test_conda_component_evidence_rejects_duplicate_file_ownership(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    duplicate_kind: str,
+) -> None:
+    base_prefix = tmp_path / "conda"
+    shared = "lib/shared.so"
+    python_files = [shared, shared] if duplicate_kind == "within-package" else [shared]
+    _write_conda_record(
+        base_prefix,
+        name="python",
+        version="3.10.17",
+        build="h0_cpython",
+        files=python_files,
+    )
+    if duplicate_kind == "across-packages":
+        _write_conda_record(
+            base_prefix,
+            name="other",
+            version="1.0",
+            build="h1",
+            files=[shared],
+        )
+    source = _write(base_prefix / shared, b"shared\n")
+    build_dir = _conda_build_dir(tmp_path / "packet")
+    runtime = _fixture_runtime_identity(tmp_path / "runtime-input")
+    monkeypatch.setattr(build_script.sys, "base_prefix", str(base_prefix))
+
+    with pytest.raises(ReleaseContractError, match="duplicate Conda file owner"):
+        build_script.capture_conda_component_evidence(
+            [
+                _raw_collect_row(
+                    "_internal/shared.so",
+                    raw_source=str(source),
+                    toc_type="BINARY",
+                )
+            ],
+            {},
+            build_dir,
+            runtime,
+        )
+    assert not (build_dir / "evidence/components/conda").exists()
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "filename",
+        "package-sha256",
+        "contributor-license",
+        "runtime-version",
+        "duplicate-json-key",
+        "metadata-symlink",
+        "metadata-parent-symlink",
+        "source-symlink",
+        "source-parent-symlink",
+        "noncanonical-member",
+        "nul-member",
+    ],
+)
+def test_conda_component_evidence_rejects_invalid_identity_or_unsafe_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    problem: str,
+) -> None:
+    base_prefix = tmp_path / "conda"
+    member = "lib/member.so"
+    version = "3.10.16" if problem == "runtime-version" else "3.10.17"
+    if problem == "noncanonical-member":
+        files = ["lib/../member.so"]
+    elif problem == "nul-member":
+        files = ["lib/\x00member.so"]
+    else:
+        files = [member]
+    overrides = None
+    if problem == "package-sha256":
+        overrides = {"sha256": "bad"}
+    elif problem == "contributor-license":
+        overrides = {"license": None}
+    metadata, payload = _write_conda_record(
+        base_prefix,
+        name="python",
+        version=version,
+        build="h0_cpython",
+        files=files,
+        overrides=overrides,
+    )
+    if problem == "filename":
+        metadata.rename(metadata.with_name("renamed-python.json"))
+    elif problem == "duplicate-json-key":
+        metadata.write_text(
+            '{"name":"python","name":"forged"}\n',
+            encoding="utf-8",
+        )
+    elif problem == "metadata-symlink":
+        outside = _write(
+            tmp_path / "outside-metadata.json",
+            (json.dumps(payload, sort_keys=True) + "\n").encode(),
+        )
+        metadata.unlink()
+        try:
+            metadata.symlink_to(outside)
+        except (NotImplementedError, OSError) as exc:
+            pytest.skip(f"symlinks are unavailable on this platform: {exc}")
+    elif problem == "metadata-parent-symlink":
+        outside_meta = tmp_path / "outside-conda-meta"
+        outside_meta.mkdir()
+        moved = outside_meta / metadata.name
+        metadata.rename(moved)
+        (base_prefix / "conda-meta").rmdir()
+        try:
+            (base_prefix / "conda-meta").symlink_to(
+                outside_meta,
+                target_is_directory=True,
+            )
+        except (NotImplementedError, OSError) as exc:
+            pytest.skip(f"symlinks are unavailable on this platform: {exc}")
+
+    if problem == "source-symlink":
+        outside_source = _write(tmp_path / "outside-source.so", b"outside\n")
+        source = base_prefix / member
+        source.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            source.symlink_to(outside_source)
+        except (NotImplementedError, OSError) as exc:
+            pytest.skip(f"symlinks are unavailable on this platform: {exc}")
+    elif problem == "source-parent-symlink":
+        outside_parent = tmp_path / "outside-parent"
+        _write(outside_parent / "member.so", b"outside parent\n")
+        try:
+            (base_prefix / "lib").symlink_to(
+                outside_parent,
+                target_is_directory=True,
+            )
+        except (NotImplementedError, OSError) as exc:
+            pytest.skip(f"symlinks are unavailable on this platform: {exc}")
+        source = base_prefix / member
+    else:
+        source = _write(base_prefix / member, b"member\n")
+
+    build_dir = _conda_build_dir(tmp_path / "packet")
+    runtime = _fixture_runtime_identity(tmp_path / "runtime-input")
+    monkeypatch.setattr(build_script.sys, "base_prefix", str(base_prefix))
+
+    with pytest.raises(ReleaseContractError):
+        build_script.capture_conda_component_evidence(
+            [
+                _raw_collect_row(
+                    "_internal/member.so",
+                    raw_source=str(source),
+                    toc_type="BINARY",
+                )
+            ],
+            {},
+            build_dir,
+            runtime,
+        )
+    assert not (build_dir / "evidence/components/conda").exists()
+
+
+@pytest.mark.parametrize("changed_source", ["metadata", "license"])
+def test_conda_component_evidence_rejects_changed_metadata_or_license(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    changed_source: str,
+) -> None:
+    base_prefix = tmp_path / "conda"
+    member = "lib/member.so"
+    license_member = "share/licenses/python/LICENSE"
+    metadata, _payload = _write_conda_record(
+        base_prefix,
+        name="python",
+        version="3.10.17",
+        build="h0_cpython",
+        files=[member, license_member],
+    )
+    source = _write(base_prefix / member, b"member\n")
+    license_path = _write(base_prefix / license_member, b"license before\n")
+    build_dir = _conda_build_dir(tmp_path / "packet")
+    runtime = _fixture_runtime_identity(tmp_path / "runtime-input")
+    monkeypatch.setattr(build_script.sys, "base_prefix", str(base_prefix))
+    original_open = build_script.os.open
+    target_name = metadata.name if changed_source == "metadata" else "LICENSE"
+    opens = 0
+
+    def mutate_before_reopen(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal opens
+        if path == target_name and dir_fd is not None:
+            opens += 1
+            if opens == 2:
+                target = metadata if changed_source == "metadata" else license_path
+                target.write_bytes(target.read_bytes() + b"changed\n")
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(build_script.os, "open", mutate_before_reopen)
+
+    with pytest.raises(ReleaseContractError, match="changed"):
+        build_script.capture_conda_component_evidence(
+            [
+                _raw_collect_row(
+                    "_internal/member.so",
+                    raw_source=str(source),
+                    toc_type="BINARY",
+                )
+            ],
+            {},
+            build_dir,
+            runtime,
+        )
+
+
 def test_python_component_evidence_is_artifact_aligned_private_and_deterministic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
