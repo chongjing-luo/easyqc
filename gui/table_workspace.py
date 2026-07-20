@@ -441,7 +441,11 @@ class TableWorkspace:
         self.applied_state = self.initial_state
         self.draft_state: TableViewState | None = None
         self.result = self.service.apply_state(self.applied_state)
-        self.row_window = self.service.get_window(self.result, 0)
+        self.row_window = self.service.get_window(
+            self.result,
+            0,
+            columns=self.applied_state.columns.visible_columns,
+        )
         self.page_offset = 0
         self.selected_source_position: int | None = None
         self.selection_outside_view = False
@@ -906,17 +910,16 @@ class TableWorkspace:
         if not query:
             self.action_error_var.set(_tr(_T, "请输入 ezqcid"))
             return False
-        if "ezqcid" not in self.result.dataframe.columns:
+        try:
+            result_position = self.service.find_identity(self.result, query)
+        except QcIdentityError:
             self.action_error_var.set(_tr(_T, "结果缺少 ezqcid"))
             return False
-        identities = self.result.dataframe["ezqcid"].map(lambda value: "" if pd.isna(value) else str(value).strip())
-        matches = [int(index) for index, matched in enumerate(identities.eq(query).tolist()) if matched]
-        if not matches:
+        if result_position is None:
             self.action_error_var.set(_tr(_T, "未找到 ezqcid"))
             return False
-        result_position = matches[0]
         self._remember_current_widths()
-        self.selected_source_position = self.result.source_positions[result_position]
+        self.selected_source_position = int(self.result.source_positions[result_position])
         self.selection_outside_view = False
         self.page_offset = (result_position // self.applied_state.page_size) * self.applied_state.page_size
         self.action_error_var.set("")
@@ -924,9 +927,11 @@ class TableWorkspace:
         return True
 
     def select_source_position(self, source_position: int) -> bool:
-        try:
-            result_position = self.result.source_positions.index(int(source_position))
-        except ValueError:
+        result_position = self.service.find_result_position(
+            self.result,
+            int(source_position),
+        )
+        if result_position is None:
             self.selected_source_position = int(source_position)
             self.selection_outside_view = True
             self.table.clear_selection()
@@ -979,7 +984,7 @@ class TableWorkspace:
 
     def _remember_current_widths(self) -> None:
         self.applied_state = self._state_with_current_widths()
-        self.result.state = self.applied_state
+        self.result = replace(self.result, state=self.applied_state)
 
     def _commit_state(
         self,
@@ -1010,6 +1015,7 @@ class TableWorkspace:
             self.result,
             self.page_offset,
             self.applied_state.page_size,
+            columns=self.applied_state.columns.visible_columns,
         )
         self.page_offset = self.row_window.offset
         sort_rule = self.applied_state.sort_rules[0] if self.applied_state.sort_rules else None

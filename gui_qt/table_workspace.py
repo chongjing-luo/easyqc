@@ -38,7 +38,6 @@ from gui_qt.task_runner import RevisionedTaskController
 from models.table_view_state import (
     ColumnViewState,
     FilterCondition,
-    RowWindow,
     SortRule,
     TableViewResult,
     TableViewState,
@@ -77,7 +76,11 @@ class QtTableWorkspace(QWidget):
         self.applied_state = self.initial_state
         self.draft_state: TableViewState | None = None
         self.result = self.service.apply_state(self.applied_state)
-        self.row_window = self.service.get_window(self.result, 0)
+        self.row_window = self.service.get_window(
+            self.result,
+            0,
+            columns=self.applied_state.columns.visible_columns,
+        )
         self.page_offset = 0
         self.selected_source_position: int | None = None
         self.selection_outside_view = False
@@ -306,13 +309,22 @@ class QtTableWorkspace(QWidget):
     def _selected_identity(self) -> str:
         if self.selected_source_position is None:
             return ""
+        position = self.service.find_result_position(
+            self.result,
+            self.selected_source_position,
+        )
+        if position is None:
+            return ""
         try:
-            position = self.result.source_positions.index(self.selected_source_position)
-        except ValueError:
+            window = self.service.get_window(
+                self.result,
+                position,
+                1,
+                columns=("ezqcid",),
+            )
+        except TableViewError:
             return ""
-        if "ezqcid" not in self.result.dataframe.columns:
-            return ""
-        value = self.result.dataframe.iloc[position]["ezqcid"]
+        value = window.dataframe.iloc[0]["ezqcid"]
         return "" if pd.isna(value) else str(value).strip()
 
     @staticmethod
@@ -403,18 +415,13 @@ class QtTableWorkspace(QWidget):
         self.selection_outside_view = False
         self._replace_inspector_panels()
         self._render_result()
-        if previous_identity and "ezqcid" in self.result.dataframe.columns:
-            identities = self.result.dataframe["ezqcid"].map(
-                lambda value: "" if pd.isna(value) else str(value).strip()
-            )
-            matches = [
-                index
-                for index, matched in enumerate(identities.eq(previous_identity).tolist())
-                if matched
-            ]
-            if matches:
-                position = matches[0]
-                self.selected_source_position = self.result.source_positions[position]
+        if previous_identity:
+            try:
+                position = service.find_identity(self.result, previous_identity)
+            except QcIdentityError:
+                position = None
+            if position is not None:
+                self.selected_source_position = int(self.result.source_positions[position])
                 self.page_offset = (
                     position // self.applied_state.page_size
                 ) * self.applied_state.page_size
@@ -550,18 +557,15 @@ class QtTableWorkspace(QWidget):
         if not query:
             self._set_error("Enter an exact ezqcid")
             return False
-        if "ezqcid" not in self.result.dataframe.columns:
+        try:
+            result_position = self.service.find_identity(self.result, query)
+        except QcIdentityError:
             self._set_error("The applied result has no ezqcid column")
             return False
-        identities = self.result.dataframe["ezqcid"].map(
-            lambda value: "" if pd.isna(value) else str(value).strip()
-        )
-        matches = [index for index, match in enumerate(identities.eq(query).tolist()) if match]
-        if not matches:
+        if result_position is None:
             self._set_error(f"No exact ezqcid match: {query}")
             return False
-        result_position = matches[0]
-        self.selected_source_position = self.result.source_positions[result_position]
+        self.selected_source_position = int(self.result.source_positions[result_position])
         self.page_offset = (
             result_position // self.applied_state.page_size
         ) * self.applied_state.page_size
@@ -571,9 +575,11 @@ class QtTableWorkspace(QWidget):
 
     def select_source_position(self, source_position: int) -> bool:
         source_position = int(source_position)
-        try:
-            result_position = self.result.source_positions.index(source_position)
-        except ValueError:
+        result_position = self.service.find_result_position(
+            self.result,
+            source_position,
+        )
+        if result_position is None:
             self.selected_source_position = source_position
             self.selection_outside_view = True
             self.table_view.clearSelection()
@@ -745,17 +751,10 @@ class QtTableWorkspace(QWidget):
                 self.result,
                 self.page_offset,
                 self.applied_state.page_size,
+                columns=self.applied_state.columns.visible_columns,
             )
             self.page_offset = self.row_window.offset
-            visible = self.applied_state.columns.visible_columns
-            projected = RowWindow(
-                dataframe=self.row_window.dataframe.loc[:, list(visible)].copy(),
-                source_positions=self.row_window.source_positions,
-                offset=self.row_window.offset,
-                limit=self.row_window.limit,
-                matched_total=self.row_window.matched_total,
-            )
-            self.table_model.set_window(projected)
+            self.table_model.set_window(self.row_window)
             self.table_model.set_sort_rules(self.applied_state.sort_rules)
             self._configure_columns()
             self._restore_selection()

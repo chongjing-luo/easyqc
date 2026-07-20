@@ -38,6 +38,14 @@ def _workspace(tk_root, source_frame, **kwargs) -> TableWorkspace:
     return workspace
 
 
+def _full_result_frame(workspace: TableWorkspace) -> pd.DataFrame:
+    return workspace.service.get_window(
+        workspace.result,
+        0,
+        max(1, workspace.result.matched_total),
+    ).dataframe
+
+
 def test_workspace_is_resizable_non_modal_and_keeps_table_counts_and_inspector_visible(
     tk_root,
     source_frame,
@@ -62,8 +70,9 @@ def test_filter_cancel_is_a_byte_for_byte_noop_for_applied_state_and_result(
 ) -> None:
     workspace = _workspace(tk_root, source_frame)
     state_before = workspace.applied_state
-    positions_before = workspace.result.source_positions
-    rows_before = workspace.result.dataframe.copy(deep=True)
+    result_before = workspace.result
+    positions_before = workspace.result.source_positions.copy()
+    rows_before = workspace.row_window.dataframe.copy(deep=True)
     counts_before = (workspace.result.matched_total, workspace.result.source_total)
 
     workspace.begin_filter_edit()
@@ -72,8 +81,9 @@ def test_filter_cancel_is_a_byte_for_byte_noop_for_applied_state_and_result(
 
     assert workspace.applied_state == state_before
     assert workspace.applied_state is state_before
-    assert workspace.result.source_positions == positions_before
-    pd.testing.assert_frame_equal(workspace.result.dataframe, rows_before)
+    assert workspace.result is result_before
+    assert workspace.result.source_positions.tolist() == positions_before.tolist()
+    pd.testing.assert_frame_equal(workspace.row_window.dataframe, rows_before)
     assert (workspace.result.matched_total, workspace.result.source_total) == counts_before
     assert workspace.draft_state is None
 
@@ -92,7 +102,7 @@ def test_valid_filter_apply_commits_once_updates_counts_and_applied_chips(
 
     assert workspace.applied_state.revision == 1
     assert workspace.result.matched_total == 3
-    assert workspace.result.source_positions == (0, 2, 4)
+    assert workspace.result.source_positions.tolist() == [0, 2, 4]
     assert workspace.page_offset == 0
     assert workspace.draft_state is None
     assert len(workspace.chip_texts) == 1
@@ -113,12 +123,12 @@ def test_visible_filter_inspector_is_immediately_editable_and_reusable_without_t
     row.value_var.set("A")
 
     assert workspace.apply_filter_draft() is True
-    assert workspace.result.dataframe["site"].tolist() == ["A", "A", "A"]
+    assert _full_result_frame(workspace)["site"].tolist() == ["A", "A", "A"]
     assert workspace.draft_state is None
 
     row.value_var.set("B")
     assert workspace.apply_filter_draft() is True
-    assert workspace.result.dataframe["site"].tolist() == ["B", "B"]
+    assert _full_result_frame(workspace)["site"].tolist() == ["B", "B"]
 
 
 def test_filter_condition_value_control_fits_inside_inspector(tk_root, source_frame) -> None:
@@ -172,7 +182,7 @@ def test_applied_chip_removes_exactly_one_condition_as_a_committed_action(
 
     assert workspace.applied_state.revision == revision + 1
     assert tuple(item.condition_id for item in workspace.applied_state.conditions) == ("site-a",)
-    assert workspace.result.source_positions == (0, 2, 4)
+    assert workspace.result.source_positions.tolist() == [0, 2, 4]
 
 
 def test_invalid_filter_remains_draft_and_preserves_applied_result(
@@ -181,7 +191,7 @@ def test_invalid_filter_remains_draft_and_preserves_applied_result(
 ) -> None:
     workspace = _workspace(tk_root, source_frame)
     applied_before = workspace.applied_state
-    positions_before = workspace.result.source_positions
+    positions_before = workspace.result.source_positions.copy()
     workspace.begin_filter_edit()
     workspace.set_filter_draft((FilterCondition("score", ">", "not-a-number"),))
 
@@ -189,7 +199,7 @@ def test_invalid_filter_remains_draft_and_preserves_applied_result(
 
     assert workspace.applied_state is applied_before
     assert workspace.applied_state.revision == 0
-    assert workspace.result.source_positions == positions_before
+    assert workspace.result.source_positions.tolist() == positions_before.tolist()
     assert workspace.draft_state is not None
     assert "score" in workspace.filter_error_var.get()
 
@@ -239,7 +249,7 @@ def test_high_cardinality_membership_uses_literal_value_picker_not_query_syntax(
     assert row.add_multi_value() is True
 
     assert workspace.apply_filter_draft() is True
-    assert workspace.result.source_positions == (90, 100)
+    assert workspace.result.source_positions.tolist() == [90, 100]
 
 
 def test_selected_source_position_is_retained_outside_view_without_auto_select(
@@ -258,7 +268,7 @@ def test_selected_source_position_is_retained_outside_view_without_auto_select(
     assert workspace.selection_outside_view is True
     assert workspace.table.selected_row is None
     assert workspace.open_qc_button.instate(["disabled"])
-    assert workspace.result.source_positions == (1, 3)
+    assert workspace.result.source_positions.tolist() == [1, 3]
 
 
 def test_duplicate_identity_blocks_callback_with_specific_inline_error(tk_root) -> None:
@@ -313,13 +323,13 @@ def test_header_sort_cycles_direction_and_shows_direction_in_header_and_status(
     workspace.on_header_sort("score")
     assert workspace.applied_state.sort_rules[0].column == "score"
     assert workspace.applied_state.sort_rules[0].ascending is True
-    assert workspace.result.dataframe["score"].iloc[:4].tolist() == [1.0, 2.0, 3.0, 4.0]
+    assert _full_result_frame(workspace)["score"].iloc[:4].tolist() == [1.0, 2.0, 3.0, 4.0]
     assert "↑" in workspace.table.main_tree.heading("score")["text"]
     assert "score" in workspace.sort_status_var.get()
 
     workspace.on_header_sort("score")
     assert workspace.applied_state.sort_rules[0].ascending is False
-    assert workspace.result.dataframe["score"].iloc[:4].tolist() == [4.0, 3.0, 2.0, 1.0]
+    assert _full_result_frame(workspace)["score"].iloc[:4].tolist() == [4.0, 3.0, 2.0, 1.0]
     assert "↓" in workspace.table.main_tree.heading("score")["text"]
 
     workspace.on_header_sort("score")

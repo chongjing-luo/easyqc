@@ -24,6 +24,14 @@ def _source() -> pd.DataFrame:
     )
 
 
+def _full_result_frame(workspace: QtTableWorkspace) -> pd.DataFrame:
+    return workspace.service.get_window(
+        workspace.result,
+        0,
+        max(1, workspace.result.matched_total),
+    ).dataframe
+
+
 def test_filter_draft_cancel_apply_and_invalid_input_preserve_last_result(qtbot):
     source = _source()
     original = source.copy(deep=True)
@@ -39,7 +47,7 @@ def test_filter_draft_cancel_apply_and_invalid_input_preserve_last_result(qtbot)
     workspace.set_filter_draft((FilterCondition("site", "==", "A", "site-a"),))
     assert workspace.apply_filter_draft()
     valid_revision = workspace.applied_state.revision
-    valid_ids = workspace.result.dataframe["ezqcid"].tolist()
+    valid_ids = _full_result_frame(workspace)["ezqcid"].tolist()
     assert valid_ids == ["SUB001", "SUB003", "SUB005"]
     assert workspace.filter_count == 1
     assert workspace.applied_chip_texts == ("site is A",)
@@ -48,7 +56,7 @@ def test_filter_draft_cancel_apply_and_invalid_input_preserve_last_result(qtbot)
     workspace.set_filter_draft((FilterCondition("age", ">", "not-a-number", "bad"),))
     assert not workspace.apply_filter_draft()
     assert workspace.applied_state.revision == valid_revision
-    assert workspace.result.dataframe["ezqcid"].tolist() == valid_ids
+    assert _full_result_frame(workspace)["ezqcid"].tolist() == valid_ids
     assert "数值" in workspace.filter_panel.error_text
     assert_frame_equal(source, original)
 
@@ -60,7 +68,7 @@ def test_multi_sort_header_state_and_column_layout_are_applied(qtbot):
     workspace.table_view.setColumnWidth(1, 211)
 
     assert workspace.apply_sort_rules(rules)
-    assert workspace.result.dataframe["ezqcid"].tolist() == [
+    assert _full_result_frame(workspace)["ezqcid"].tolist() == [
         "SUB005",
         "SUB001",
         "SUB003",
@@ -255,7 +263,7 @@ def test_prepared_source_replacement_preserves_compatible_view_and_identity(qtbo
         FilterCondition("site", "==", "A", "site-a"),
     )
     assert workspace.applied_state.sort_rules == (SortRule("age", False),)
-    assert workspace.result.dataframe["ezqcid"].tolist() == [
+    assert _full_result_frame(workspace)["ezqcid"].tolist() == [
         "SUB005",
         "SUB001",
         "SUB003",

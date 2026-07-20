@@ -269,7 +269,7 @@ def test_supported_legacy_select_becomes_typed_applied_filters(tk_root) -> None:
         ("site", "==", "B"),
         ("score", ">=", 3),
     ]
-    assert workspace.result.dataframe["ezqcid"].tolist() == ["SUB003"]
+    assert workspace.row_window.dataframe["ezqcid"].tolist() == ["SUB003"]
     assert workspace.result.source_total == 3
     assert workspace.result.matched_total == 1
 
@@ -282,7 +282,7 @@ def test_unsupported_legacy_filter_opens_complete_source_with_specific_safe_warn
     display.open_table_workspace(source, raw_legacy)
     workspace = display.table_workspace
 
-    assert workspace.result.dataframe["ezqcid"].tolist() == ["SUB001", "SUB002"]
+    assert workspace.row_window.dataframe["ezqcid"].tolist() == ["SUB001", "SUB002"]
     assert workspace.applied_state.conditions == ()
     warning = workspace.action_error_var.get()
     assert "legacy" in warning.lower() or "旧版" in warning

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 
@@ -80,13 +81,32 @@ class ColumnProfile:
     values: tuple[Any, ...] = ()
 
 
-@dataclass
+@dataclass(frozen=True)
 class TableViewResult:
-    dataframe: pd.DataFrame
-    source_positions: tuple[int, ...]
+    source_positions: np.ndarray
     source_total: int
     matched_total: int
     state: TableViewState
+
+    def __post_init__(self) -> None:
+        if self.source_total < 0:
+            raise ValueError("source_total must be greater than or equal to zero")
+        positions = np.asarray(self.source_positions)
+        if positions.ndim != 1:
+            raise ValueError("source_positions must be a one-dimensional array")
+        positions = np.array(positions, dtype=np.int64, order="C", copy=True)
+        if len(positions) != self.matched_total:
+            raise ValueError("matched_total must equal the number of source positions")
+        if self.matched_total < 0:
+            raise ValueError("matched_total must be greater than or equal to zero")
+        if len(positions) and (
+            int(positions.min()) < 0 or int(positions.max()) >= self.source_total
+        ):
+            raise ValueError("source position is outside source_total")
+        if len(np.unique(positions)) != len(positions):
+            raise ValueError("source positions must not contain duplicates")
+        positions.setflags(write=False)
+        object.__setattr__(self, "source_positions", positions)
 
 
 @dataclass

@@ -211,8 +211,13 @@ def test_rating_save_refreshes_table_and_preserves_view_state_and_qc_session(
     assert window.table_workspace.applied_state.sort_rules == (
         SortRule("site", ascending=False),
     )
-    assert "AnatQC.rater1.score1" in window.table_workspace.result.dataframe.columns
-    row = window.table_workspace.result.dataframe.set_index("ezqcid").loc["SUB001"]
+    result_frame = window.table_workspace.service.get_window(
+        window.table_workspace.result,
+        0,
+        max(1, window.table_workspace.result.matched_total),
+    ).dataframe
+    assert "AnatQC.rater1.score1" in result_frame.columns
+    row = result_frame.set_index("ezqcid").loc["SUB001"]
     assert row["AnatQC.rater1.score1"] == "Good"
     assert window.table_workspace.find_identity_exact("SUB001")
 

@@ -108,7 +108,8 @@ def test_last_project_snapshot_prepares_subjects_ratings_and_table_service(tmp_p
     result = snapshot.table_view_service.apply_state(
         snapshot.table_view_service.default_state()
     )
-    assert result.dataframe.loc[0, "AnatQC.rater1.score1"] == "Good"
+    window = snapshot.table_view_service.get_window(result, 0, 1)
+    assert window.dataframe.loc[0, "AnatQC.rater1.score1"] == "Good"
 
 
 def test_qc_factory_uses_snapshot_order_directory_and_emits_rating_event(tmp_path) -> None:

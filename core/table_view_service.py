@@ -1,7 +1,7 @@
 """Complete-data filtering/sorting for the read-only table workspace.
 
 Rendering limits are deliberately absent from ``apply_state``. A row window is
-created only after the complete result and its counts have been computed.
+created only after the complete ordered position result and counts exist.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from pandas.api import types as ptypes
 
@@ -54,7 +55,11 @@ class TableViewService:
         self._distinct_value_limit = distinct_value_limit
         self._profiles = self._profile_columns()
         self._profile_by_name = {profile.name: profile for profile in self._profiles}
-        self._identity_counts = self._build_identity_counts()
+        self._identity_positions = self._build_identity_positions()
+        self._identity_counts = {
+            identity: 1 if isinstance(positions, int) else len(positions)
+            for identity, positions in self._identity_positions.items()
+        }
 
     @property
     def profiles(self) -> tuple[ColumnProfile, ...]:
@@ -73,50 +78,124 @@ class TableViewService:
         )
 
     def apply_state(self, state: TableViewState) -> TableViewResult:
+        """Return the complete applied row order without materializing result columns."""
+
         normalized = self.validate_state(state)
-        helper = self._helper_column_name()
-        working = self._source.copy(deep=True)
-        working[helper] = range(len(working))
+        source_positions = np.arange(len(self._source), dtype=np.int64)
 
         if normalized.conditions:
-            mask = pd.Series(True, index=working.index, dtype=bool)
+            mask = pd.Series(True, index=self._source.index, dtype=bool)
             for condition in normalized.conditions:
                 if condition.enabled:
-                    mask &= self._condition_mask(working, condition)
-            working = working.loc[mask]
+                    mask &= self._condition_mask(self._source, condition)
+            source_positions = source_positions[mask.to_numpy(dtype=bool)]
 
-        if normalized.sort_rules:
-            working = working.sort_values(
-                by=[rule.column for rule in normalized.sort_rules],
-                ascending=[rule.ascending for rule in normalized.sort_rules],
+        if normalized.sort_rules and len(source_positions):
+            helper = self._helper_column_name()
+            sort_columns = [rule.column for rule in normalized.sort_rules]
+            sort_frame = (
+                self._source.loc[:, sort_columns]
+                .iloc[source_positions]
+                .copy()
+            )
+            sort_frame[helper] = source_positions
+            sort_frame = sort_frame.sort_values(
+                by=[*sort_columns, helper],
+                ascending=[
+                    *(rule.ascending for rule in normalized.sort_rules),
+                    True,
+                ],
                 na_position="last",
                 kind="mergesort",
             )
+            source_positions = sort_frame[helper].to_numpy(dtype=np.int64, copy=True)
 
-        source_positions = tuple(int(value) for value in working[helper].tolist())
-        dataframe = working.drop(columns=[helper]).reset_index(drop=True)
         return TableViewResult(
-            dataframe=dataframe,
             source_positions=source_positions,
             source_total=len(self._source),
-            matched_total=len(dataframe),
+            matched_total=len(source_positions),
             state=normalized,
         )
 
-    def get_window(self, result: TableViewResult, offset: int, limit: int | None = None) -> RowWindow:
+    def get_window(
+        self,
+        result: TableViewResult,
+        offset: int,
+        limit: int | None = None,
+        columns: tuple[str, ...] | None = None,
+    ) -> RowWindow:
+        """Materialize one bounded row and column projection from the source snapshot."""
+
+        self._validate_result(result)
         actual_limit = result.state.page_size if limit is None else limit
         if actual_limit <= 0:
             raise TableViewError("显示窗口行数必须大于 0")
+        selected_columns = (
+            tuple(str(column) for column in self._source.columns)
+            if columns is None
+            else tuple(columns)
+        )
+        if len(set(selected_columns)) != len(selected_columns):
+            raise TableViewError("显示列不能重复")
+        for column in selected_columns:
+            self._require_column(column)
         maximum_offset = max(0, result.matched_total - 1)
         actual_offset = min(max(0, int(offset)), maximum_offset) if result.matched_total else 0
         stop = actual_offset + actual_limit
+        window_positions = result.source_positions[actual_offset:stop]
         return RowWindow(
-            dataframe=result.dataframe.iloc[actual_offset:stop].copy(),
-            source_positions=result.source_positions[actual_offset:stop],
+            dataframe=(
+                self._source.loc[:, list(selected_columns)]
+                .iloc[window_positions]
+                .copy()
+                .reset_index(drop=True)
+            ),
+            source_positions=tuple(int(value) for value in window_positions),
             offset=actual_offset,
             limit=actual_limit,
             matched_total=result.matched_total,
         )
+
+    def find_result_position(
+        self,
+        result: TableViewResult,
+        source_position: int,
+    ) -> int | None:
+        """Return the applied-result position for one exact source position."""
+
+        self._validate_result(result)
+        matches = np.flatnonzero(result.source_positions == int(source_position))
+        return int(matches[0]) if len(matches) else None
+
+    def find_identity(
+        self,
+        result: TableViewResult,
+        identity: str,
+        id_column: str = "ezqcid",
+    ) -> int | None:
+        """Return the first applied-result position matching one normalized identity."""
+
+        self._validate_result(result)
+        if id_column not in self._source.columns:
+            raise QcIdentityError(f"表格缺少 QC 身份列 '{id_column}'")
+        query = self._normalize_identity(identity)
+        if not query or not result.matched_total:
+            return None
+        if id_column != "ezqcid":
+            values = self._source[id_column].iloc[result.source_positions].map(
+                self._normalize_identity
+            )
+            matches = np.flatnonzero(values.eq(query).to_numpy(dtype=bool))
+            return int(matches[0]) if len(matches) else None
+        indexed = self._identity_positions.get(query)
+        if indexed is None:
+            return None
+        source_positions = (indexed,) if isinstance(indexed, int) else indexed
+        matches = (
+            self.find_result_position(result, source_position)
+            for source_position in source_positions
+        )
+        return next((position for position in matches if position is not None), None)
 
     def validate_state(self, state: TableViewState) -> TableViewState:
         columns = tuple(str(column) for column in self._source.columns)
@@ -162,16 +241,34 @@ class TableViewService:
         result_position: int,
         id_column: str = "ezqcid",
     ) -> str:
-        if id_column not in result.dataframe.columns:
+        self._validate_result(result)
+        if id_column not in self._source.columns:
             raise QcIdentityError(f"表格缺少 QC 身份列 '{id_column}'")
         if result_position < 0 or result_position >= result.matched_total:
             raise QcIdentityError("所选记录位置已失效，请重新选择")
-        identity = self._normalize_identity(result.dataframe.iloc[result_position][id_column])
+        source_position = int(result.source_positions[result_position])
+        identity = self._normalize_identity(
+            self._source[id_column].iloc[source_position]
+        )
         if not identity:
             raise QcIdentityError(f"所选记录的 {id_column} 为空，无法打开 QC")
-        if self._identity_counts.get(identity, 0) != 1:
+        identity_count = (
+            self._identity_counts.get(identity, 0)
+            if id_column == "ezqcid"
+            else sum(
+                self._normalize_identity(value) == identity
+                for value in self._source[id_column]
+            )
+        )
+        if identity_count != 1:
             raise QcIdentityError(f"{id_column} '{identity}' 在源表中不唯一，无法安全打开 QC")
         return identity
+
+    def _validate_result(self, result: TableViewResult) -> None:
+        if not isinstance(result, TableViewResult):
+            raise TypeError("result must be a TableViewResult")
+        if result.source_total != len(self._source):
+            raise TableViewError("表格结果与当前源表不匹配，请重新应用视图")
 
     def _profile_columns(self) -> tuple[ColumnProfile, ...]:
         profiles: list[ColumnProfile] = []
@@ -303,15 +400,18 @@ class TableViewService:
             name = f"_{name}"
         return name
 
-    def _build_identity_counts(self) -> dict[str, int]:
+    def _build_identity_positions(self) -> dict[str, int | tuple[int, ...]]:
         if "ezqcid" not in self._source.columns:
             return {}
         identities = [self._normalize_identity(value) for value in self._source["ezqcid"]]
-        counts: dict[str, int] = {}
-        for identity in identities:
+        collected: dict[str, list[int]] = {}
+        for source_position, identity in enumerate(identities):
             if identity:
-                counts[identity] = counts.get(identity, 0) + 1
-        return counts
+                collected.setdefault(identity, []).append(source_position)
+        return {
+            identity: values[0] if len(values) == 1 else tuple(values)
+            for identity, values in collected.items()
+        }
 
     @staticmethod
     def _normalize_identity(value: Any) -> str:
