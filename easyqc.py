@@ -10,6 +10,14 @@ import sys
 import argparse
 from pathlib import Path
 
+EASYQC_VERSION = "1.0.0"
+
+# Managed-runtime smoke requires exact stdout and must not initialize logging
+# or any GUI module.  Keep this direct-script fast path before those imports.
+if __name__ == "__main__" and sys.argv[1:] == ["--version"]:
+    print(EASYQC_VERSION)
+    raise SystemExit(0)
+
 # 获取电脑的操作系统
 import platform
 os_name = platform.system()
@@ -46,6 +54,12 @@ def parse_arguments(argv=None):
         choices=('tk', 'qt-preview'),
         default='tk',
         help='界面实现：tk（当前默认）或 qt-preview（迁移预览）',
+    )
+
+    parser.add_argument(
+        '--version',
+        action='store_true',
+        help='显示 EasyQC 版本并退出',
     )
 
     parser.add_argument(
@@ -209,6 +223,10 @@ def main(argv=None):
     try:
         # 解析命令行参数
         args = parse_arguments(argv)
+
+        if getattr(args, 'version', False):
+            print(EASYQC_VERSION)
+            return 0
 
         if args.ui == 'qt-preview':
             if args.args:
