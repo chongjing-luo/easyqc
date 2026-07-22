@@ -178,6 +178,14 @@ def test_request_and_plan_reject_wrong_identity_or_unsafe_command_contracts() ->
     with pytest.raises(PlatformVerificationContractError, match="duplicate.*name"):
         AutomatedCheckPlanV1.from_json_object(duplicate)
 
+    hierarchy = check_plan_object()
+    child = deepcopy(hierarchy["checks"][0])  # type: ignore[index]
+    child["name"] = "nested-report"
+    child["report_path"] = "reports/core-suite.json/nested.json"
+    hierarchy["checks"].append(child)  # type: ignore[union-attr]
+    with pytest.raises(PlatformVerificationContractError, match="hierarchy"):
+        AutomatedCheckPlanV1.from_json_object(hierarchy)
+
 
 def test_native_checklist_requires_exact_stable_nonblank_items() -> None:
     checklist = NativeUiChecklistV1.from_json_object(native_checklist_object())

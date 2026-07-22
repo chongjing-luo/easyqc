@@ -81,12 +81,34 @@ def _report_destination(root: Path, relative_path: str) -> Path:
         raise PlatformVerificationError(
             f"check report path already exists: {relative_path}"
         )
-    destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.parent.is_symlink() or not destination.parent.is_dir():
         raise PlatformVerificationError(
             f"check report parent is invalid: {relative_path}"
         )
     return destination
+
+
+def _prepare_report_directories(
+    root: Path,
+    plan: AutomatedCheckPlanV1,
+) -> None:
+    for check in plan.checks:
+        cursor = root
+        for part in PurePosixPath(check.report_path).parts[:-1]:
+            cursor = cursor / part
+            if cursor.exists() or cursor.is_symlink():
+                if cursor.is_symlink() or not cursor.is_dir():
+                    raise PlatformVerificationError(
+                        f"check report parent is invalid: {check.report_path}"
+                    )
+                continue
+            try:
+                cursor.mkdir()
+            except FileExistsError:
+                if cursor.is_symlink() or not cursor.is_dir():
+                    raise PlatformVerificationError(
+                        f"check report parent is invalid: {check.report_path}"
+                    )
 
 
 def _execute_check(
@@ -99,7 +121,9 @@ def _execute_check(
     returncode: int | None = None
     timed_out = False
     failure_kind: str | None = None
-    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+    with tempfile.TemporaryFile(dir=root) as stdout, tempfile.TemporaryFile(
+        dir=root
+    ) as stderr:
         try:
             completed = subprocess.run(
                 list(check.argv),
@@ -179,6 +203,7 @@ def run_automated_request(
             "automated check report_path collides with reserved authority"
         )
     root = create_verification_attempt_root(attempt_root)
+    _prepare_report_directories(root, plan)
     started_at = _utc_now()
     tests: list[RawTestEvidenceV1] = []
     limitations: list[str] = []

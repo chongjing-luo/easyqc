@@ -486,11 +486,14 @@ def _resolve_real_directory(directory: Path, label: str) -> Path:
     if not cursor.is_dir():
         raise PlatformVerificationError(f"{label} must be a real directory")
     try:
-        return cursor.resolve(strict=True)
+        resolved = cursor.resolve(strict=True)
     except OSError as exc:
         raise PlatformVerificationError(
             f"{label} must be a real directory"
         ) from exc
+    if os.path.normcase(str(resolved)) != os.path.normcase(str(absolute)):
+        raise PlatformVerificationError(f"{label} must be a real directory")
+    return resolved
 
 
 def _hash_evidence_file(root: Path, relative_path: str) -> str:
@@ -525,6 +528,12 @@ def _hash_evidence_file(root: Path, relative_path: str) -> str:
     if not resolved.is_relative_to(root):
         raise PlatformVerificationError(
             f"evidence file escapes evidence root: {relative_path}"
+        )
+    if os.path.normcase(str(resolved)) != os.path.normcase(
+        str(Path(os.path.abspath(candidate)))
+    ):
+        raise PlatformVerificationError(
+            f"evidence file must be a regular non-symlink: {relative_path}"
         )
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)

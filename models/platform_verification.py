@@ -917,6 +917,15 @@ class AutomatedCheckPlanV1:
             raise PlatformVerificationContractError(
                 "duplicate automated check report_path"
             )
+        path_parts = tuple(PurePosixPath(path).parts for path in paths)
+        for index, parts in enumerate(path_parts):
+            for other_index, other in enumerate(path_parts):
+                if index == other_index:
+                    continue
+                if len(parts) < len(other) and other[: len(parts)] == parts:
+                    raise PlatformVerificationContractError(
+                        "automated check report_path hierarchy conflicts"
+                    )
 
     @property
     def canonical_bytes(self) -> bytes:
