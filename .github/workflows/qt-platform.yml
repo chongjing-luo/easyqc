@@ -3,7 +3,11 @@ name: Qt platform verification
 on:
   pull_request:
   push:
-    branches: [main]
+    branches:
+      - main
+      - 'verification/ubuntu/**'
+      - 'verification/windows/**'
+      - 'verification/macos/**'
   workflow_dispatch:
     inputs:
       release_id:
@@ -43,7 +47,17 @@ jobs:
         id: select
         shell: bash
         env:
-          SELECTED_PLATFORM: ${{ inputs.platform || 'all' }}
+          SELECTED_PLATFORM: >-
+            ${{
+              startsWith(github.ref_name, 'verification/ubuntu/')
+              && 'ubuntu'
+              || startsWith(github.ref_name, 'verification/windows/')
+              && 'windows'
+              || startsWith(github.ref_name, 'verification/macos/')
+              && 'macos'
+              || inputs.platform
+              || 'all'
+            }}
         run: |
           ubuntu_22='{"name":"Ubuntu 22.04 x86_64","runner":"ubuntu-22.04","row_id":"ci-ubuntu-22.04-x86_64","lock_path":"packaging/locks/python-3.10.17/linux-x86_64/test.txt"}'
           ubuntu_24='{"name":"Ubuntu 24.04 x86_64","runner":"ubuntu-24.04","row_id":"ci-ubuntu-24.04-x86_64","lock_path":"packaging/locks/python-3.10.17/linux-x86_64/test.txt"}'

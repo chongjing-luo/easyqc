@@ -210,6 +210,27 @@ def test_manual_dispatch_selects_only_the_requested_platform_rows(
     assert {row["name"] for row in rows} == expected_names
 
 
+def test_verification_push_branches_route_one_platform_without_narrowing_main(
+    easyqc_root: Path,
+) -> None:
+    text = _workflow_text(easyqc_root)
+
+    assert re.search(
+        r"(?m)^  push:\n"
+        r"    branches:\n"
+        r"      - main\n"
+        r"      - 'verification/ubuntu/\*\*'\n"
+        r"      - 'verification/windows/\*\*'\n"
+        r"      - 'verification/macos/\*\*'$",
+        text,
+    )
+    assert "startsWith(github.ref_name, 'verification/ubuntu/')" in text
+    assert "startsWith(github.ref_name, 'verification/windows/')" in text
+    assert "startsWith(github.ref_name, 'verification/macos/')" in text
+    assert "inputs.platform" in text
+    assert "|| 'all'" in text
+
+
 def test_workflow_pins_actions_runtime_permissions_and_failure_artifacts(
     easyqc_root: Path,
 ) -> None:
@@ -226,7 +247,7 @@ def test_workflow_pins_actions_runtime_permissions_and_failure_artifacts(
     assert "pull_request_target" not in text
     assert re.search(r"(?m)^permissions:\n\s+contents: read$", text)
     assert "pull_request:" in text
-    assert "push:" in text and "branches: [main]" in text
+    assert "push:" in text
     assert "workflow_dispatch:" in text
     assert 'python-version: "3.10.17"' in text
     assert 'version: "0.11.29"' in text
