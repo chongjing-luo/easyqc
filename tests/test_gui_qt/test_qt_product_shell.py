@@ -4,7 +4,13 @@ from threading import Event
 
 import pandas as pd
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QMessageBox, QToolBar
+from PySide6.QtWidgets import (
+    QListWidget,
+    QMessageBox,
+    QStackedWidget,
+    QTabWidget,
+    QToolBar,
+)
 
 from core.app_services import build_app_services
 from core.project_context_service import ProjectContextError
@@ -91,14 +97,13 @@ def test_empty_product_shell_keeps_configuration_available_without_writes(qtbot,
     qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
 
     assert window.current_context.project_name == ""
-    assert window.workspace_tabs.count() == 3
-    assert window.workspace_tabs.isTabEnabled(window.config_tab_index)
-    assert not window.workspace_tabs.isTabEnabled(window.qc_tab_index)
+    assert window.workspace_stack.count() == 6
+    assert window.navigation.currentRow() == window.project_page_index
     assert "No project" in window.shell_empty_label.text()
     assert not registry.exists()
 
 
-def test_product_shell_loads_last_project_and_three_shared_workspaces(qtbot, tmp_path) -> None:
+def test_qt_main_window_uses_six_direct_navigation_pages(qtbot, tmp_path) -> None:
     window, services = _window(qtbot, tmp_path)
 
     assert window.current_context.project_name == "SAMPLE"
@@ -108,14 +113,33 @@ def test_product_shell_loads_last_project_and_three_shared_workspaces(qtbot, tmp
     assert window.qc_workspace is not None
     assert window.qc_workspace.workflow.current_module.name == "AnatQC"
     assert window.config_workspace.configuration is services.configuration_service
-    assert [window.workspace_tabs.tabText(i) for i in range(3)] == [
-        "Table",
-        "QC",
-        "Project configuration",
+    assert [window.navigation.item(i).text() for i in range(window.navigation.count())] == [
+        "项目选择",
+        "常量设置",
+        "变量设置",
+        "受试者",
+        "质控模块",
+        "质控结果",
     ]
+    assert window.workspace_stack.count() == 6
+    assert window.findChild(QListWidget, "primaryNavigation") is window.navigation
+    assert window.findChild(QStackedWidget, "workspaceStack") is window.workspace_stack
+    assert window.findChild(QTabWidget, "productWorkspaces") is None
+    assert window.findChild(QListWidget, "primaryNavigation").isVisible()
+    assert window.findChild(QStackedWidget, "workspaceStack").isVisible()
+    assert window.findChild(QToolBar, "shellContextToolbar") is None
 
 
-def test_product_shell_reduced_viewport_uses_context_toolbar_and_long_tooltips(
+def test_qt_main_window_navigation_switches_exact_page(qtbot, tmp_path) -> None:
+    window, _services = _window(qtbot, tmp_path)
+
+    for row, page in enumerate(window.direct_pages):
+        window.navigation.setCurrentRow(row)
+        assert window.workspace_stack.currentIndex() == row
+        assert window.workspace_stack.currentWidget() is page
+
+
+def test_product_shell_reduced_viewport_keeps_navigation_and_content_reachable(
     qtbot,
     tmp_path,
 ) -> None:
@@ -136,17 +160,10 @@ def test_product_shell_reduced_viewport_uses_context_toolbar_and_long_tooltips(
     assert window.minimumWidth() <= 720
     window.resize(720, 560)
     qtbot.waitUntil(lambda: window.width() == 720)
-    toolbar = window.findChild(QToolBar, "shellContextToolbar")
-    assert toolbar is window.context_toolbar
-    assert not toolbar.isMovable()
-    assert not toolbar.isFloatable()
-    assert window.module_combo.minimumWidth() == 0
-    assert window.project_combo.isVisible()
-    assert window.module_combo.isVisible()
-    assert window.project_combo.width() >= window.project_combo.minimumSizeHint().width()
-    assert window.module_combo.width() >= window.module_combo.minimumSizeHint().width()
+    assert window.navigation.isVisible()
+    assert window.workspace_stack.isVisible()
+    assert window.navigation.width() >= window.navigation.minimumSizeHint().width()
     assert window.reload_action.shortcut().toString()
-    assert window.workspace_tabs.isVisible()
     assert window.project_combo.toolTip() == long_project
     assert window.module_combo.toolTip() == window.module_combo.currentText()
     assert long_module in window.module_combo.toolTip()
@@ -160,7 +177,7 @@ def test_table_open_qc_uses_applied_sort_queue_and_selected_identity(qtbot, tmp_
 
     assert table.open_selected_qc()
 
-    assert window.workspace_tabs.currentIndex() == window.qc_tab_index
+    assert window.navigation.currentRow() == window.project_page_index
     assert window.qc_workspace.workflow.subject_ids == ("SUB003", "SUB002", "SUB001")
     assert window.qc_workspace.workflow.current_ezqcid == "SUB003"
 

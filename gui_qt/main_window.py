@@ -1,4 +1,4 @@
-"""Qt product shell joining one project across Table, QC and configuration."""
+"""Qt product shell exposing the six user tasks as direct navigation pages."""
 
 from __future__ import annotations
 
@@ -7,17 +7,16 @@ from pathlib import Path
 
 import pandas as pd
 from PySide6.QtCore import Qt, Slot
-from PySide6.QtGui import QCloseEvent, QKeySequence
+from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
-    QFrame,
     QHBoxLayout,
     QLabel,
+    QListWidget,
     QMainWindow,
     QMessageBox,
     QSizePolicy,
-    QTabWidget,
-    QToolBar,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -113,101 +112,163 @@ class QtMainWindow(QMainWindow):
     def _build_content(self, source: pd.DataFrame) -> None:
         central = QWidget(self)
         central.setObjectName("qtPreviewRoot")
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(12)
+        layout = QHBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        header = QFrame(central)
-        header.setObjectName("productHeader")
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(16, 10, 16, 10)
-        header_layout.setSpacing(6)
-        title_row = QHBoxLayout()
-        title_column = QVBoxLayout()
-        title = QLabel("EasyQC", header)
-        title.setObjectName("previewTitle")
-        title.setWordWrap(True)
-        title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        subtitle = QLabel(
-            "Professional Table, visual QC and typed project configuration",
-            header,
+        navigation_panel = QWidget(central)
+        navigation_panel.setObjectName("primaryNavigationPanel")
+        navigation_layout = QVBoxLayout(navigation_panel)
+        navigation_layout.setContentsMargins(12, 16, 12, 12)
+        navigation_layout.setSpacing(10)
+        product_name = QLabel("EasyQC", navigation_panel)
+        product_name.setObjectName("productName")
+        product_name.setAccessibleName("EasyQC")
+        navigation_layout.addWidget(product_name)
+        self.navigation = QListWidget(navigation_panel)
+        self.navigation.setObjectName("primaryNavigation")
+        self.navigation.setAccessibleName("EasyQC 功能导航")
+        self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.navigation.addItems(
+            ("项目选择", "常量设置", "变量设置", "受试者", "质控模块", "质控结果")
         )
-        subtitle.setObjectName("previewMessage")
-        subtitle.setWordWrap(True)
-        subtitle.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        title_column.addWidget(title)
-        title_column.addWidget(subtitle)
-        title_row.addLayout(title_column, 1)
-        self.context_badge = QLabel("No project", header)
-        self.context_badge.setObjectName("watchBadge")
+        navigation_layout.addWidget(self.navigation, 1)
+        self.context_badge = QLabel("No project", navigation_panel)
+        self.context_badge.setObjectName("activeProjectSummary")
+        self.context_badge.setAccessibleName("当前项目")
         self.context_badge.setWordWrap(True)
-        title_row.addWidget(self.context_badge)
-        header_layout.addLayout(title_row)
+        navigation_layout.addWidget(self.context_badge)
+        minimum_navigation_width = max(
+            self.navigation.fontMetrics().horizontalAdvance("质控模块") + 48,
+            132,
+        )
+        navigation_panel.setMinimumWidth(minimum_navigation_width)
+        navigation_panel.setMaximumWidth(max(220, minimum_navigation_width))
+        layout.addWidget(navigation_panel)
 
-        self.context_toolbar = QToolBar("Project context", header)
-        self.context_toolbar.setObjectName("shellContextToolbar")
-        self.context_toolbar.setAccessibleName("Project context actions")
-        self.context_toolbar.setMovable(False)
-        self.context_toolbar.setFloatable(False)
-        self.context_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        self.context_toolbar.addWidget(QLabel("Project", self.context_toolbar))
-        self.project_combo = QComboBox(self.context_toolbar)
-        self.project_combo.setObjectName("shellProjectSelector")
-        self.project_combo.setAccessibleName("Active EasyQC project")
-        self.project_combo.setMinimumContentsLength(10)
-        self.project_combo.setSizeAdjustPolicy(
-            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
-        )
-        self.project_combo.setSizePolicy(
-            QSizePolicy.MinimumExpanding,
-            QSizePolicy.Preferred,
-        )
-        self.context_toolbar.addWidget(self.project_combo)
-        self.reload_action = self.context_toolbar.addAction("Reload")
-        self.reload_action.setShortcut(QKeySequence("Ctrl+R"))
-        self.reload_action.setShortcutContext(Qt.WindowShortcut)
-        self.reload_button = self.context_toolbar.widgetForAction(self.reload_action)
-        self.context_toolbar.addSeparator()
-        self.context_toolbar.addWidget(QLabel("QC module", self.context_toolbar))
-        self.module_combo = QComboBox(self.context_toolbar)
-        self.module_combo.setObjectName("shellModuleSelector")
-        self.module_combo.setAccessibleName("Active QC module")
-        self.module_combo.setMinimumContentsLength(12)
-        self.module_combo.setSizeAdjustPolicy(
-            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
-        )
-        self.module_combo.setSizePolicy(
-            QSizePolicy.MinimumExpanding,
-            QSizePolicy.Preferred,
-        )
-        self.context_toolbar.addWidget(self.module_combo)
-        header_layout.addWidget(self.context_toolbar)
-        layout.addWidget(header)
+        self.workspace_stack = QStackedWidget(central)
+        self.workspace_stack.setObjectName("workspaceStack")
+        self.workspace_stack.setAccessibleName("EasyQC 当前功能页")
 
-        self.shell_status_label = QLabel("", central)
+        self.project_page = QWidget(self.workspace_stack)
+        self.project_page.setObjectName("projectSelectionPage")
+        project_layout = QVBoxLayout(self.project_page)
+        project_layout.setContentsMargins(18, 16, 18, 16)
+        project_layout.setSpacing(8)
+        self.shell_status_label = QLabel("", self.project_page)
         self.shell_status_label.setObjectName("shellStatus")
         self.shell_status_label.setAccessibleName("Project context status")
         self.shell_status_label.setWordWrap(True)
-        layout.addWidget(self.shell_status_label)
-        self.shell_error_label = QLabel("", central)
+        self.shell_status_label.setSizePolicy(
+            QSizePolicy.Ignored,
+            QSizePolicy.Preferred,
+        )
+        project_layout.addWidget(self.shell_status_label)
+        self.shell_error_label = QLabel("", self.project_page)
         self.shell_error_label.setObjectName("shellError")
         self.shell_error_label.setAccessibleName("Project routing error")
         self.shell_error_label.setWordWrap(True)
-        layout.addWidget(self.shell_error_label)
+        self.shell_error_label.setSizePolicy(
+            QSizePolicy.Ignored,
+            QSizePolicy.Preferred,
+        )
+        project_layout.addWidget(self.shell_error_label)
+        self.config_workspace = QtProjectConfigWorkspace(
+            self.services.configuration_service,
+            parent=self.project_page,
+            auto_refresh=False,
+            project_loader=self.load_project,
+        )
+        project_layout.addWidget(self.config_workspace, 1)
+        self.project_combo = self.config_workspace.project_combo
 
-        self.workspace_tabs = QTabWidget(central)
-        self.workspace_tabs.setObjectName("productWorkspaces")
-        self.table_page = QWidget(self.workspace_tabs)
-        table_layout = QVBoxLayout(self.table_page)
+        # Reuse the already tested configuration sections as direct pages while
+        # their behavior is split into focused page classes in later slices.
+        self.config_workspace.tabs.removeTab(
+            self.config_workspace.tabs.indexOf(self.config_workspace.modules_tab)
+        )
+        self.config_workspace.tabs.removeTab(
+            self.config_workspace.tabs.indexOf(self.config_workspace.constants_tab)
+        )
+        self.config_workspace.tabs.removeTab(
+            self.config_workspace.tabs.indexOf(self.config_workspace.subjects_tab)
+        )
+        self.config_workspace.tabs.hide()
+
+        self.constants_page = QWidget(self.workspace_stack)
+        self.constants_page.setObjectName("constantsSettingsPage")
+        constants_layout = QVBoxLayout(self.constants_page)
+        constants_layout.setContentsMargins(18, 16, 18, 16)
+        constants_layout.addWidget(self.config_workspace.constants_tab)
+
+        self.variables_page = QWidget(self.workspace_stack)
+        self.variables_page.setObjectName("variablesSettingsPage")
+        variables_layout = QVBoxLayout(self.variables_page)
+        variables_layout.setContentsMargins(18, 16, 18, 16)
+        variables_layout.addWidget(self.config_workspace.subjects_tab)
+
+        self.subjects_page = QWidget(self.workspace_stack)
+        self.subjects_page.setObjectName("subjectsPage")
+        table_layout = QVBoxLayout(self.subjects_page)
         table_layout.setContentsMargins(0, 0, 0, 0)
-        self.shell_empty_label = QLabel("No project is loaded. Open Project configuration to create or import one.")
+        self.shell_empty_label = QLabel(
+            "No project is loaded. Open 项目选择 to create or import one.",
+            self.subjects_page,
+        )
         self.shell_empty_label.setObjectName("shellEmptyState")
         self.shell_empty_label.setWordWrap(True)
         table_layout.addWidget(self.shell_empty_label)
-        self.table_workspace = QtTableWorkspace(source, parent=self.table_page)
+        self.table_workspace = QtTableWorkspace(source, parent=self.subjects_page)
         table_layout.addWidget(self.table_workspace, 1)
 
-        self.qc_page = QWidget(self.workspace_tabs)
+        self.modules_page = QWidget(self.workspace_stack)
+        self.modules_page.setObjectName("qcModulesPage")
+        modules_layout = QVBoxLayout(self.modules_page)
+        modules_layout.setContentsMargins(18, 16, 18, 16)
+        modules_layout.addWidget(self.config_workspace.modules_tab)
+        self.module_combo = QComboBox(self.modules_page)
+        self.module_combo.setObjectName("internalModuleSelector")
+        self.module_combo.setAccessibleName("当前质控模块")
+        self.module_combo.hide()
+
+        self.results_page = QWidget(self.workspace_stack)
+        self.results_page.setObjectName("qcResultsPage")
+        results_layout = QVBoxLayout(self.results_page)
+        results_layout.setContentsMargins(18, 16, 18, 16)
+        results_title = QLabel("质控结果", self.results_page)
+        results_title.setObjectName("qcResultsTitle")
+        results_layout.addWidget(results_title)
+        results_layout.addStretch(1)
+
+        self.direct_pages = (
+            self.project_page,
+            self.constants_page,
+            self.variables_page,
+            self.subjects_page,
+            self.modules_page,
+            self.results_page,
+        )
+        for page in self.direct_pages:
+            self.workspace_stack.addWidget(page)
+        (
+            self.project_page_index,
+            self.constants_page_index,
+            self.variables_page_index,
+            self.subjects_page_index,
+            self.modules_page_index,
+            self.results_page_index,
+        ) = range(len(self.direct_pages))
+        self.table_page = self.subjects_page
+        self.table_tab_index = self.subjects_page_index
+        self.config_page = self.project_page
+        self.config_tab_index = self.project_page_index
+        layout.addWidget(self.workspace_stack, 1)
+
+        # The old embedded QC host remains hidden until GUI-R6 replaces it with
+        # the approved separate compact controller window.
+        self.qc_page = QWidget(central)
+        self.qc_page.setObjectName("internalQcHost")
+        self.qc_page.hide()
         self.qc_layout = QVBoxLayout(self.qc_page)
         self.qc_layout.setContentsMargins(0, 0, 0, 0)
         self.qc_placeholder = QLabel(
@@ -217,32 +278,22 @@ class QtMainWindow(QMainWindow):
         self.qc_placeholder.setObjectName("qcEmptyState")
         self.qc_placeholder.setWordWrap(True)
         self.qc_layout.addWidget(self.qc_placeholder)
-
-        self.config_page = QWidget(self.workspace_tabs)
-        config_layout = QVBoxLayout(self.config_page)
-        config_layout.setContentsMargins(0, 0, 0, 0)
-        self.config_workspace = QtProjectConfigWorkspace(
-            self.services.configuration_service,
-            parent=self.config_page,
-            auto_refresh=False,
-            project_loader=self.load_project,
-        )
-        config_layout.addWidget(self.config_workspace)
-
-        self.table_tab_index = self.workspace_tabs.addTab(self.table_page, "Table")
-        self.qc_tab_index = self.workspace_tabs.addTab(self.qc_page, "QC")
-        self.config_tab_index = self.workspace_tabs.addTab(
-            self.config_page,
-            "Project configuration",
-        )
-        layout.addWidget(self.workspace_tabs, 1)
         self.setCentralWidget(central)
 
+        self.reload_action = QAction("刷新项目", self)
+        self.reload_action.setShortcut(QKeySequence("Ctrl+R"))
+        self.reload_action.setShortcutContext(Qt.WindowShortcut)
+        self.reload_action.triggered.connect(self.refresh_context)
+        self.addAction(self.reload_action)
+        self.reload_button = None
         self.project_combo.activated.connect(self._project_selected)
         self.project_combo.currentTextChanged.connect(self.project_combo.setToolTip)
-        self.reload_action.triggered.connect(self.refresh_context)
         self.module_combo.currentIndexChanged.connect(self._module_selected)
         self.module_combo.currentTextChanged.connect(self.module_combo.setToolTip)
+        self.navigation.currentRowChanged.connect(self.workspace_stack.setCurrentIndex)
+        self.navigation.setCurrentRow(
+            self.subjects_page_index if self._injected_preview else self.project_page_index
+        )
         self._sync_preview_aliases()
 
     def _subscribe_events(self) -> None:
@@ -533,7 +584,6 @@ class QtMainWindow(QMainWindow):
             self._set_error(str(exc))
             return
         self._install_qc_workspace(replacement, module_name)
-        self.workspace_tabs.setCurrentIndex(self.qc_tab_index)
         self._set_error("")
 
     def _install_qc_workspace(
@@ -551,9 +601,7 @@ class QtMainWindow(QMainWindow):
         self.qc_placeholder.hide()
         self.qc_workspace = replacement
         self.qc_layout.addWidget(replacement)
-        replacement.show()
         self._active_module_name = module_name
-        self.workspace_tabs.setTabEnabled(self.qc_tab_index, True)
         self._on_qc_draft_changed(workflow.dirty)
 
     def _clear_qc_workspace(self) -> None:
@@ -564,7 +612,6 @@ class QtMainWindow(QMainWindow):
             self.qc_workspace = None
         self._active_module_name = ""
         self.qc_placeholder.show()
-        self.workspace_tabs.setTabEnabled(self.qc_tab_index, False)
 
     @Slot(bool)
     def _on_qc_draft_changed(self, _dirty: bool) -> None:
@@ -578,8 +625,12 @@ class QtMainWindow(QMainWindow):
         self.reload_action.setEnabled(enabled and self.current_context.has_project)
         self.module_combo.setEnabled(enabled and bool(self.current_context.modules))
         self.config_workspace.setEnabled(not busy and not dirty and not self._injected_preview)
-        if not self.current_context.has_project:
-            self.workspace_tabs.setTabEnabled(self.qc_tab_index, False)
+        for section in (
+            self.config_workspace.constants_tab,
+            self.config_workspace.subjects_tab,
+            self.config_workspace.modules_tab,
+        ):
+            section.setEnabled(not busy and not dirty and not self._injected_preview)
 
     def _on_project_facts_changed(self, _event: Event) -> None:
         if self._closing or self._injected_preview:
