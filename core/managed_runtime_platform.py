@@ -323,8 +323,8 @@ def run_preflight(
         native_message = (
             f"Required native library {_LINUX_CURSOR_SONAME} is available."
             if native_passed
-            else f"Missing {_LINUX_CURSOR_SONAME}; install the supported OS "
-            "package libxcb-cursor0 before continuing."
+            else f"Missing {_LINUX_CURSOR_SONAME}; run "
+            "'sudo apt install libxcb-cursor0' before continuing."
         )
     else:
         native_passed = True

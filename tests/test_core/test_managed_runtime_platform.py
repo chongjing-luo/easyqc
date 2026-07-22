@@ -378,7 +378,7 @@ def test_preflight_passes_complete_supported_snapshot_without_writes(
             replace(_passing_snapshot(), available_native_libraries=()),
             "user",
             "NATIVE_PREREQUISITES",
-            "libxcb-cursor0",
+            "sudo apt install libxcb-cursor0",
         ),
         (
             replace(_passing_snapshot(), privileged=False),
