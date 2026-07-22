@@ -105,6 +105,55 @@ def test_qt_constant_form_commits_and_surfaces_column_collision(qtbot, tmp_path)
     assert "site" not in config.constants()
 
 
+def test_qt_constant_row_double_click_loads_transactional_edit_form(
+    qtbot,
+    tmp_path,
+) -> None:
+    workspace, config = _workspace(qtbot, tmp_path)
+    config.set_constant("DATA_ROOT", "/data/original")
+    workspace._refresh_constants()
+    workspace.tabs.setCurrentWidget(workspace.constants_tab)
+    workspace.show()
+
+    workspace.constants_table.cellDoubleClicked.emit(0, 0)
+
+    assert workspace.constant_name.text() == "DATA_ROOT"
+    assert workspace.constant_name.isReadOnly()
+    assert workspace.constant_value.text() == "/data/original"
+    assert workspace.save_constant_button.text() == "保存"
+    workspace.constant_value.setText("/data/updated")
+    qtbot.mouseClick(workspace.save_constant_button, Qt.LeftButton)
+    assert config.constants()["DATA_ROOT"] == "/data/updated"
+    assert not workspace.constant_name.isReadOnly()
+    assert workspace.constant_name.text() == ""
+
+
+def test_qt_constant_search_filters_visible_rows_without_mutating_values(
+    qtbot,
+    tmp_path,
+) -> None:
+    workspace, config = _workspace(qtbot, tmp_path)
+    config.set_constant("DATA_ROOT", "/data")
+    config.set_constant("OUTPUT_ROOT", "/results")
+    workspace._refresh_constants()
+
+    workspace.constant_search.setText("output")
+
+    visible_names = {
+        workspace.constants_table.item(row, 0).text()
+        for row in range(workspace.constants_table.rowCount())
+        if not workspace.constants_table.isRowHidden(row)
+    }
+    assert visible_names == {"OUTPUT_ROOT"}
+    assert config.constants() == {"DATA_ROOT": "/data", "OUTPUT_ROOT": "/results"}
+
+    workspace.constant_search.clear()
+    assert all(
+        not workspace.constants_table.isRowHidden(row)
+        for row in range(workspace.constants_table.rowCount())
+    )
+
+
 def test_qt_module_form_adds_and_reorders_without_json_editor(qtbot, tmp_path) -> None:
     workspace, config = _workspace(qtbot, tmp_path)
 

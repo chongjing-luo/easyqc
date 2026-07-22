@@ -139,6 +139,15 @@ def test_qt_main_window_navigation_switches_exact_page(qtbot, tmp_path) -> None:
         assert window.workspace_stack.currentWidget() is page
 
 
+def test_direct_configuration_pages_have_no_visible_nested_tabs(qtbot, tmp_path) -> None:
+    window, _services = _window(qtbot, tmp_path)
+
+    assert window.config_workspace.tabs.isHidden()
+    assert window.config_workspace.constants_tab.parentWidget() is window.constants_page
+    assert window.config_workspace.subjects_tab.parentWidget() is window.variables_page
+    assert window.config_workspace.modules_tab.parentWidget() is window.modules_page
+
+
 def test_product_shell_reduced_viewport_keeps_navigation_and_content_reachable(
     qtbot,
     tmp_path,

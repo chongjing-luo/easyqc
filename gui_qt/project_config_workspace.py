@@ -89,7 +89,7 @@ class QtProjectConfigWorkspace(QWidget):
         project_bar.setObjectName("configHeader")
         project_layout = QVBoxLayout(project_bar)
         project_layout.setContentsMargins(12, 9, 12, 9)
-        title = QLabel("Project configuration", project_bar)
+        title = QLabel("项目选择", project_bar)
         title.setObjectName("configTitle")
         title.setWordWrap(True)
         project_layout.addWidget(title)
@@ -99,7 +99,7 @@ class QtProjectConfigWorkspace(QWidget):
         self.project_toolbar.setMovable(False)
         self.project_toolbar.setFloatable(False)
         self.project_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        self.project_toolbar.addWidget(QLabel("Project", self.project_toolbar))
+        self.project_toolbar.addWidget(QLabel("项目", self.project_toolbar))
         self.project_combo = QComboBox(self.project_toolbar)
         self.project_combo.setObjectName("projectSelector")
         self.project_combo.setMinimumContentsLength(10)
@@ -113,13 +113,13 @@ class QtProjectConfigWorkspace(QWidget):
         self.project_toolbar.addWidget(self.project_combo)
         self.load_project_action, self.load_project_button = self._add_toolbar_action(
             self.project_toolbar,
-            "Load",
+            "打开",
             QKeySequence("Ctrl+L"),
             self._load_selected_project,
         )
         self.new_project_action, self.new_project_button = self._add_toolbar_action(
             self.project_toolbar,
-            "New…",
+            "新建…",
             QKeySequence("Ctrl+N"),
             self._prompt_create_project,
         )
@@ -128,7 +128,7 @@ class QtProjectConfigWorkspace(QWidget):
             self.import_project_button,
         ) = self._add_toolbar_action(
             self.project_toolbar,
-            "Import…",
+            "导入…",
             QKeySequence("Ctrl+I"),
             self._prompt_import_project,
         )
@@ -137,7 +137,7 @@ class QtProjectConfigWorkspace(QWidget):
             self.remove_project_button,
         ) = self._add_toolbar_action(
             self.project_toolbar,
-            "Unregister",
+            "移除登记",
             QKeySequence("Ctrl+Shift+Delete"),
             self._confirm_remove_project,
         )
@@ -257,31 +257,72 @@ class QtProjectConfigWorkspace(QWidget):
 
     def _build_constants_tab(self) -> None:
         layout = QVBoxLayout(self.constants_tab)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        title_row = QHBoxLayout()
+        constant_title = QLabel("常量设置", self.constants_tab)
+        constant_title.setObjectName("constantsTitle")
+        self.constant_count_label = QLabel("0 个常量", self.constants_tab)
+        self.constant_count_label.setObjectName("constantsCount")
+        title_row.addWidget(constant_title)
+        title_row.addWidget(self.constant_count_label)
+        title_row.addStretch(1)
+        layout.addLayout(title_row)
+
         form = QHBoxLayout()
         self.constant_name = QLineEdit(self.constants_tab)
-        self.constant_name.setPlaceholderText("Constant name")
+        self.constant_name.setPlaceholderText("常量名")
+        self.constant_name.setAccessibleName("常量名")
         self.constant_value = QLineEdit(self.constants_tab)
-        self.constant_value.setPlaceholderText("Value")
-        self.constant_value.setAccessibleName("Constant value")
+        self.constant_value.setPlaceholderText("值")
+        self.constant_value.setAccessibleName("常量值")
         self.constant_value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self.constant_value.textChanged.connect(self.constant_value.setToolTip)
-        self.save_constant_button = QPushButton("Add / update", self.constants_tab)
+        self.save_constant_button = QPushButton("添加常量", self.constants_tab)
         self.save_constant_button.setObjectName("primaryAction")
+        self.cancel_constant_button = QPushButton("取消编辑", self.constants_tab)
+        self.cancel_constant_button.hide()
+        form.addWidget(QLabel("常量名", self.constants_tab))
         form.addWidget(self.constant_name)
+        form.addWidget(QLabel("值", self.constants_tab))
         form.addWidget(self.constant_value, 2)
+        form.addWidget(self.cancel_constant_button)
         form.addWidget(self.save_constant_button)
         layout.addLayout(form)
-        self.constants_table = QTableWidget(0, 2, self.constants_tab)
+
+        search_row = QHBoxLayout()
+        self.constant_search = QLineEdit(self.constants_tab)
+        self.constant_search.setObjectName("constantSearch")
+        self.constant_search.setAccessibleName("搜索常量")
+        self.constant_search.setPlaceholderText("搜索常量名或值")
+        self.constant_search.setClearButtonEnabled(True)
+        self.refresh_constants_button = QPushButton("刷新", self.constants_tab)
+        search_row.addWidget(self.constant_search, 1)
+        search_row.addWidget(self.refresh_constants_button)
+        layout.addLayout(search_row)
+
+        self.constants_table = QTableWidget(0, 3, self.constants_tab)
         self.constants_table.setObjectName("constantsTable")
-        self.constants_table.setHorizontalHeaderLabels(["Name", "Value"])
+        self.constants_table.setAccessibleName("项目常量")
+        self.constants_table.setHorizontalHeaderLabels(["常量名", "值", "操作"])
         self.constants_table.horizontalHeader().setStretchLastSection(True)
         self.constants_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.constants_table.setEditTriggers(QTableWidget.NoEditTriggers)
         layout.addWidget(self.constants_table, 1)
-        self.delete_constant_button = QPushButton("Delete selected", self.constants_tab)
+        self.delete_constant_button = QPushButton("删除选中常量", self.constants_tab)
         layout.addWidget(self.delete_constant_button, 0, Qt.AlignRight)
+        self.constant_error_label = QLabel("", self.constants_tab)
+        self.constant_error_label.setObjectName("constantError")
+        self.constant_error_label.setAccessibleName("常量操作错误")
+        self.constant_error_label.setWordWrap(True)
+        self.constant_error_label.hide()
+        layout.addWidget(self.constant_error_label)
         self.save_constant_button.clicked.connect(self._save_constant)
         self.delete_constant_button.clicked.connect(self._delete_selected_constant)
+        self.cancel_constant_button.clicked.connect(self._reset_constant_form)
+        self.refresh_constants_button.clicked.connect(lambda: self._refresh_constants())
+        self.constant_search.textChanged.connect(self._filter_constants)
+        self.constants_table.cellDoubleClicked.connect(self._edit_constant_row)
 
     def _build_modules_tab(self) -> None:
         layout = QVBoxLayout(self.modules_tab)
@@ -494,6 +535,28 @@ class QtProjectConfigWorkspace(QWidget):
             value_item.setToolTip(str(value))
             self.constants_table.setItem(row, 0, name_item)
             self.constants_table.setItem(row, 1, value_item)
+            actions = QWidget(self.constants_table)
+            action_layout = QHBoxLayout(actions)
+            action_layout.setContentsMargins(0, 0, 0, 0)
+            action_layout.setSpacing(4)
+            edit_button = QPushButton("编辑", actions)
+            delete_button = QPushButton("删除", actions)
+            edit_button.clicked.connect(
+                lambda _checked=False, constant_name=str(name): self._edit_constant_name(
+                    constant_name
+                )
+            )
+            delete_button.clicked.connect(
+                lambda _checked=False, constant_name=str(name): self._delete_constant(
+                    constant_name
+                )
+            )
+            action_layout.addWidget(edit_button)
+            action_layout.addWidget(delete_button)
+            action_layout.addStretch(1)
+            self.constants_table.setCellWidget(row, 2, actions)
+        self.constant_count_label.setText(f"{len(items)} 个常量")
+        self._filter_constants(self.constant_search.text())
 
     def _refresh_modules(
         self,
@@ -638,6 +701,51 @@ class QtProjectConfigWorkspace(QWidget):
 
             self._submit_io("import_subjects", import_subjects)
 
+    def _filter_constants(self, query: str) -> None:
+        normalized = str(query).strip().casefold()
+        for row in range(self.constants_table.rowCount()):
+            name_item = self.constants_table.item(row, 0)
+            value_item = self.constants_table.item(row, 1)
+            haystack = " ".join(
+                item.text() for item in (name_item, value_item) if item is not None
+            ).casefold()
+            self.constants_table.setRowHidden(
+                row,
+                bool(normalized and normalized not in haystack),
+            )
+
+    def _edit_constant_name(self, name: str) -> None:
+        for row in range(self.constants_table.rowCount()):
+            item = self.constants_table.item(row, 0)
+            if item is not None and item.text() == name:
+                self._edit_constant_row(row, 0)
+                return
+
+    def _edit_constant_row(self, row: int, _column: int) -> None:
+        name_item = self.constants_table.item(row, 0)
+        value_item = self.constants_table.item(row, 1)
+        if name_item is None or value_item is None:
+            return
+        self.constant_name.setText(name_item.text())
+        self.constant_name.setReadOnly(True)
+        self.constant_value.setText(value_item.text())
+        self.save_constant_button.setText("保存")
+        self.cancel_constant_button.show()
+        self.constant_value.setFocus()
+        self.constant_value.selectAll()
+
+    def _reset_constant_form(self) -> None:
+        self.constant_name.setReadOnly(False)
+        self.constant_name.clear()
+        self.constant_value.clear()
+        self.save_constant_button.setText("添加常量")
+        self.cancel_constant_button.hide()
+
+    def _set_constant_error(self, message: str) -> None:
+        self.constant_error_label.setText(message)
+        self.constant_error_label.setVisible(bool(message))
+        self._set_error(message)
+
     def _save_constant(self) -> None:
         try:
             self.configuration.set_constant(
@@ -645,24 +753,27 @@ class QtProjectConfigWorkspace(QWidget):
                 self.constant_value.text(),
             )
         except Exception as exc:
-            self._set_error(str(exc))
+            self._set_constant_error(str(exc))
             return
-        self.constant_name.clear()
-        self.constant_value.clear()
-        self._set_error("")
+        self._reset_constant_form()
+        self._set_constant_error("")
         self._refresh_constants()
 
     def _delete_selected_constant(self) -> None:
         row = self.constants_table.currentRow()
         if row < 0 or self.constants_table.item(row, 0) is None:
             return
-        name = self.constants_table.item(row, 0).text()
+        self._delete_constant(self.constants_table.item(row, 0).text())
+
+    def _delete_constant(self, name: str) -> None:
         try:
             self.configuration.delete_constant(name)
         except Exception as exc:
-            self._set_error(str(exc))
+            self._set_constant_error(str(exc))
             return
-        self._set_error("")
+        if self.constant_name.text() == name:
+            self._reset_constant_form()
+        self._set_constant_error("")
         self._refresh_constants()
 
     def _module_row_changed(self, row: int) -> None:
@@ -948,6 +1059,9 @@ class QtProjectConfigWorkspace(QWidget):
         self.import_project_action.setEnabled(enabled)
         self.remove_project_action.setEnabled(enabled)
         self.tabs.setEnabled(enabled)
+        self.subjects_tab.setEnabled(enabled)
+        self.constants_tab.setEnabled(enabled)
+        self.modules_tab.setEnabled(enabled)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._pending_io = None
