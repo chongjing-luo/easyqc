@@ -515,6 +515,25 @@ def test_materialization_failure_retains_no_receipt_or_pointer(
     assert report["pointer_committed"] is False
 
 
+def test_stable_transaction_requires_installer_entry_before_receipt(
+    tmp_path: Path,
+) -> None:
+    artifacts = tmp_path / "payload"
+    manifest = replace(_write_artifacts(artifacts, "1.0.0"), channel="stable")
+    request = _request(tmp_path / "stable", artifacts, manifest)
+    controller, _adapter, _smoke = _controller(
+        SequenceIds("c" * 32),
+        [True],
+    )
+
+    with pytest.raises(ManagedRuntimeError, match="easyqc_install.py"):
+        controller.install(request)
+
+    version_root = Path(request.paths.install_root) / "versions" / manifest.release_id
+    assert not (version_root / "install-receipt.json").exists()
+    assert not (Path(request.paths.state_root) / "activation.txt").exists()
+
+
 def test_transaction_report_id_collision_is_immutable(
     tmp_path: Path,
 ) -> None:

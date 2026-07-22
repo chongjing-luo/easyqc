@@ -8,6 +8,7 @@ import pytest
 from core.managed_runtime import ManagedRuntimeError
 from core.managed_runtime_platform import (
     HostPreflightSnapshot,
+    detect_native_runtime_target,
     resolve_runtime_paths,
     run_preflight,
 )
@@ -25,6 +26,47 @@ def _target(target_id: str) -> RuntimeTargetV1:
         "macos-13-arm64": ("macos", "13", "arm64"),
     }
     return RuntimeTargetV1(*values[target_id])
+
+
+@pytest.mark.parametrize(
+    ("os_name", "version", "distribution", "machine", "expected"),
+    (
+        ("linux", "22.04", "ubuntu", "AMD64", "ubuntu-22.04-x86_64"),
+        ("linux", "24.04", "ubuntu", "x86_64", "ubuntu-24.04-x86_64"),
+        ("windows", "11", None, "AMD64", "windows-11-x86_64"),
+        ("macos", "15.4", None, "aarch64", "macos-13-arm64"),
+    ),
+)
+def test_native_target_detection_selects_only_approved_platforms(
+    monkeypatch: pytest.MonkeyPatch,
+    os_name: str,
+    version: str,
+    distribution: str | None,
+    machine: str,
+    expected: str,
+) -> None:
+    monkeypatch.setattr("core.managed_runtime_platform._current_os_name", lambda: os_name)
+    monkeypatch.setattr(
+        "core.managed_runtime_platform._current_os_version",
+        lambda _os_name: (version, distribution),
+    )
+    monkeypatch.setattr("core.managed_runtime_platform.platform.machine", lambda: machine)
+
+    assert detect_native_runtime_target().target_id == expected
+
+
+def test_native_target_detection_rejects_nearby_unsupported_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("core.managed_runtime_platform._current_os_name", lambda: "linux")
+    monkeypatch.setattr(
+        "core.managed_runtime_platform._current_os_version",
+        lambda _os_name: ("23.10", "ubuntu"),
+    )
+    monkeypatch.setattr("core.managed_runtime_platform.platform.machine", lambda: "x86_64")
+
+    with pytest.raises(ManagedRuntimeError, match="22.04 or 24.04"):
+        detect_native_runtime_target()
 
 
 def _manifest(
