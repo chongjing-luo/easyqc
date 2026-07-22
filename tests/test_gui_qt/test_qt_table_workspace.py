@@ -6,8 +6,8 @@ from dataclasses import replace
 
 import pandas as pd
 from pandas.testing import assert_frame_equal
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialogButtonBox
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtWidgets import QDialogButtonBox, QTabWidget
 
 from core.table_view_service import TableViewError, TableViewService
 from gui_qt.table_workspace import QtTableWorkspace
@@ -283,10 +283,7 @@ def test_filter_button_opens_nonblocking_dialog_and_group_chip_removal_commits_o
     dialog = workspace.filter_dialog
     assert dialog is not None
     assert dialog.isVisible()
-    assert [workspace.tabs.tabText(index) for index in range(workspace.tabs.count())] == [
-        "Sort",
-        "Columns",
-    ]
+    assert workspace.findChild(QTabWidget, "tableInspector") is None
 
     expression = FilterExpression(
         "all",
@@ -354,6 +351,186 @@ def test_multi_sort_header_state_and_column_layout_are_applied(qtbot):
     assert workspace.pinned_view is not None
     assert workspace.pinned_view.isColumnHidden(0) is False
     assert workspace.table_view.isColumnHidden(0) is True
+
+
+def test_sort_dialog_cancel_duplicate_and_apply_are_transactional(qtbot):
+    workspace = QtTableWorkspace(_source())
+    qtbot.addWidget(workspace)
+    workspace.show()
+    initial_state = workspace.applied_state
+    initial_result = workspace.result
+
+    qtbot.mouseClick(workspace.sort_button, Qt.MouseButton.LeftButton)
+    dialog = workspace.sort_dialog
+    assert dialog is not None and dialog.isVisible()
+    dialog.editor.set_rules((SortRule("site", True),))
+    qtbot.mouseClick(
+        dialog.button_box.button(QDialogButtonBox.StandardButton.Reset),
+        Qt.MouseButton.LeftButton,
+    )
+    assert dialog.editor.rules() == ()
+    qtbot.mouseClick(
+        dialog.button_box.button(QDialogButtonBox.StandardButton.Cancel),
+        Qt.MouseButton.LeftButton,
+    )
+    assert workspace.applied_state is initial_state
+    assert workspace.result is initial_result
+
+    dialog = workspace.open_sort_dialog()
+    dialog.editor.set_rules((SortRule("site", True), SortRule("site", False)))
+    qtbot.mouseClick(
+        dialog.button_box.button(QDialogButtonBox.StandardButton.Apply),
+        Qt.MouseButton.LeftButton,
+    )
+    assert dialog.isVisible()
+    assert workspace.applied_state is initial_state
+    assert workspace.result is initial_result
+
+    dialog.editor.set_rules((SortRule("site", True), SortRule("age", False)))
+    qtbot.mouseClick(
+        dialog.button_box.button(QDialogButtonBox.StandardButton.Apply),
+        Qt.MouseButton.LeftButton,
+    )
+    assert workspace.sort_dialog is None
+    assert workspace.applied_state.revision == initial_state.revision + 1
+    assert workspace.applied_state.sort_rules == (
+        SortRule("site", True),
+        SortRule("age", False),
+    )
+    assert _full_result_frame(workspace)["ezqcid"].tolist() == [
+        "SUB005",
+        "SUB001",
+        "SUB003",
+        "SUB002",
+        "SUB004",
+    ]
+
+
+def test_columns_dialog_cancel_reset_and_apply_are_transactional(qtbot):
+    workspace = QtTableWorkspace(_source())
+    qtbot.addWidget(workspace)
+    workspace.show()
+    initial_state = workspace.applied_state
+    initial_result = workspace.result
+
+    dialog = workspace.open_columns_dialog()
+    modified = ColumnViewState(
+        order=("ezqcid", "age", "site", "passed"),
+        hidden=("passed",),
+        pinned=("ezqcid", "age"),
+    )
+    dialog.editor.set_state(modified)
+    qtbot.mouseClick(
+        dialog.button_box.button(QDialogButtonBox.StandardButton.Reset),
+        Qt.MouseButton.LeftButton,
+    )
+    assert dialog.editor.state().order == workspace.initial_state.columns.order
+    qtbot.mouseClick(
+        dialog.button_box.button(QDialogButtonBox.StandardButton.Cancel),
+        Qt.MouseButton.LeftButton,
+    )
+    assert workspace.applied_state is initial_state
+    assert workspace.result is initial_result
+
+    dialog = workspace.open_columns_dialog()
+    dialog.editor.set_state(modified)
+    qtbot.mouseClick(
+        dialog.button_box.button(QDialogButtonBox.StandardButton.Apply),
+        Qt.MouseButton.LeftButton,
+    )
+    assert workspace.columns_dialog is None
+    assert workspace.applied_state.revision == initial_state.revision + 1
+    assert workspace.applied_state.columns.order == modified.order
+    assert workspace.applied_state.columns.hidden == modified.hidden
+    assert workspace.applied_state.columns.pinned == modified.pinned
+
+
+def test_sort_and_columns_buttons_use_dialogs_without_permanent_inspector(qtbot):
+    workspace = QtTableWorkspace(_source())
+    qtbot.addWidget(workspace)
+    workspace.show()
+
+    assert workspace.findChild(QTabWidget, "tableInspector") is None
+    qtbot.mouseClick(workspace.sort_button, Qt.MouseButton.LeftButton)
+    assert workspace.sort_dialog is not None
+    workspace.sort_dialog.reject()
+    qtbot.mouseClick(workspace.columns_button, Qt.MouseButton.LeftButton)
+    assert workspace.columns_dialog is not None
+
+
+def test_source_replacement_rejects_open_sort_and_columns_drafts(qtbot):
+    workspace = QtTableWorkspace(_source())
+    qtbot.addWidget(workspace)
+    sort_dialog = workspace.open_sort_dialog()
+    sort_dialog.editor.set_rules((SortRule("age", False),))
+
+    workspace.replace_service(TableViewService(_source()), preserve_state=True)
+    assert workspace.sort_dialog is None
+    assert sort_dialog.result() == sort_dialog.DialogCode.Rejected
+
+    columns_dialog = workspace.open_columns_dialog()
+    columns_dialog.editor.set_state(
+        ColumnViewState(
+            order=("ezqcid", "age", "site", "passed"),
+            pinned=("ezqcid",),
+        )
+    )
+    workspace.replace_service(TableViewService(_source()), preserve_state=True)
+    assert workspace.columns_dialog is None
+    assert columns_dialog.result() == columns_dialog.DialogCode.Rejected
+
+
+def test_header_click_and_shift_click_keep_the_fast_sort_path(qtbot):
+    workspace = QtTableWorkspace(_source())
+    qtbot.addWidget(workspace)
+    workspace.resize(900, 600)
+    workspace.show()
+    header = workspace.table_view.horizontalHeader()
+
+    site_position = header.sectionViewportPosition(1) + 8
+    age_position = header.sectionViewportPosition(2) + 8
+    qtbot.mouseClick(
+        header.viewport(),
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        header.viewport().rect().topLeft() + QPoint(site_position, 8),
+    )
+    qtbot.mouseClick(
+        header.viewport(),
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.ShiftModifier,
+        header.viewport().rect().topLeft() + QPoint(age_position, 8),
+    )
+
+    assert workspace.applied_state.sort_rules == (
+        SortRule("site", True),
+        SortRule("age", True),
+    )
+
+
+def test_sort_dialog_background_failure_preserves_applied_view(qtbot, monkeypatch):
+    workspace = QtTableWorkspace(_source(), background_row_threshold=1)
+    qtbot.addWidget(workspace)
+    before_state = workspace.applied_state
+    before_result = workspace.result
+
+    def fail_query(_state):
+        raise TableViewError("synthetic sort dialog background failure")
+
+    monkeypatch.setattr(workspace.service, "apply_state", fail_query)
+    dialog = workspace.open_sort_dialog()
+    dialog.editor.set_rules((SortRule("age", False),))
+    qtbot.mouseClick(
+        dialog.button_box.button(QDialogButtonBox.StandardButton.Apply),
+        Qt.MouseButton.LeftButton,
+    )
+    qtbot.waitUntil(lambda: bool(workspace.error_text), timeout=2000)
+    qtbot.waitUntil(lambda: not workspace.task_controller.busy, timeout=2000)
+
+    assert workspace.sort_dialog is None
+    assert workspace.applied_state is before_state
+    assert workspace.result is before_result
+    assert "synthetic sort dialog background failure" in workspace.error_text
 
 
 def test_ezqcid_cannot_be_hidden_or_unpinned(qtbot):
@@ -517,6 +694,13 @@ def test_prepared_source_replacement_preserves_compatible_view_and_identity(qtbo
     workspace.set_filter_draft((FilterCondition("site", "==", "A", "site-a"),))
     assert workspace.apply_filter_draft()
     assert workspace.apply_sort_rules((SortRule("age", False),))
+    assert workspace.apply_column_state(
+        ColumnViewState(
+            order=("ezqcid", "age", "site", "passed"),
+            hidden=("passed",),
+            pinned=("ezqcid", "age"),
+        )
+    )
     assert workspace.find_identity_exact("SUB003")
 
     refreshed = _source().copy()
@@ -527,6 +711,9 @@ def test_prepared_source_replacement_preserves_compatible_view_and_identity(qtbo
         FilterCondition("site", "==", "A", "site-a"),
     )
     assert workspace.applied_state.sort_rules == (SortRule("age", False),)
+    assert workspace.applied_state.columns.pinned == ("ezqcid", "age")
+    assert workspace.applied_state.columns.hidden == ("passed",)
+    assert workspace.applied_state.columns.order[:2] == ("ezqcid", "age")
     assert _full_result_frame(workspace)["ezqcid"].tolist() == [
         "SUB005",
         "SUB001",

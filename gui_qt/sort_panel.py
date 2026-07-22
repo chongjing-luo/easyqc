@@ -1,8 +1,8 @@
-"""Ordered multi-sort editor for the Qt Table workspace."""
+"""Draft-only ordered multi-sort editor for the Qt Table workspace."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -18,25 +18,53 @@ from models.table_view_state import SortRule
 
 
 class SortRuleRow(QFrame):
+    """Edit one sort key and request only local list operations."""
+
     removeRequested = Signal(object)
+    moveUpRequested = Signal(object)
+    moveDownRequested = Signal(object)
 
     def __init__(self, columns: tuple[str, ...], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("sortRuleRow")
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setContentsMargins(8, 6, 8, 6)
+        self.priority_label = QLabel("", self)
+        self.priority_label.setAccessibleName("Sort priority")
         self.column_combo = QComboBox(self)
+        self.column_combo.setAccessibleName("Sort column")
         for column in columns:
             self.column_combo.addItem(column, column)
         self.direction_combo = QComboBox(self)
+        self.direction_combo.setAccessibleName("Sort direction")
         self.direction_combo.addItem("Ascending", True)
         self.direction_combo.addItem("Descending", False)
+        self.move_up_button = QPushButton("Move up", self)
+        self.move_down_button = QPushButton("Move down", self)
         self.remove_button = QPushButton("Remove", self)
-        self.remove_button.setAccessibleName("Remove sort rule")
+        layout.addWidget(self.priority_label)
         layout.addWidget(self.column_combo, 2)
         layout.addWidget(self.direction_combo, 1)
+        layout.addWidget(self.move_up_button)
+        layout.addWidget(self.move_down_button)
         layout.addWidget(self.remove_button)
-        self.remove_button.clicked.connect(lambda: self.removeRequested.emit(self))
+        self.remove_button.clicked.connect(
+            lambda _checked=False: self.removeRequested.emit(self)
+        )
+        self.move_up_button.clicked.connect(
+            lambda _checked=False: self.moveUpRequested.emit(self)
+        )
+        self.move_down_button.clicked.connect(
+            lambda _checked=False: self.moveDownRequested.emit(self)
+        )
+
+    def set_priority(self, priority: int) -> None:
+        self.priority_label.setText(str(priority))
+        self.column_combo.setAccessibleName(f"Sort column priority {priority}")
+        self.direction_combo.setAccessibleName(f"Sort direction priority {priority}")
+        self.move_up_button.setAccessibleName(f"Move sort priority {priority} up")
+        self.move_down_button.setAccessibleName(f"Move sort priority {priority} down")
+        self.remove_button.setAccessibleName(f"Remove sort priority {priority}")
 
     def set_rule(self, rule: SortRule) -> None:
         column_index = self.column_combo.findData(rule.column)
@@ -53,7 +81,7 @@ class SortRuleRow(QFrame):
 
 
 class SortPanel(QWidget):
-    applyRequested = Signal(object)
+    """Own a bounded sort draft without applying it to a table."""
 
     def __init__(self, columns: tuple[str, ...], parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -66,18 +94,25 @@ class SortPanel(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
         heading = QLabel("Sort priority", self)
-        heading.setObjectName("panelHeading")
         layout.addWidget(heading)
-        explanation = QLabel("Rules are applied from top to bottom.", self)
-        explanation.setObjectName("panelHint")
-        layout.addWidget(explanation)
+        hint = QLabel("Rules are applied from top to bottom.", self)
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        field_labels = QHBoxLayout()
+        field_labels.setContentsMargins(8, 0, 8, 0)
+        field_labels.addWidget(QLabel("Priority", self))
+        field_labels.addWidget(QLabel("Column", self), 2)
+        field_labels.addWidget(QLabel("Direction", self), 1)
+        field_labels.addStretch(2)
+        layout.addLayout(field_labels)
 
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.rows_host = QWidget(scroll)
         self.rows_layout = QVBoxLayout(self.rows_host)
         self.rows_layout.setContentsMargins(0, 0, 0, 0)
@@ -87,37 +122,51 @@ class SortPanel(QWidget):
 
         self.error_label = QLabel("", self)
         self.error_label.setObjectName("sortError")
+        self.error_label.setTextFormat(Qt.TextFormat.PlainText)
         self.error_label.setWordWrap(True)
+        self.error_label.setAccessibleName("Sort draft error")
         layout.addWidget(self.error_label)
 
         actions = QHBoxLayout()
         self.add_button = QPushButton("Add sort", self)
         self.clear_button = QPushButton("Clear", self)
-        self.apply_button = QPushButton("Apply", self)
-        self.apply_button.setObjectName("primaryAction")
+        self.add_button.setAccessibleName("Add sort rule")
+        self.clear_button.setAccessibleName("Clear sort rules")
         actions.addWidget(self.add_button)
         actions.addWidget(self.clear_button)
         actions.addStretch(1)
-        actions.addWidget(self.apply_button)
         layout.addLayout(actions)
-        self.add_button.clicked.connect(lambda: self.add_rule())
-        self.clear_button.clicked.connect(lambda: self.set_rules(()))
-        self.apply_button.clicked.connect(lambda: self.applyRequested.emit(self.rules()))
+        self.add_button.clicked.connect(lambda _checked=False: self.add_rule())
+        self.clear_button.clicked.connect(
+            lambda _checked=False: self.set_rules(())
+        )
 
     @property
     def error_text(self) -> str:
         return self.error_label.text()
 
     def set_error(self, message: str) -> None:
-        self.error_label.setText(message)
+        self.error_label.setText(str(message))
+        self.error_label.setVisible(bool(message))
 
     def add_rule(self, rule: SortRule | None = None) -> SortRuleRow:
+        if len(self.rule_rows) >= len(self._columns):
+            raise ValueError("A sort draft cannot contain more rows than columns")
+        if rule is None:
+            used = {existing.rule().column for existing in self.rule_rows}
+            column = next(column for column in self._columns if column not in used)
+            rule = SortRule(column)
+        elif not isinstance(rule, SortRule):
+            raise TypeError("SortPanel rows require SortRule values")
         row = SortRuleRow(self._columns, self.rows_host)
         row.removeRequested.connect(self.remove_rule)
-        if rule is not None:
-            row.set_rule(rule)
+        row.moveUpRequested.connect(lambda current: self.move_rule(current, -1))
+        row.moveDownRequested.connect(lambda current: self.move_rule(current, 1))
+        row.set_rule(rule)
         self.rule_rows.append(row)
         self.rows_layout.insertWidget(self.rows_layout.count() - 1, row)
+        self.set_error("")
+        self._refresh_rows()
         return row
 
     def remove_rule(self, row: SortRuleRow) -> None:
@@ -126,17 +175,57 @@ class SortPanel(QWidget):
         self.rule_rows.remove(row)
         row.setParent(None)
         row.deleteLater()
+        self.set_error("")
+        self._refresh_rows()
+
+    def move_rule(self, row: SortRuleRow, delta: int) -> bool:
+        if row not in self.rule_rows or delta not in {-1, 1}:
+            return False
+        current = self.rule_rows.index(row)
+        target = current + delta
+        if target < 0 or target >= len(self.rule_rows):
+            return False
+        self.rule_rows[current], self.rule_rows[target] = (
+            self.rule_rows[target],
+            self.rule_rows[current],
+        )
+        for index, current_row in enumerate(self.rule_rows):
+            self.rows_layout.insertWidget(index, current_row)
+        self.set_error("")
+        self._refresh_rows()
+        return True
 
     def set_rules(self, rules: tuple[SortRule, ...]) -> None:
+        rules = tuple(rules)
+        if len(rules) > len(self._columns):
+            raise ValueError("A sort draft cannot contain more rows than columns")
+        if not all(isinstance(rule, SortRule) for rule in rules):
+            raise TypeError("SortPanel rows require SortRule values")
+        unknown = next(
+            (rule.column for rule in rules if rule.column not in self._columns),
+            None,
+        )
+        if unknown is not None:
+            raise ValueError(f"Unknown sort column: {unknown}")
         for row in self.rule_rows:
             row.setParent(None)
             row.deleteLater()
         self.rule_rows.clear()
         for rule in rules:
             self.add_rule(rule)
+        self.set_error("")
+        self._refresh_rows()
 
     def rules(self) -> tuple[SortRule, ...]:
         return tuple(row.rule() for row in self.rule_rows)
+
+    def _refresh_rows(self) -> None:
+        for index, row in enumerate(self.rule_rows):
+            row.set_priority(index + 1)
+            row.move_up_button.setEnabled(index > 0)
+            row.move_down_button.setEnabled(index < len(self.rule_rows) - 1)
+        self.add_button.setEnabled(len(self.rule_rows) < len(self._columns))
+        self.clear_button.setEnabled(bool(self.rule_rows))
 
 
 __all__ = ["SortPanel", "SortRuleRow"]

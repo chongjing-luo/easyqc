@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
-    QTabWidget,
     QTableView,
     QToolButton,
     QVBoxLayout,
@@ -30,10 +29,10 @@ from PySide6.QtWidgets import (
 )
 
 from core.table_view_service import QcIdentityError, TableViewError, TableViewService
-from gui_qt.columns_panel import ColumnsPanel
+from gui_qt.columns_dialog import ColumnsDialog
 from gui_qt.filter_dialog import FilterDialog
 from gui_qt.filter_panel import operator_label
-from gui_qt.sort_panel import SortPanel
+from gui_qt.sort_dialog import SortDialog
 from gui_qt.table_model import QtTableModel, QtTableRowReference
 from gui_qt.task_runner import RevisionedTaskController
 from models.table_view_state import (
@@ -79,6 +78,8 @@ class QtTableWorkspace(QWidget):
         self.applied_state = self.initial_state
         self.draft_state: TableViewState | None = None
         self.filter_dialog: FilterDialog | None = None
+        self.sort_dialog: SortDialog | None = None
+        self.columns_dialog: ColumnsDialog | None = None
         self.result = self.service.apply_state(self.applied_state)
         self.row_window = self.service.get_window(
             self.result,
@@ -196,16 +197,8 @@ class QtTableWorkspace(QWidget):
         table_layout.addWidget(self.pinned_view)
         table_layout.addWidget(self.table_view, 1)
 
-        self.tabs = QTabWidget(self.splitter)
-        self.tabs.setObjectName("tableInspector")
-        self.tabs.setMinimumWidth(330)
-        self.tabs.setMaximumWidth(460)
-        self._replace_inspector_panels()
         self.splitter.addWidget(self.table_surface)
-        self.splitter.addWidget(self.tabs)
         self.splitter.setStretchFactor(0, 1)
-        self.splitter.setStretchFactor(1, 0)
-        self.splitter.setSizes([760, 360])
         layout.addWidget(self.splitter, 1)
 
         footer = QFrame(self)
@@ -241,8 +234,8 @@ class QtTableWorkspace(QWidget):
         layout.addWidget(self.error_label)
 
         self.filter_button.clicked.connect(self.open_filter_dialog)
-        self.sort_button.clicked.connect(lambda: self._open_tab(0))
-        self.columns_button.clicked.connect(lambda: self._open_tab(1))
+        self.sort_button.clicked.connect(self.open_sort_dialog)
+        self.columns_button.clicked.connect(self.open_columns_dialog)
         self.find_button.clicked.connect(lambda: self.find_identity_exact(self.find_edit.text()))
         self.find_edit.returnPressed.connect(lambda: self.find_identity_exact(self.find_edit.text()))
         self.open_qc_button.clicked.connect(self.open_selected_qc)
@@ -291,23 +284,12 @@ class QtTableWorkspace(QWidget):
             min(self.result.matched_total, self.page_offset + len(self.row_window.dataframe)),
         )
 
-    def _replace_inspector_panels(self) -> None:
-        if self.filter_dialog is not None:
-            self.filter_dialog.reject()
-            self.filter_dialog = None
-        while self.tabs.count():
-            widget = self.tabs.widget(0)
-            self.tabs.removeTab(0)
-            widget.deleteLater()
-        self.sort_panel = SortPanel(self.initial_state.columns.order, self.tabs)
-        self.columns_panel = ColumnsPanel(self.initial_state.columns, self.tabs)
-        self.tabs.addTab(self.sort_panel, "Sort")
-        self.tabs.addTab(self.columns_panel, "Columns")
-        self.sort_panel.applyRequested.connect(self.apply_sort_rules)
-        self.columns_panel.applyRequested.connect(self.apply_column_state)
-        self.columns_panel.resetRequested.connect(
-            lambda: self.apply_column_state(self.initial_state.columns)
-        )
+    def _close_open_dialogs(self) -> None:
+        for attribute in ("filter_dialog", "sort_dialog", "columns_dialog"):
+            dialog = getattr(self, attribute)
+            if dialog is not None:
+                dialog.reject()
+                setattr(self, attribute, None)
 
     def _selected_identity(self) -> str:
         if self.selected_source_position is None:
@@ -337,7 +319,14 @@ class QtTableWorkspace(QWidget):
     ) -> TableViewState:
         default = service.default_state(page_size=previous.page_size)
         available = set(default.columns.order)
-        pinned = tuple(default.columns.pinned)
+        required_pinned = tuple(default.columns.pinned)
+        pinned = required_pinned + tuple(
+            column
+            for column in previous.columns.order
+            if column in previous.columns.pinned
+            and column in available
+            and column not in required_pinned
+        )
         retained = [
             column
             for column in previous.columns.order
@@ -406,6 +395,7 @@ class QtTableWorkspace(QWidget):
             self.applied_state,
             columns=self._columns_with_current_widths(self.applied_state.columns),
         )
+        self._close_open_dialogs()
         self.task_controller.cancel()
         self._pending_state = None
         self._pending_reset_page = False
@@ -427,7 +417,6 @@ class QtTableWorkspace(QWidget):
         self.page_offset = 0
         self.selected_source_position = None
         self.selection_outside_view = False
-        self._replace_inspector_panels()
         self._render_result()
         if previous_identity:
             try:
@@ -444,10 +433,6 @@ class QtTableWorkspace(QWidget):
                 self.selected_source_position = previous_source_position
                 self.selection_outside_view = True
                 self._update_status()
-
-    def _open_tab(self, index: int) -> None:
-        self.tabs.setCurrentIndex(index)
-        self.tabs.show()
 
     def open_filter_dialog(self) -> FilterDialog:
         """Open one non-blocking modal draft over the current applied filter."""
@@ -477,6 +462,88 @@ class QtTableWorkspace(QWidget):
     def _filter_dialog_finished(self, dialog: FilterDialog) -> None:
         if self.filter_dialog is dialog:
             self.filter_dialog = None
+
+    def open_sort_dialog(self) -> SortDialog:
+        """Open one non-blocking modal draft over the applied sort rules."""
+
+        if self.sort_dialog is not None and self.sort_dialog.isVisible():
+            self.sort_dialog.raise_()
+            self.sort_dialog.activateWindow()
+            return self.sort_dialog
+        dialog = SortDialog(
+            self.applied_state.columns.order,
+            self.applied_state.sort_rules,
+            self,
+        )
+        dialog.applyRequested.connect(
+            lambda rules, current=dialog: self._apply_sort_from_dialog(
+                current,
+                rules,
+            )
+        )
+        dialog.finished.connect(
+            lambda _result, current=dialog: self._sort_dialog_finished(current)
+        )
+        self.sort_dialog = dialog
+        dialog.open()
+        return dialog
+
+    def _sort_dialog_finished(self, dialog: SortDialog) -> None:
+        if self.sort_dialog is dialog:
+            self.sort_dialog = None
+
+    def _apply_sort_from_dialog(self, dialog: SortDialog, rules: object) -> None:
+        if not isinstance(rules, tuple) or not all(
+            isinstance(rule, SortRule) for rule in rules
+        ):
+            dialog.set_error("Sort dialog returned an invalid draft")
+            return
+        if not self.apply_sort_rules(rules):
+            dialog.set_error(self.error_text)
+            return
+        dialog.complete_apply()
+
+    def open_columns_dialog(self) -> ColumnsDialog:
+        """Open one non-blocking modal draft over the applied column layout."""
+
+        if self.columns_dialog is not None and self.columns_dialog.isVisible():
+            self.columns_dialog.raise_()
+            self.columns_dialog.activateWindow()
+            return self.columns_dialog
+        dialog = ColumnsDialog(
+            self._columns_with_current_widths(self.applied_state.columns),
+            self.initial_state.columns,
+            self,
+        )
+        dialog.applyRequested.connect(
+            lambda columns, current=dialog: self._apply_columns_from_dialog(
+                current,
+                columns,
+            )
+        )
+        dialog.finished.connect(
+            lambda _result, current=dialog: self._columns_dialog_finished(current)
+        )
+        self.columns_dialog = dialog
+        dialog.open()
+        return dialog
+
+    def _columns_dialog_finished(self, dialog: ColumnsDialog) -> None:
+        if self.columns_dialog is dialog:
+            self.columns_dialog = None
+
+    def _apply_columns_from_dialog(
+        self,
+        dialog: ColumnsDialog,
+        columns: object,
+    ) -> None:
+        if not isinstance(columns, ColumnViewState):
+            dialog.set_error("Columns dialog returned an invalid draft")
+            return
+        if not self.apply_column_state(columns):
+            dialog.set_error(self.error_text)
+            return
+        dialog.complete_apply()
 
     def _apply_filter_from_dialog(
         self,
@@ -567,16 +634,10 @@ class QtTableWorkspace(QWidget):
         )
 
     def apply_sort_rules(self, rules: tuple[SortRule, ...]) -> bool:
-        applied = self._commit_state(
+        return self._commit_state(
             replace(self.applied_state, sort_rules=tuple(rules)),
             reset_page=True,
         )
-        if applied:
-            self.sort_panel.set_rules(tuple(rules))
-            self.sort_panel.set_error("")
-        else:
-            self.sort_panel.set_error(self.error_text)
-        return applied
 
     def cycle_header_sort(self, column: str, *, additive: bool = False) -> bool:
         rules = list(self.applied_state.sort_rules)
@@ -605,16 +666,10 @@ class QtTableWorkspace(QWidget):
             self.cycle_header_sort(str(columns[section]), additive=additive)
 
     def apply_column_state(self, columns: ColumnViewState) -> bool:
-        applied = self._commit_state(
+        return self._commit_state(
             replace(self.applied_state, columns=columns),
             reset_page=False,
         )
-        if applied:
-            self.columns_panel.set_state(self.applied_state.columns)
-            self.columns_panel.set_error("")
-        else:
-            self.columns_panel.set_error(self.error_text)
-        return applied
 
     def _page_size_changed(self) -> None:
         page_size = self.page_size_combo.currentData()
@@ -772,8 +827,6 @@ class QtTableWorkspace(QWidget):
             self.page_offset = 0
         self._set_error("")
         self._render_result()
-        self.sort_panel.set_rules(self.applied_state.sort_rules)
-        self.columns_panel.set_state(self.applied_state.columns)
 
     @Slot(int, object)
     def _accept_background_result(self, revision: int, result: object) -> None:
@@ -798,8 +851,6 @@ class QtTableWorkspace(QWidget):
             return
         self._pending_state = None
         self._pending_reset_page = False
-        self.sort_panel.set_rules(self.applied_state.sort_rules)
-        self.columns_panel.set_state(self.applied_state.columns)
         message = str(error).strip() or type(error).__name__
         self._set_error(message)
 
@@ -813,6 +864,7 @@ class QtTableWorkspace(QWidget):
     def closeEvent(self, event: QCloseEvent) -> None:
         self._pending_state = None
         self._pending_reset_page = False
+        self._close_open_dialogs()
         self.task_controller.cancel()
         super().closeEvent(event)
 
