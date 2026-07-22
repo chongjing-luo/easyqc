@@ -4,7 +4,14 @@ from threading import Event, get_ident
 
 import pandas as pd
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QFileDialog
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QHeaderView,
+    QScrollArea,
+    QSplitter,
+    QToolBar,
+    QToolButton,
+)
 
 from core.configuration_service import ConfigurationService
 from core.event_bus import EventType
@@ -108,6 +115,87 @@ def test_qt_module_form_adds_and_reorders_without_json_editor(qtbot, tmp_path) -
     names = [module.name for module in config.modules()]
     assert names == ["example", "FuncQC", "AnatQC"]
     assert not hasattr(workspace, "json_editor")
+
+
+def test_qt_configuration_uses_responsive_toolbars_splitter_and_long_tooltips(
+    qtbot,
+    tmp_path,
+) -> None:
+    workspace, config = _workspace(qtbot, tmp_path)
+    long_path = "/含 空格/中文项目路径/" + "深层目录/" * 20 + "subjects.csv"
+    config.set_constant("DATA_ROOT", long_path)
+    workspace._refresh_constants()
+    long_label = "功能质量控制模块_长中文标签_" + "模块" * 24
+    assert workspace.add_module("LongQC", long_label)
+    workspace.resize(640, 520)
+    workspace.show()
+    workspace.activateWindow()
+    workspace.tabs.setCurrentWidget(workspace.modules_tab)
+
+    project_toolbar = workspace.findChild(QToolBar, "configProjectToolbar")
+    module_splitter = workspace.findChild(QSplitter, "configModuleSplitter")
+    editor_scroll = workspace.findChild(QScrollArea, "configModuleEditorScroll")
+    module_toolbar = workspace.findChild(QToolBar, "configModuleActions")
+    assert project_toolbar is workspace.project_toolbar
+    assert not project_toolbar.isMovable()
+    assert not project_toolbar.isFloatable()
+    assert module_splitter is workspace.module_splitter
+    assert not module_splitter.isCollapsible(0)
+    assert not module_splitter.isCollapsible(1)
+    assert editor_scroll is workspace.module_editor_scroll
+    assert editor_scroll.widgetResizable()
+    assert module_toolbar is workspace.module_actions_toolbar
+    assert workspace.score_table.horizontalHeader().sectionResizeMode(0) == (
+        QHeaderView.ResizeMode.Interactive
+    )
+    assert workspace.score_table.columnWidth(0) == (
+        workspace.score_table.horizontalHeader().defaultSectionSize()
+    )
+    assert workspace.tag_table.horizontalHeader().stretchLastSection()
+    assert workspace.constants_table.item(0, 1).toolTip() == long_path
+    selected_item = workspace.module_list.currentItem()
+    assert selected_item.toolTip() == selected_item.text()
+    assert long_label in selected_item.toolTip()
+    assert workspace.project_combo.width() >= workspace.project_combo.minimumSizeHint().width()
+    assert workspace.project_combo.toolTip() == workspace.project_combo.currentText()
+
+    actions = (
+        workspace.load_project_action,
+        workspace.new_project_action,
+        workspace.import_project_action,
+        workspace.save_module_action,
+        workspace.import_module_action,
+        workspace.export_module_action,
+    )
+    assert all(action.shortcut().toString() for action in actions)
+    workspace.module_label.setText("键盘保存后的模块标签")
+    workspace.module_label.setFocus()
+    qtbot.waitUntil(workspace.module_label.hasFocus)
+    qtbot.keyClick(
+        workspace.module_label,
+        Qt.Key.Key_S,
+        Qt.KeyboardModifier.ControlModifier,
+    )
+    saved = next(module for module in config.modules() if module.name == "LongQC")
+    assert saved.label == "键盘保存后的模块标签"
+
+    workspace.module_label.setText("隐藏模块页不应响应保存快捷键")
+    workspace.tabs.setCurrentWidget(workspace.subjects_tab)
+    workspace.subject_table.setFocus()
+    qtbot.waitUntil(workspace.subject_table.hasFocus)
+    qtbot.keyClick(
+        workspace.subject_table,
+        Qt.Key.Key_S,
+        Qt.KeyboardModifier.ControlModifier,
+    )
+    saved = next(module for module in config.modules() if module.name == "LongQC")
+    assert saved.label == "键盘保存后的模块标签"
+
+    workspace.tabs.setCurrentWidget(workspace.modules_tab)
+    workspace.resize(480, 520)
+    qtbot.waitUntil(lambda: workspace.width() == 480)
+    extension = module_toolbar.findChild(QToolButton, "qt_toolbar_ext_button")
+    assert extension is not None and extension.isVisible()
 
 
 def test_project_load_runs_in_background_and_keeps_qt_responsive(

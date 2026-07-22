@@ -6,8 +6,8 @@ from copy import deepcopy
 from pathlib import Path
 
 import pandas as pd
-from PySide6.QtCore import Slot
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtCore import Qt, Slot
+from PySide6.QtGui import QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -15,8 +15,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
-    QPushButton,
+    QSizePolicy,
     QTabWidget,
+    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -91,7 +92,6 @@ class QtMainWindow(QMainWindow):
             if self._injected_preview
             else "EasyQC — Quality control workspace"
         )
-        self.setMinimumSize(980, 620)
         self.resize(1360, 840)
         self._build_content(initial_source)
         self._subscribe_events()
@@ -119,41 +119,75 @@ class QtMainWindow(QMainWindow):
 
         header = QFrame(central)
         header.setObjectName("productHeader")
-        header_layout = QHBoxLayout(header)
+        header_layout = QVBoxLayout(header)
         header_layout.setContentsMargins(16, 10, 16, 10)
+        header_layout.setSpacing(6)
+        title_row = QHBoxLayout()
         title_column = QVBoxLayout()
         title = QLabel("EasyQC", header)
         title.setObjectName("previewTitle")
+        title.setWordWrap(True)
+        title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         subtitle = QLabel(
             "Professional Table, visual QC and typed project configuration",
             header,
         )
         subtitle.setObjectName("previewMessage")
+        subtitle.setWordWrap(True)
+        subtitle.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         title_column.addWidget(title)
         title_column.addWidget(subtitle)
-        header_layout.addLayout(title_column)
-        header_layout.addStretch(1)
-        header_layout.addWidget(QLabel("Project", header))
-        self.project_combo = QComboBox(header)
-        self.project_combo.setObjectName("shellProjectSelector")
-        self.project_combo.setAccessibleName("Active EasyQC project")
-        header_layout.addWidget(self.project_combo)
-        self.reload_button = QPushButton("Reload", header)
-        header_layout.addWidget(self.reload_button)
-        header_layout.addWidget(QLabel("QC module", header))
-        self.module_combo = QComboBox(header)
-        self.module_combo.setObjectName("shellModuleSelector")
-        self.module_combo.setAccessibleName("Active QC module")
-        self.module_combo.setMinimumWidth(220)
-        header_layout.addWidget(self.module_combo)
+        title_row.addLayout(title_column, 1)
         self.context_badge = QLabel("No project", header)
         self.context_badge.setObjectName("watchBadge")
-        header_layout.addWidget(self.context_badge)
+        self.context_badge.setWordWrap(True)
+        title_row.addWidget(self.context_badge)
+        header_layout.addLayout(title_row)
+
+        self.context_toolbar = QToolBar("Project context", header)
+        self.context_toolbar.setObjectName("shellContextToolbar")
+        self.context_toolbar.setAccessibleName("Project context actions")
+        self.context_toolbar.setMovable(False)
+        self.context_toolbar.setFloatable(False)
+        self.context_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.context_toolbar.addWidget(QLabel("Project", self.context_toolbar))
+        self.project_combo = QComboBox(self.context_toolbar)
+        self.project_combo.setObjectName("shellProjectSelector")
+        self.project_combo.setAccessibleName("Active EasyQC project")
+        self.project_combo.setMinimumContentsLength(10)
+        self.project_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.project_combo.setSizePolicy(
+            QSizePolicy.MinimumExpanding,
+            QSizePolicy.Preferred,
+        )
+        self.context_toolbar.addWidget(self.project_combo)
+        self.reload_action = self.context_toolbar.addAction("Reload")
+        self.reload_action.setShortcut(QKeySequence("Ctrl+R"))
+        self.reload_action.setShortcutContext(Qt.WindowShortcut)
+        self.reload_button = self.context_toolbar.widgetForAction(self.reload_action)
+        self.context_toolbar.addSeparator()
+        self.context_toolbar.addWidget(QLabel("QC module", self.context_toolbar))
+        self.module_combo = QComboBox(self.context_toolbar)
+        self.module_combo.setObjectName("shellModuleSelector")
+        self.module_combo.setAccessibleName("Active QC module")
+        self.module_combo.setMinimumContentsLength(12)
+        self.module_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.module_combo.setSizePolicy(
+            QSizePolicy.MinimumExpanding,
+            QSizePolicy.Preferred,
+        )
+        self.context_toolbar.addWidget(self.module_combo)
+        header_layout.addWidget(self.context_toolbar)
         layout.addWidget(header)
 
         self.shell_status_label = QLabel("", central)
         self.shell_status_label.setObjectName("shellStatus")
         self.shell_status_label.setAccessibleName("Project context status")
+        self.shell_status_label.setWordWrap(True)
         layout.addWidget(self.shell_status_label)
         self.shell_error_label = QLabel("", central)
         self.shell_error_label.setObjectName("shellError")
@@ -205,8 +239,10 @@ class QtMainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         self.project_combo.activated.connect(self._project_selected)
-        self.reload_button.clicked.connect(self.refresh_context)
+        self.project_combo.currentTextChanged.connect(self.project_combo.setToolTip)
+        self.reload_action.triggered.connect(self.refresh_context)
         self.module_combo.currentIndexChanged.connect(self._module_selected)
+        self.module_combo.currentTextChanged.connect(self.module_combo.setToolTip)
         self._sync_preview_aliases()
 
     def _subscribe_events(self) -> None:
@@ -395,6 +431,11 @@ class QtMainWindow(QMainWindow):
             self.project_combo.clear()
             for name in snapshot.project_names:
                 self.project_combo.addItem(name, name)
+                self.project_combo.setItemData(
+                    self.project_combo.count() - 1,
+                    name,
+                    Qt.ToolTipRole,
+                )
             project_index = self.project_combo.findData(snapshot.project_name)
             self.project_combo.setCurrentIndex(project_index)
 
@@ -404,6 +445,11 @@ class QtMainWindow(QMainWindow):
                 self.module_combo.addItem(
                     f"{module.label} · {module.name} · {rater}",
                     module.name,
+                )
+                self.module_combo.setItemData(
+                    self.module_combo.count() - 1,
+                    self.module_combo.itemText(self.module_combo.count() - 1),
+                    Qt.ToolTipRole,
                 )
             module_index = self.module_combo.findData(preferred_module)
             if module_index < 0 and self.module_combo.count():
@@ -529,7 +575,7 @@ class QtMainWindow(QMainWindow):
         dirty = bool(self.active_workflow is not None and self.active_workflow.dirty)
         enabled = not busy and not dirty and not self._injected_preview
         self.project_combo.setEnabled(enabled and bool(self.current_context.project_names))
-        self.reload_button.setEnabled(enabled and self.current_context.has_project)
+        self.reload_action.setEnabled(enabled and self.current_context.has_project)
         self.module_combo.setEnabled(enabled and bool(self.current_context.modules))
         self.config_workspace.setEnabled(not busy and not dirty and not self._injected_preview)
         if not self.current_context.has_project:

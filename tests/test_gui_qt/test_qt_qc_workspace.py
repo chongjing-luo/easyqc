@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 
 import pandas as pd
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QCoreApplication, QEvent, Qt
+from PySide6.QtWidgets import QScrollArea, QSplitter, QToolBar, QWidget
 
 from core.qc_workflow_service import QcWorkflowService
 from gui_qt.qc_workspace import QtQcWorkspace
@@ -54,10 +55,12 @@ def _module(*, rater="rater1", watch_mode=False):
     }
 
 
-def _workflow(tmp_path: Path, *, module=None, executor=None):
+def _workflow(tmp_path: Path, *, module=None, executor=None, subjects=None):
     return QcWorkflowService(
         module or _module(),
-        pd.DataFrame(
+        subjects
+        if subjects is not None
+        else pd.DataFrame(
             {"ezqcid": ["SUB001", "SUB002"], "image": ["one.nii", "two.nii"]}
         ),
         rating_dir=tmp_path / "ratings",
@@ -117,6 +120,93 @@ def test_qt_watch_mode_disables_edits_and_save_but_keeps_viewer(qtbot, tmp_path)
 
     qtbot.mouseClick(workspace.viewer_button, Qt.LeftButton)
     assert executor.started
+
+
+def test_qt_qc_workspace_resizes_with_long_text_and_keyboard_actions(
+    qtbot,
+    tmp_path,
+) -> None:
+    executor = _FakeExecutor()
+    module = _module(rater=None)
+    module["label"] = "解剖质量控制模块_长中文标签_" + "质量" * 24
+    module["scores"]["1"]["label"] = "图像质量评分_" + "非常长" * 18
+    module["tags"]["1"]["label"] = "需要人工复核的长标签_" + "复核" * 18
+    subjects = pd.DataFrame(
+        {
+            "ezqcid": ["受试者_" + "一" * 20, "受试者_" + "二" * 20],
+            "image": [
+                "/含 空格/中文路径/" + "深层目录/" * 12 + "one.nii",
+                "/含 空格/中文路径/" + "深层目录/" * 12 + "two.nii",
+            ],
+        }
+    )
+    workspace = QtQcWorkspace(
+        _workflow(
+            tmp_path,
+            module=module,
+            executor=executor,
+            subjects=subjects,
+        )
+    )
+    qtbot.addWidget(workspace)
+    workspace.resize(640, 480)
+    workspace.show()
+    workspace.activateWindow()
+
+    splitter = workspace.findChild(QSplitter, "qcSplitter")
+    editor_scroll = workspace.findChild(QScrollArea, "qcEditorScroll")
+    action_toolbar = workspace.findChild(QToolBar, "qcActionToolbar")
+    assert splitter is workspace.qc_splitter
+    assert not splitter.isCollapsible(0)
+    assert not splitter.isCollapsible(1)
+    assert editor_scroll is workspace.editor_scroll
+    assert editor_scroll.widgetResizable()
+    assert action_toolbar is workspace.action_toolbar
+    assert workspace.subject_list.maximumWidth() == QWidget().maximumWidth()
+    assert workspace.watch_badge.maximumWidth() == QWidget().maximumWidth()
+    assert workspace.module_label.wordWrap()
+    assert workspace.subject_label.wordWrap()
+    assert workspace.module_label.toolTip() == workspace.module_label.text()
+    assert workspace.subject_label.toolTip() == workspace.subject_label.text()
+    assert workspace.subject_list.item(0).toolTip().endswith(subjects.iloc[0]["ezqcid"])
+
+    actions = (
+        workspace.viewer_action,
+        workspace.previous_action,
+        workspace.next_action,
+        workspace.discard_action,
+        workspace.save_action,
+        workspace.save_next_action,
+    )
+    assert all(action.shortcut().toString() for action in actions)
+    assert not workspace.save_action.isEnabled()
+    assert not workspace.save_next_action.isEnabled()
+    before = list((tmp_path / "ratings").glob("*.json"))
+    workspace.notes_edit.setFocus()
+    qtbot.waitUntil(workspace.notes_edit.hasFocus)
+    qtbot.keyClick(
+        workspace.notes_edit,
+        Qt.Key.Key_S,
+        Qt.KeyboardModifier.ControlModifier,
+    )
+    assert list((tmp_path / "ratings").glob("*.json")) == before
+    qtbot.keyClick(
+        workspace.notes_edit,
+        Qt.Key.Key_V,
+        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+    )
+    assert executor.started
+
+    expected_minimum = workspace._subject_list_accessible_width()
+    assert workspace.subject_list.minimumWidth() == expected_minimum
+    font = workspace.font()
+    font.setPointSize(font.pointSize() + 4)
+    workspace.setFont(font)
+    QCoreApplication.sendEvent(workspace, QEvent(QEvent.Type.FontChange))
+    assert (
+        workspace.subject_list.minimumWidth()
+        == workspace._subject_list_accessible_width()
+    )
 
 
 def test_qt_schema_drift_shows_reused_legacy_score_then_restores_editing(

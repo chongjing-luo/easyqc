@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -11,11 +12,13 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
-    QPushButton,
     QRadioButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
+    QStyle,
     QTextEdit,
+    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -50,40 +53,56 @@ class QtQcWorkspace(QWidget):
 
         header = QFrame(self)
         header.setObjectName("qcHeader")
-        header_layout = QHBoxLayout(header)
+        header_layout = QVBoxLayout(header)
         header_layout.setContentsMargins(14, 10, 14, 10)
+        header_layout.setSpacing(6)
+        title_row = QHBoxLayout()
         title_column = QVBoxLayout()
         self.module_label = QLabel("", header)
         self.module_label.setObjectName("qcTitle")
+        self.module_label.setWordWrap(True)
+        self.module_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.subject_label = QLabel("", header)
         self.subject_label.setObjectName("qcSubject")
+        self.subject_label.setWordWrap(True)
+        self.subject_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         title_column.addWidget(self.module_label)
         title_column.addWidget(self.subject_label)
-        header_layout.addLayout(title_column)
-        header_layout.addStretch(1)
+        title_row.addLayout(title_column, 1)
+        self.viewer_toolbar = QToolBar("Viewer", header)
+        self.viewer_toolbar.setObjectName("qcViewerToolbar")
+        self.viewer_toolbar.setMovable(False)
+        self.viewer_toolbar.setFloatable(False)
+        self.viewer_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.viewer_action, self.viewer_button = self._add_toolbar_action(
+            self.viewer_toolbar,
+            "Open viewer",
+            QKeySequence("Ctrl+Shift+V"),
+            self._launch_viewer,
+        )
+        self.viewer_button.setObjectName("primaryAction")
+        self.viewer_button.setAccessibleName("Open external QC viewer")
+        title_row.addWidget(self.viewer_toolbar)
+        header_layout.addLayout(title_row)
         self.watch_badge = QLabel("", header)
         self.watch_badge.setObjectName("watchBadge")
         self.watch_badge.setWordWrap(True)
-        self.watch_badge.setMaximumWidth(420)
+        self.watch_badge.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         header_layout.addWidget(self.watch_badge)
-        self.viewer_button = QPushButton("Open viewer", header)
-        self.viewer_button.setObjectName("primaryAction")
-        self.viewer_button.setAccessibleName("Open external QC viewer")
-        header_layout.addWidget(self.viewer_button)
         layout.addWidget(header)
 
-        splitter = QSplitter(Qt.Horizontal, self)
-        splitter.setObjectName("qcSplitter")
-        self.subject_list = QListWidget(splitter)
+        self.qc_splitter = QSplitter(Qt.Horizontal, self)
+        self.qc_splitter.setObjectName("qcSplitter")
+        self.subject_list = QListWidget(self.qc_splitter)
         self.subject_list.setObjectName("qcSubjectList")
         self.subject_list.setAccessibleName("QC subject sequence")
-        self.subject_list.setMinimumWidth(190)
-        self.subject_list.setMaximumWidth(300)
+        self.subject_list.setMinimumWidth(self._subject_list_accessible_width())
 
-        editor_scroll = QScrollArea(splitter)
-        editor_scroll.setWidgetResizable(True)
-        editor_scroll.setFrameShape(QFrame.NoFrame)
-        editor = QWidget(editor_scroll)
+        self.editor_scroll = QScrollArea(self.qc_splitter)
+        self.editor_scroll.setObjectName("qcEditorScroll")
+        self.editor_scroll.setWidgetResizable(True)
+        self.editor_scroll.setFrameShape(QFrame.NoFrame)
+        editor = QWidget(self.editor_scroll)
         editor.setObjectName("qcEditor")
         editor_layout = QVBoxLayout(editor)
         editor_layout.setContentsMargins(14, 8, 14, 14)
@@ -93,6 +112,7 @@ class QtQcWorkspace(QWidget):
         for key, score in module.scores.items():
             group_box = QGroupBox(score.label, editor)
             group_box.setObjectName("scoreGroup")
+            group_box.setToolTip(score.label)
             group_layout = QHBoxLayout(group_box)
             button_group = QButtonGroup(group_box)
             button_group.setExclusive(True)
@@ -103,6 +123,7 @@ class QtQcWorkspace(QWidget):
             ]:
                 button = QRadioButton(label, group_box)
                 button.setAccessibleName(f"{score.label}: {label}")
+                button.setToolTip(label)
                 button_group.addButton(button)
                 self.score_buttons[key][value] = button
                 group_layout.addWidget(button)
@@ -127,6 +148,7 @@ class QtQcWorkspace(QWidget):
             for key, tag in module.tags.items():
                 checkbox = QCheckBox(tag.label, tags_box)
                 checkbox.setAccessibleName(f"QC tag: {tag.label}")
+                checkbox.setToolTip(tag.label)
                 checkbox.toggled.connect(
                     lambda checked, tag_key=key: self._tag_changed(tag_key, checked)
                 )
@@ -146,35 +168,61 @@ class QtQcWorkspace(QWidget):
         notes_layout.addWidget(self.notes_edit)
         editor_layout.addWidget(notes_box)
         editor_layout.addStretch(1)
-        editor_scroll.setWidget(editor)
+        self.editor_scroll.setWidget(editor)
 
-        splitter.addWidget(self.subject_list)
-        splitter.addWidget(editor_scroll)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([230, 760])
-        layout.addWidget(splitter, 1)
+        self.qc_splitter.addWidget(self.subject_list)
+        self.qc_splitter.addWidget(self.editor_scroll)
+        self.qc_splitter.setCollapsible(0, False)
+        self.qc_splitter.setCollapsible(1, False)
+        self.qc_splitter.setStretchFactor(0, 0)
+        self.qc_splitter.setStretchFactor(1, 1)
+        self.qc_splitter.setSizes([230, 760])
+        layout.addWidget(self.qc_splitter, 1)
 
-        footer = QFrame(self)
-        footer.setObjectName("qcFooter")
-        footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(12, 8, 12, 8)
-        self.previous_button = QPushButton("Previous", footer)
-        self.next_button = QPushButton("Next", footer)
-        self.discard_button = QPushButton("Discard changes", footer)
-        self.save_button = QPushButton("Save", footer)
-        self.save_next_button = QPushButton("Save && Next", footer)
-        self.save_next_button.setObjectName("primaryAction")
-        footer_layout.addWidget(self.previous_button)
-        footer_layout.addWidget(self.next_button)
-        footer_layout.addStretch(1)
-        self.dirty_label = QLabel("", footer)
+        self.action_toolbar = QToolBar("QC actions", self)
+        self.action_toolbar.setObjectName("qcActionToolbar")
+        self.action_toolbar.setAccessibleName("QC navigation and save actions")
+        self.action_toolbar.setMovable(False)
+        self.action_toolbar.setFloatable(False)
+        self.action_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.previous_action, self.previous_button = self._add_toolbar_action(
+            self.action_toolbar,
+            "Previous",
+            QKeySequence("Alt+Left"),
+            lambda: self._navigate_delta(-1),
+        )
+        self.next_action, self.next_button = self._add_toolbar_action(
+            self.action_toolbar,
+            "Next",
+            QKeySequence("Alt+Right"),
+            lambda: self._navigate_delta(1),
+        )
+        self.action_toolbar.addSeparator()
+        self.dirty_label = QLabel("", self.action_toolbar)
         self.dirty_label.setObjectName("qcDirtyState")
-        footer_layout.addWidget(self.dirty_label)
-        footer_layout.addWidget(self.discard_button)
-        footer_layout.addWidget(self.save_button)
-        footer_layout.addWidget(self.save_next_button)
-        layout.addWidget(footer)
+        self.dirty_label.setMinimumWidth(0)
+        self.dirty_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.action_toolbar.addWidget(self.dirty_label)
+        self.discard_action, self.discard_button = self._add_toolbar_action(
+            self.action_toolbar,
+            "Discard changes",
+            QKeySequence("Ctrl+D"),
+            self._discard_changes,
+        )
+        self.save_action, self.save_button = self._add_toolbar_action(
+            self.action_toolbar,
+            "Save",
+            QKeySequence("Ctrl+S"),
+            self._save,
+        )
+        self.save_next_action, self.save_next_button = self._add_toolbar_action(
+            self.action_toolbar,
+            "Save && Next",
+            QKeySequence("Ctrl+Return"),
+            self._save_next,
+        )
+        self.save_next_button.setObjectName("primaryAction")
+        layout.addWidget(self.action_toolbar)
 
         self.error_label = QLabel("", self)
         self.error_label.setObjectName("qcError")
@@ -182,14 +230,47 @@ class QtQcWorkspace(QWidget):
         self.error_label.setWordWrap(True)
         layout.addWidget(self.error_label)
 
-        self.viewer_button.clicked.connect(self._launch_viewer)
-        self.previous_button.clicked.connect(lambda: self._navigate_delta(-1))
-        self.next_button.clicked.connect(lambda: self._navigate_delta(1))
-        self.discard_button.clicked.connect(self._discard_changes)
-        self.save_button.clicked.connect(self._save)
-        self.save_next_button.clicked.connect(self._save_next)
         self.subject_list.currentRowChanged.connect(self._subject_row_changed)
         self.notes_edit.textChanged.connect(self._notes_changed)
+
+    def _add_toolbar_action(
+        self,
+        toolbar: QToolBar,
+        text: str,
+        shortcut: QKeySequence,
+        callback,
+    ) -> tuple[QAction, QWidget]:
+        """Add one native action and return its action/tool-button pair."""
+
+        action = QAction(text, toolbar)
+        action.setShortcut(shortcut)
+        action.setShortcutContext(Qt.WindowShortcut)
+        action.triggered.connect(callback)
+        toolbar.addAction(action)
+        button = toolbar.widgetForAction(action)
+        button.setAccessibleName(text)
+        return action, button
+
+    def _subject_list_accessible_width(self) -> int:
+        """Return a font/style-derived minimum for sequence plus identity text."""
+
+        text_width = self.subject_list.fontMetrics().horizontalAdvance(
+            "0000   WWWWWWWW"
+        )
+        scroll_extent = self.style().pixelMetric(
+            QStyle.PixelMetric.PM_ScrollBarExtent,
+            None,
+            self.subject_list,
+        )
+        return text_width + scroll_extent + 2 * self.subject_list.frameWidth() + 8
+
+    def changeEvent(self, event: QEvent) -> None:
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange) and hasattr(
+            self,
+            "subject_list",
+        ):
+            self.subject_list.setMinimumWidth(self._subject_list_accessible_width())
+        super().changeEvent(event)
 
     @property
     def error_text(self) -> str:
@@ -202,14 +283,19 @@ class QtQcWorkspace(QWidget):
             self.module_label.setText(
                 f"{module.label}  ·  {module.name}  ·  {module.rater or 'no rater'}"
             )
+            self.module_label.setToolTip(self.module_label.text())
             self.subject_label.setText(
                 f"{self.workflow.current_ezqcid}  ·  "
                 f"{self.workflow.current_index + 1} of {len(self.workflow.subject_ids)}"
             )
+            self.subject_label.setToolTip(self.subject_label.text())
             self.subject_list.blockSignals(True)
             self.subject_list.clear()
             for position, identity in enumerate(self.workflow.subject_ids, start=1):
                 self.subject_list.addItem(f"{position:>4}   {identity}")
+                self.subject_list.item(self.subject_list.count() - 1).setToolTip(
+                    f"{position:>4}   {identity}"
+                )
             self.subject_list.setCurrentRow(self.workflow.current_index)
             self.subject_list.blockSignals(False)
 
@@ -230,6 +316,7 @@ class QtQcWorkspace(QWidget):
                         f"{score.label}: {score.value} saved legacy value; "
                         "not in current schema"
                     )
+                    legacy_button.setToolTip(legacy_button.text())
                     legacy_button.setEnabled(False)
                     legacy_button.show()
                     legacy_button.setChecked(True)
@@ -251,17 +338,17 @@ class QtQcWorkspace(QWidget):
             for checkbox in self.tag_boxes.values():
                 checkbox.setEnabled(not read_only)
             self.notes_edit.setReadOnly(read_only)
-            self.save_button.setEnabled(not read_only)
-            self.save_next_button.setEnabled(
+            self.save_action.setEnabled(not read_only)
+            self.save_next_action.setEnabled(
                 not read_only and self.workflow.current_index < len(self.workflow.subject_ids) - 1
             )
-            self.previous_button.setEnabled(self.workflow.current_index > 0)
-            self.next_button.setEnabled(
+            self.previous_action.setEnabled(self.workflow.current_index > 0)
+            self.next_action.setEnabled(
                 self.workflow.current_index < len(self.workflow.subject_ids) - 1
             )
-            self.viewer_button.setEnabled(bool((module.code or "").strip()))
+            self.viewer_action.setEnabled(bool((module.code or "").strip()))
             self.dirty_label.setText("Unsaved changes" if self.workflow.dirty else "Saved state")
-            self.discard_button.setEnabled(self.workflow.dirty)
+            self.discard_action.setEnabled(self.workflow.dirty)
         finally:
             self._loading = False
         self.draftStateChanged.emit(self.workflow.dirty)
@@ -277,7 +364,7 @@ class QtQcWorkspace(QWidget):
             return
         self._set_error("")
         self.dirty_label.setText("Unsaved changes")
-        self.discard_button.setEnabled(True)
+        self.discard_action.setEnabled(True)
         self.draftStateChanged.emit(True)
 
     def _tag_changed(self, key: str, checked: bool) -> None:
@@ -291,7 +378,7 @@ class QtQcWorkspace(QWidget):
             return
         self._set_error("")
         self.dirty_label.setText("Unsaved changes")
-        self.discard_button.setEnabled(True)
+        self.discard_action.setEnabled(True)
         self.draftStateChanged.emit(True)
 
     def _notes_changed(self) -> None:
@@ -305,7 +392,7 @@ class QtQcWorkspace(QWidget):
             return
         self._set_error("")
         self.dirty_label.setText("Unsaved changes")
-        self.discard_button.setEnabled(True)
+        self.discard_action.setEnabled(True)
         self.draftStateChanged.emit(True)
 
     def _discard_changes(self) -> None:
@@ -324,7 +411,7 @@ class QtQcWorkspace(QWidget):
             self._set_error(str(exc))
             return
         self._set_error("")
-        self.viewer_button.setText(f"Viewer open ({len(processes)})")
+        self.viewer_action.setText(f"Viewer open ({len(processes)})")
 
     def _save(self) -> None:
         try:
@@ -343,7 +430,7 @@ class QtQcWorkspace(QWidget):
             self._set_error(str(exc))
             return
         self._set_error("")
-        self.viewer_button.setText("Open viewer")
+        self.viewer_action.setText("Open viewer")
         self._refresh()
 
     def _navigate_delta(self, delta: int) -> None:
@@ -354,7 +441,7 @@ class QtQcWorkspace(QWidget):
             self._refresh()
             return
         self._set_error("")
-        self.viewer_button.setText("Open viewer")
+        self.viewer_action.setText("Open viewer")
         self._refresh()
 
     def _subject_row_changed(self, row: int) -> None:

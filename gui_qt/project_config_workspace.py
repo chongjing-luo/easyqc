@@ -7,7 +7,7 @@ from copy import deepcopy
 
 import pandas as pd
 from PySide6.QtCore import Qt, Slot
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -20,11 +20,15 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QSplitter,
     QTabWidget,
     QTableView,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
+    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -83,24 +87,61 @@ class QtProjectConfigWorkspace(QWidget):
 
         project_bar = QFrame(self)
         project_bar.setObjectName("configHeader")
-        project_layout = QHBoxLayout(project_bar)
+        project_layout = QVBoxLayout(project_bar)
         project_layout.setContentsMargins(12, 9, 12, 9)
         title = QLabel("Project configuration", project_bar)
         title.setObjectName("configTitle")
+        title.setWordWrap(True)
         project_layout.addWidget(title)
-        project_layout.addStretch(1)
-        project_layout.addWidget(QLabel("Project", project_bar))
-        self.project_combo = QComboBox(project_bar)
+        self.project_toolbar = QToolBar("Project actions", project_bar)
+        self.project_toolbar.setObjectName("configProjectToolbar")
+        self.project_toolbar.setAccessibleName("Project configuration actions")
+        self.project_toolbar.setMovable(False)
+        self.project_toolbar.setFloatable(False)
+        self.project_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.project_toolbar.addWidget(QLabel("Project", self.project_toolbar))
+        self.project_combo = QComboBox(self.project_toolbar)
         self.project_combo.setObjectName("projectSelector")
-        self.load_project_button = QPushButton("Load", project_bar)
-        self.new_project_button = QPushButton("New…", project_bar)
-        self.import_project_button = QPushButton("Import…", project_bar)
-        self.remove_project_button = QPushButton("Unregister", project_bar)
-        project_layout.addWidget(self.project_combo)
-        project_layout.addWidget(self.load_project_button)
-        project_layout.addWidget(self.new_project_button)
-        project_layout.addWidget(self.import_project_button)
-        project_layout.addWidget(self.remove_project_button)
+        self.project_combo.setMinimumContentsLength(10)
+        self.project_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.project_combo.setSizePolicy(
+            QSizePolicy.MinimumExpanding,
+            QSizePolicy.Preferred,
+        )
+        self.project_toolbar.addWidget(self.project_combo)
+        self.load_project_action, self.load_project_button = self._add_toolbar_action(
+            self.project_toolbar,
+            "Load",
+            QKeySequence("Ctrl+L"),
+            self._load_selected_project,
+        )
+        self.new_project_action, self.new_project_button = self._add_toolbar_action(
+            self.project_toolbar,
+            "New…",
+            QKeySequence("Ctrl+N"),
+            self._prompt_create_project,
+        )
+        (
+            self.import_project_action,
+            self.import_project_button,
+        ) = self._add_toolbar_action(
+            self.project_toolbar,
+            "Import…",
+            QKeySequence("Ctrl+I"),
+            self._prompt_import_project,
+        )
+        (
+            self.remove_project_action,
+            self.remove_project_button,
+        ) = self._add_toolbar_action(
+            self.project_toolbar,
+            "Unregister",
+            QKeySequence("Ctrl+Shift+Delete"),
+            self._confirm_remove_project,
+        )
+        project_layout.addWidget(self.project_toolbar)
         layout.addWidget(project_bar)
 
         self.tabs = QTabWidget(self)
@@ -119,6 +160,7 @@ class QtProjectConfigWorkspace(QWidget):
         self.status_label = QLabel("", self)
         self.status_label.setObjectName("configStatus")
         self.status_label.setAccessibleName("Configuration task status")
+        self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
         self.error_label = QLabel("", self)
@@ -127,14 +169,29 @@ class QtProjectConfigWorkspace(QWidget):
         self.error_label.setAccessibleName("Configuration error")
         layout.addWidget(self.error_label)
 
-        self.load_project_button.clicked.connect(self._load_selected_project)
-        self.new_project_button.clicked.connect(self._prompt_create_project)
-        self.import_project_button.clicked.connect(self._prompt_import_project)
-        self.remove_project_button.clicked.connect(self._confirm_remove_project)
+        self.project_combo.currentTextChanged.connect(self.project_combo.setToolTip)
+
+    def _add_toolbar_action(
+        self,
+        toolbar: QToolBar,
+        text: str,
+        shortcut: QKeySequence,
+        callback: Callable[[], object],
+    ) -> tuple[QAction, QWidget]:
+        """Add one native action and return its action/tool-button pair."""
+
+        action = QAction(text, toolbar)
+        if not shortcut.isEmpty():
+            action.setShortcut(shortcut)
+            action.setShortcutContext(Qt.WindowShortcut)
+        action.triggered.connect(callback)
+        toolbar.addAction(action)
+        button = toolbar.widgetForAction(action)
+        button.setAccessibleName(text)
+        return action, button
 
     def _build_subjects_tab(self) -> None:
         layout = QVBoxLayout(self.subjects_tab)
-        summary_row = QHBoxLayout()
         self.subject_summary = QLabel("", self.subjects_tab)
         self.subject_summary.setObjectName("subjectSummary")
         self.subject_mode_hint = QLabel(
@@ -142,10 +199,14 @@ class QtProjectConfigWorkspace(QWidget):
             self.subjects_tab,
         )
         self.subject_mode_hint.setObjectName("panelHint")
-        summary_row.addWidget(self.subject_summary)
-        summary_row.addStretch(1)
-        summary_row.addWidget(self.subject_mode_hint)
-        layout.addLayout(summary_row)
+        self.subject_mode_hint.setWordWrap(True)
+        self.subject_mode_hint.setToolTip(self.subject_mode_hint.text())
+        self.subject_mode_hint.setSizePolicy(
+            QSizePolicy.Ignored,
+            QSizePolicy.Preferred,
+        )
+        layout.addWidget(self.subject_summary)
+        layout.addWidget(self.subject_mode_hint)
         empty = RowWindow(
             dataframe=pd.DataFrame(columns=["ezqcid"]),
             source_positions=(),
@@ -163,18 +224,36 @@ class QtProjectConfigWorkspace(QWidget):
         self.subject_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.subject_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.subject_table, 1)
-        actions = QHBoxLayout()
-        self.replace_subjects_button = QPushButton("Replace from CSV…", self.subjects_tab)
-        self.merge_rows_button = QPushButton("Append rows…", self.subjects_tab)
-        self.merge_columns_button = QPushButton("Merge columns…", self.subjects_tab)
-        actions.addWidget(self.replace_subjects_button)
-        actions.addWidget(self.merge_rows_button)
-        actions.addWidget(self.merge_columns_button)
-        actions.addStretch(1)
-        layout.addLayout(actions)
-        self.replace_subjects_button.clicked.connect(lambda: self._choose_subject_csv("replace"))
-        self.merge_rows_button.clicked.connect(lambda: self._choose_subject_csv("rows"))
-        self.merge_columns_button.clicked.connect(lambda: self._choose_subject_csv("columns"))
+        self.subject_actions_toolbar = QToolBar("Subject actions", self.subjects_tab)
+        self.subject_actions_toolbar.setObjectName("configSubjectActions")
+        self.subject_actions_toolbar.setMovable(False)
+        self.subject_actions_toolbar.setFloatable(False)
+        self.subject_actions_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        (
+            self.replace_subjects_action,
+            self.replace_subjects_button,
+        ) = self._add_toolbar_action(
+            self.subject_actions_toolbar,
+            "Replace from CSV…",
+            QKeySequence("Ctrl+Shift+R"),
+            lambda: self._choose_subject_csv("replace"),
+        )
+        self.merge_rows_action, self.merge_rows_button = self._add_toolbar_action(
+            self.subject_actions_toolbar,
+            "Append rows…",
+            QKeySequence("Ctrl+Shift+A"),
+            lambda: self._choose_subject_csv("rows"),
+        )
+        (
+            self.merge_columns_action,
+            self.merge_columns_button,
+        ) = self._add_toolbar_action(
+            self.subject_actions_toolbar,
+            "Merge columns…",
+            QKeySequence("Ctrl+Shift+M"),
+            lambda: self._choose_subject_csv("columns"),
+        )
+        layout.addWidget(self.subject_actions_toolbar)
 
     def _build_constants_tab(self) -> None:
         layout = QVBoxLayout(self.constants_tab)
@@ -183,6 +262,9 @@ class QtProjectConfigWorkspace(QWidget):
         self.constant_name.setPlaceholderText("Constant name")
         self.constant_value = QLineEdit(self.constants_tab)
         self.constant_value.setPlaceholderText("Value")
+        self.constant_value.setAccessibleName("Constant value")
+        self.constant_value.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.constant_value.textChanged.connect(self.constant_value.setToolTip)
         self.save_constant_button = QPushButton("Add / update", self.constants_tab)
         self.save_constant_button.setObjectName("primaryAction")
         form.addWidget(self.constant_name)
@@ -202,91 +284,162 @@ class QtProjectConfigWorkspace(QWidget):
         self.delete_constant_button.clicked.connect(self._delete_selected_constant)
 
     def _build_modules_tab(self) -> None:
-        layout = QHBoxLayout(self.modules_tab)
-        left = QVBoxLayout()
-        self.module_list = QListWidget(self.modules_tab)
+        layout = QVBoxLayout(self.modules_tab)
+        self.module_splitter = QSplitter(Qt.Horizontal, self.modules_tab)
+        self.module_splitter.setObjectName("configModuleSplitter")
+        left_panel = QWidget(self.module_splitter)
+        left = QVBoxLayout(left_panel)
+        left.setContentsMargins(0, 0, 0, 0)
+        self.module_list = QListWidget(left_panel)
         self.module_list.setObjectName("moduleList")
         self.module_list.setAccessibleName("Ordered QC modules")
         left.addWidget(self.module_list, 1)
         move_row = QHBoxLayout()
-        self.module_up_button = QPushButton("Move up", self.modules_tab)
-        self.module_down_button = QPushButton("Move down", self.modules_tab)
+        self.module_up_button = QPushButton("Move up", left_panel)
+        self.module_down_button = QPushButton("Move down", left_panel)
         move_row.addWidget(self.module_up_button)
         move_row.addWidget(self.module_down_button)
         left.addLayout(move_row)
-        layout.addLayout(left, 1)
-
-        editor = QVBoxLayout()
+        self.module_editor_scroll = QScrollArea(self.module_splitter)
+        self.module_editor_scroll.setObjectName("configModuleEditorScroll")
+        self.module_editor_scroll.setWidgetResizable(True)
+        self.module_editor_scroll.setFrameShape(QFrame.NoFrame)
+        editor_widget = QWidget(self.module_editor_scroll)
+        editor_widget.setObjectName("configModuleEditor")
+        editor = QVBoxLayout(editor_widget)
+        editor.setContentsMargins(8, 0, 8, 8)
         identity_row = QHBoxLayout()
-        self.module_name = QLineEdit(self.modules_tab)
+        self.module_name = QLineEdit(editor_widget)
         self.module_name.setPlaceholderText("Module name")
-        self.module_label = QLineEdit(self.modules_tab)
+        self.module_name.setAccessibleName("QC module name")
+        self.module_label = QLineEdit(editor_widget)
         self.module_label.setPlaceholderText("Display label")
-        self.module_rater = QLineEdit(self.modules_tab)
+        self.module_label.setAccessibleName("QC module display label")
+        self.module_rater = QLineEdit(editor_widget)
         self.module_rater.setPlaceholderText("Rater (blank = watch mode)")
+        self.module_rater.setAccessibleName("QC module rater")
         identity_row.addWidget(self.module_name)
         identity_row.addWidget(self.module_label)
         identity_row.addWidget(self.module_rater)
         editor.addLayout(identity_row)
-        self.module_code = QTextEdit(self.modules_tab)
+        self.module_code = QTextEdit(editor_widget)
         self.module_code.setPlaceholderText("Allowlisted viewer command template")
+        self.module_code.setAccessibleName("Allowlisted viewer command template")
         self.module_code.setMaximumHeight(100)
         editor.addWidget(self.module_code)
-        self.module_control = QCheckBox("Close controlled viewers before relaunch", self.modules_tab)
+        self.module_control = QCheckBox(
+            "Close controlled viewers before relaunch",
+            editor_widget,
+        )
         editor.addWidget(self.module_control)
 
-        self.score_table = QTableWidget(0, 2, self.modules_tab)
+        self.score_table = QTableWidget(0, 2, editor_widget)
         self.score_table.setHorizontalHeaderLabels(["Score label", "Choices (comma-separated)"])
-        self.score_table.setColumnWidth(0, 240)
+        self.score_table.horizontalHeader().setSectionResizeMode(
+            0,
+            QHeaderView.Interactive,
+        )
         self.score_table.horizontalHeader().setStretchLastSection(True)
-        editor.addWidget(QLabel("Scores", self.modules_tab))
+        editor.addWidget(QLabel("Scores", editor_widget))
         editor.addWidget(self.score_table, 1)
-        self.tag_table = QTableWidget(0, 1, self.modules_tab)
+        self.tag_table = QTableWidget(0, 1, editor_widget)
         self.tag_table.setHorizontalHeaderLabels(["Tag label"])
-        self.tag_table.setColumnWidth(0, 320)
+        self.tag_table.horizontalHeader().setSectionResizeMode(
+            0,
+            QHeaderView.Interactive,
+        )
         self.tag_table.horizontalHeader().setStretchLastSection(True)
-        editor.addWidget(QLabel("Tags", self.modules_tab))
+        editor.addWidget(QLabel("Tags", editor_widget))
         editor.addWidget(self.tag_table, 1)
 
-        row_actions = QHBoxLayout()
-        self.add_score_button = QPushButton("Add score", self.modules_tab)
-        self.remove_score_button = QPushButton("Remove score", self.modules_tab)
-        self.add_tag_button = QPushButton("Add tag", self.modules_tab)
-        self.remove_tag_button = QPushButton("Remove tag", self.modules_tab)
-        row_actions.addWidget(self.add_score_button)
-        row_actions.addWidget(self.remove_score_button)
-        row_actions.addWidget(self.add_tag_button)
-        row_actions.addWidget(self.remove_tag_button)
-        editor.addLayout(row_actions)
+        self.module_row_actions_toolbar = QToolBar("Module row actions", editor_widget)
+        self.module_row_actions_toolbar.setObjectName("configModuleRowActions")
+        self.module_row_actions_toolbar.setMovable(False)
+        self.module_row_actions_toolbar.setFloatable(False)
+        self.module_row_actions_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.add_score_action, self.add_score_button = self._add_toolbar_action(
+            self.module_row_actions_toolbar,
+            "Add score",
+            QKeySequence(),
+            lambda: self._append_table_row(
+                self.score_table,
+                ("Quality", "Poor,Fair,Good"),
+            ),
+        )
+        (
+            self.remove_score_action,
+            self.remove_score_button,
+        ) = self._add_toolbar_action(
+            self.module_row_actions_toolbar,
+            "Remove score",
+            QKeySequence(),
+            lambda: self._remove_table_row(self.score_table),
+        )
+        self.add_tag_action, self.add_tag_button = self._add_toolbar_action(
+            self.module_row_actions_toolbar,
+            "Add tag",
+            QKeySequence(),
+            lambda: self._append_table_row(self.tag_table, ("Needs review",)),
+        )
+        self.remove_tag_action, self.remove_tag_button = self._add_toolbar_action(
+            self.module_row_actions_toolbar,
+            "Remove tag",
+            QKeySequence(),
+            lambda: self._remove_table_row(self.tag_table),
+        )
+        editor.addWidget(self.module_row_actions_toolbar)
 
-        actions = QHBoxLayout()
-        self.new_module_button = QPushButton("New module", self.modules_tab)
-        self.delete_module_button = QPushButton("Delete", self.modules_tab)
-        self.save_module_button = QPushButton("Save module", self.modules_tab)
+        self.module_actions_toolbar = QToolBar("Module actions", editor_widget)
+        self.module_actions_toolbar.setObjectName("configModuleActions")
+        self.module_actions_toolbar.setAccessibleName("QC module actions")
+        self.module_actions_toolbar.setMovable(False)
+        self.module_actions_toolbar.setFloatable(False)
+        self.module_actions_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.new_module_action, self.new_module_button = self._add_toolbar_action(
+            self.module_actions_toolbar,
+            "New module",
+            QKeySequence("Ctrl+Shift+N"),
+            self._prepare_new_module,
+        )
+        self.delete_module_action, self.delete_module_button = self._add_toolbar_action(
+            self.module_actions_toolbar,
+            "Delete",
+            QKeySequence("Ctrl+Delete"),
+            self._delete_selected_module,
+        )
+        self.save_module_action, self.save_module_button = self._add_toolbar_action(
+            self.module_actions_toolbar,
+            "Save module",
+            QKeySequence("Ctrl+S"),
+            self._save_module_form,
+        )
         self.save_module_button.setObjectName("primaryAction")
-        self.import_module_button = QPushButton("Import…", self.modules_tab)
-        self.export_module_button = QPushButton("Export…", self.modules_tab)
-        actions.addWidget(self.new_module_button)
-        actions.addWidget(self.delete_module_button)
-        actions.addWidget(self.import_module_button)
-        actions.addWidget(self.export_module_button)
-        actions.addStretch(1)
-        actions.addWidget(self.save_module_button)
-        editor.addLayout(actions)
-        layout.addLayout(editor, 3)
+        self.import_module_action, self.import_module_button = self._add_toolbar_action(
+            self.module_actions_toolbar,
+            "Import…",
+            QKeySequence("Ctrl+Shift+I"),
+            self._choose_module_import,
+        )
+        self.export_module_action, self.export_module_button = self._add_toolbar_action(
+            self.module_actions_toolbar,
+            "Export…",
+            QKeySequence("Ctrl+E"),
+            self._choose_module_export,
+        )
+        editor.addWidget(self.module_actions_toolbar)
+        self.module_editor_scroll.setWidget(editor_widget)
+        self.module_splitter.addWidget(left_panel)
+        self.module_splitter.addWidget(self.module_editor_scroll)
+        self.module_splitter.setCollapsible(0, False)
+        self.module_splitter.setCollapsible(1, False)
+        self.module_splitter.setStretchFactor(0, 1)
+        self.module_splitter.setStretchFactor(1, 3)
+        self.module_splitter.setSizes([240, 720])
+        layout.addWidget(self.module_splitter, 1)
 
         self.module_list.currentRowChanged.connect(self._module_row_changed)
         self.module_up_button.clicked.connect(lambda: self._move_selected_module(-1))
         self.module_down_button.clicked.connect(lambda: self._move_selected_module(1))
-        self.new_module_button.clicked.connect(self._prepare_new_module)
-        self.delete_module_button.clicked.connect(self._delete_selected_module)
-        self.save_module_button.clicked.connect(self._save_module_form)
-        self.import_module_button.clicked.connect(self._choose_module_import)
-        self.export_module_button.clicked.connect(self._choose_module_export)
-        self.add_score_button.clicked.connect(lambda: self._append_table_row(self.score_table, ("Quality", "Poor,Fair,Good")))
-        self.remove_score_button.clicked.connect(lambda: self._remove_table_row(self.score_table))
-        self.add_tag_button.clicked.connect(lambda: self._append_table_row(self.tag_table, ("Needs review",)))
-        self.remove_tag_button.clicked.connect(lambda: self._remove_table_row(self.tag_table))
 
     @property
     def error_text(self) -> str:
@@ -297,7 +450,13 @@ class QtProjectConfigWorkspace(QWidget):
         self._loading = True
         try:
             self.project_combo.clear()
-            self.project_combo.addItems(snapshot.projects)
+            for project_name in snapshot.projects:
+                self.project_combo.addItem(project_name)
+                self.project_combo.setItemData(
+                    self.project_combo.count() - 1,
+                    project_name,
+                    Qt.ToolTipRole,
+                )
             if snapshot.current_project_name:
                 self.project_combo.setCurrentText(snapshot.current_project_name)
             self._refresh_subjects(snapshot.subjects)
@@ -329,8 +488,12 @@ class QtProjectConfigWorkspace(QWidget):
         )
         self.constants_table.setRowCount(len(items))
         for row, (name, value) in enumerate(items):
-            self.constants_table.setItem(row, 0, QTableWidgetItem(str(name)))
-            self.constants_table.setItem(row, 1, QTableWidgetItem(str(value)))
+            name_item = QTableWidgetItem(str(name))
+            name_item.setToolTip(str(name))
+            value_item = QTableWidgetItem(str(value))
+            value_item.setToolTip(str(value))
+            self.constants_table.setItem(row, 0, name_item)
+            self.constants_table.setItem(row, 1, value_item)
 
     def _refresh_modules(
         self,
@@ -342,6 +505,9 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_list.clear()
         for position, module in enumerate(modules, start=1):
             self.module_list.addItem(f"{position:>2}  {module.name} · {module.label}")
+            self.module_list.item(self.module_list.count() - 1).setToolTip(
+                self.module_list.item(self.module_list.count() - 1).text()
+            )
         target = next(
             (index for index, module in enumerate(modules) if module.name == selected_name),
             0 if modules else -1,
@@ -509,23 +675,35 @@ class QtProjectConfigWorkspace(QWidget):
     def _load_module_form(self, module) -> None:
         self._selected_module_name = module.name
         self.module_name.setText(module.name)
+        self.module_name.setToolTip(module.name)
         self.module_label.setText(module.label)
+        self.module_label.setToolTip(module.label)
         self.module_rater.setText(module.rater or "")
+        self.module_rater.setToolTip(module.rater or "")
         self.module_code.setPlainText(module.code or "")
         self.module_control.setChecked(module.control)
         self.score_table.setRowCount(len(module.scores))
         for row, score in enumerate(module.scores.values()):
-            self.score_table.setItem(row, 0, QTableWidgetItem(score.label or ""))
-            self.score_table.setItem(row, 1, QTableWidgetItem(score.num_ or ""))
+            label_item = QTableWidgetItem(score.label or "")
+            label_item.setToolTip(score.label or "")
+            values_item = QTableWidgetItem(score.num_ or "")
+            values_item.setToolTip(score.num_ or "")
+            self.score_table.setItem(row, 0, label_item)
+            self.score_table.setItem(row, 1, values_item)
         self.tag_table.setRowCount(len(module.tags))
         for row, tag in enumerate(module.tags.values()):
-            self.tag_table.setItem(row, 0, QTableWidgetItem(tag.label or ""))
+            tag_item = QTableWidgetItem(tag.label or "")
+            tag_item.setToolTip(tag.label or "")
+            self.tag_table.setItem(row, 0, tag_item)
 
     def _prepare_new_module(self) -> None:
         self._selected_module_name = None
         self.module_name.clear()
+        self.module_name.setToolTip("")
         self.module_label.clear()
+        self.module_label.setToolTip("")
         self.module_rater.clear()
+        self.module_rater.setToolTip("")
         self.module_code.clear()
         self.module_control.setChecked(False)
         self.score_table.setRowCount(1)
@@ -765,10 +943,10 @@ class QtProjectConfigWorkspace(QWidget):
     def _set_io_busy(self, busy: bool) -> None:
         enabled = not busy
         self.project_combo.setEnabled(enabled)
-        self.load_project_button.setEnabled(enabled)
-        self.new_project_button.setEnabled(enabled)
-        self.import_project_button.setEnabled(enabled)
-        self.remove_project_button.setEnabled(enabled)
+        self.load_project_action.setEnabled(enabled)
+        self.new_project_action.setEnabled(enabled)
+        self.import_project_action.setEnabled(enabled)
+        self.remove_project_action.setEnabled(enabled)
         self.tabs.setEnabled(enabled)
 
     def closeEvent(self, event: QCloseEvent) -> None:

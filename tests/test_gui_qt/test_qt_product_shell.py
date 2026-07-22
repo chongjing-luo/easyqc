@@ -4,7 +4,7 @@ from threading import Event
 
 import pandas as pd
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QMessageBox, QToolBar
 
 from core.app_services import build_app_services
 from core.project_context_service import ProjectContextError
@@ -13,10 +13,10 @@ from models.table_view_state import SortRule
 
 
 
-def _module_payload(*, name="AnatQC", rater="rater1"):
+def _module_payload(*, name="AnatQC", label=None, rater="rater1"):
     return {
         "name": name,
-        "label": f"{name} label",
+        "label": label or f"{name} label",
         "rater": rater,
         "ezqcid": None,
         "watch_mode": False,
@@ -41,7 +41,15 @@ def _module_payload(*, name="AnatQC", rater="rater1"):
     }
 
 
-def _add_project(services, tmp_path, name, *, prefix="", second_module=False):
+def _add_project(
+    services,
+    tmp_path,
+    name,
+    *,
+    prefix="",
+    second_module=False,
+    module_label=None,
+):
     configuration = services.configuration_service
     configuration.create_project(name, tmp_path)
     configuration.replace_subjects(
@@ -53,7 +61,10 @@ def _add_project(services, tmp_path, name, *, prefix="", second_module=False):
             }
         )
     )
-    configuration.save_module(_module_payload(), original_name="example")
+    configuration.save_module(
+        _module_payload(label=module_label),
+        original_name="example",
+    )
     if second_module:
         configuration.add_module("FuncQC", "Functional QC")
         configuration.save_module(
@@ -102,6 +113,43 @@ def test_product_shell_loads_last_project_and_three_shared_workspaces(qtbot, tmp
         "QC",
         "Project configuration",
     ]
+
+
+def test_product_shell_reduced_viewport_uses_context_toolbar_and_long_tooltips(
+    qtbot,
+    tmp_path,
+) -> None:
+    long_project = "PROJECT_WITH_A_VERY_LONG_CROSS_PLATFORM_NAME_" + "QC_" * 12
+    long_module = "解剖结构质量控制模块_需要完整显示给人工复核人员_" + "模块" * 12
+    services = build_app_services(tmp_path / "projects.json")
+    _add_project(
+        services,
+        tmp_path,
+        long_project,
+        module_label=long_module,
+    )
+    window = build_product_window(services)
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
+
+    assert window.minimumWidth() <= 720
+    window.resize(720, 560)
+    qtbot.waitUntil(lambda: window.width() == 720)
+    toolbar = window.findChild(QToolBar, "shellContextToolbar")
+    assert toolbar is window.context_toolbar
+    assert not toolbar.isMovable()
+    assert not toolbar.isFloatable()
+    assert window.module_combo.minimumWidth() == 0
+    assert window.project_combo.isVisible()
+    assert window.module_combo.isVisible()
+    assert window.project_combo.width() >= window.project_combo.minimumSizeHint().width()
+    assert window.module_combo.width() >= window.module_combo.minimumSizeHint().width()
+    assert window.reload_action.shortcut().toString()
+    assert window.workspace_tabs.isVisible()
+    assert window.project_combo.toolTip() == long_project
+    assert window.module_combo.toolTip() == window.module_combo.currentText()
+    assert long_module in window.module_combo.toolTip()
 
 
 def test_table_open_qc_uses_applied_sort_queue_and_selected_identity(qtbot, tmp_path) -> None:
