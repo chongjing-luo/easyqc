@@ -4,38 +4,14 @@ import re
 from pathlib import PurePath
 from typing import Any
 
+from models.qcmodule import Score
+
 
 _SAFE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 def validate_score(value: str) -> list[str] | str | None:
-    value = value.strip()
-    if not value:
-        return None
-
-    label_pattern = r'^\s*[a-zA-Z0-9_ ]+\s*(,\s*[a-zA-Z0-9_ ]+\s*)*,?\s*$'
-    if re.match(label_pattern, value) and ',' in value:
-        labels = [label.strip() for label in value.split(',')]
-        if len(labels) != len(set(labels)):
-            return None
-        return labels
-
-    range_match = re.match(r'^\s*(\d+)\s*-\s*(\d+)\s*$', value)
-    if range_match and '-' in value:
-        start = int(range_match.group(1))
-        end = int(range_match.group(2))
-        if start > end:
-            return None
-        return ','.join(str(i) for i in range(start, end + 1))
-
-    single_match = re.match(r'^\s*(\d+)\s*$', value)
-    if single_match:
-        max_val = int(single_match.group(1))
-        if max_val <= 0:
-            return None
-        return ','.join(str(i) for i in range(1, max_val + 1))
-
-    return None
+    return Score.parse_num(value)
 
 
 def validate_filename(name: str) -> bool:

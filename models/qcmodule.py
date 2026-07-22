@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import re
 from typing import Any, ClassVar
-
-from utils.validators import validate_score
 
 
 def _parse_datetime(value: str | datetime | None) -> datetime | None:
@@ -48,7 +47,32 @@ class Score:
 
     @staticmethod
     def parse_num(raw: str) -> list[str] | str | None:
-        return validate_score(raw)
+        value = raw.strip()
+        if not value:
+            return None
+
+        if re.fullmatch(Score.PATTERNS["labels"], value) and "," in value:
+            labels = [label.strip() for label in value.split(",")]
+            if len(labels) != len(set(labels)):
+                return None
+            return labels
+
+        range_match = re.fullmatch(Score.PATTERNS["range"], value)
+        if range_match is not None:
+            start = int(range_match.group(1))
+            end = int(range_match.group(2))
+            if start > end:
+                return None
+            return ",".join(str(number) for number in range(start, end + 1))
+
+        single_match = re.fullmatch(Score.PATTERNS["single"], value)
+        if single_match is not None:
+            maximum = int(single_match.group(1))
+            if maximum <= 0:
+                return None
+            return ",".join(str(number) for number in range(1, maximum + 1))
+
+        return None
 
     @property
     def allowed_values(self) -> list[str]:

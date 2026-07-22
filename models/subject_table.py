@@ -6,18 +6,16 @@ is non-null, or is string-typed — so a malformed ezqc_all.csv would silently
 break joins (NaN ratings, ValueError on merge). SubjectTable asserts those
 invariants at the boundary so the failure is loud and early.
 
-Layer: models. Depends only on pandas + utils.logger. MUST NOT import tkinter
-or any core/gui module (layering rule: models import nothing project-internal
-except utils).
+Layer: models. Depends only on pandas and the standard library. It imports no
+project-internal module.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import warnings
 
 import pandas as pd
-
-from utils.logger import log_warning
 
 
 @dataclass
@@ -42,9 +40,10 @@ class SubjectTable:
 
         dup_count = int(normalized["ezqcid"].duplicated().sum())
         if dup_count:
-            log_warning(
+            warnings.warn(
                 f"受试者表有 {dup_count} 个重复 ezqcid(可能为合法重复行,仅警告)",
-                "SubjectTable",
+                RuntimeWarning,
+                stacklevel=2,
             )
 
         return cls(dataframe=normalized)

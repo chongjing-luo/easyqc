@@ -2,11 +2,37 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
-from models.qcmodule import QCModule, _format_datetime, _parse_datetime
-from utils.file_utils import FileUtils
+
+class _ModuleLike(Protocol):
+    name: str
+    rater: str | None
+    ezqcid: str | None
+    scores: dict[str, Any]
+    tags: dict[str, Any]
+    notes: str | None
+    time: datetime | None
+    code_exe: dict[str, str] | None
+
+    def to_legacy_dict(self) -> dict[str, Any]: ...
+
+
+def _parse_datetime(value: str | datetime | None) -> datetime | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+
+
+def _format_datetime(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.strftime("%Y-%m-%d %H:%M:%S")
 
 
 @dataclass
@@ -28,7 +54,7 @@ class Rating:
         return f"{self.module_name}._.{self.ezqcid}._.{self.rater}._.{score1}._.{tag1}.json"
 
     @classmethod
-    def from_module(cls, module: QCModule) -> "Rating":
+    def from_module(cls, module: _ModuleLike) -> "Rating":
         return cls(
             module_name=module.name,
             rater=module.rater or "",
@@ -63,13 +89,22 @@ class Rating:
             legacy_payload=data.copy(),
         )
 
-    def to_legacy_dict(self, legacy_module: QCModule | dict[str, Any] | None = None) -> dict[str, Any]:
+    def to_legacy_dict(
+        self,
+        legacy_module: _ModuleLike | dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if legacy_module is None:
             data = self.legacy_payload.copy() if self.legacy_payload else {}
-        elif isinstance(legacy_module, QCModule):
-            data = legacy_module.to_legacy_dict()
-        else:
+        elif isinstance(legacy_module, dict):
             data = legacy_module.copy()
+        else:
+            to_legacy_dict = getattr(legacy_module, "to_legacy_dict", None)
+            if not callable(to_legacy_dict):
+                raise TypeError("legacy_module must be a mapping or typed module")
+            converted = to_legacy_dict()
+            if not isinstance(converted, dict):
+                raise TypeError("typed module legacy payload must be a mapping")
+            data = converted.copy()
 
         data["name"] = self.module_name
         data["rater"] = self.rater
@@ -96,7 +131,7 @@ class Rating:
 
         return data
 
-    def apply_to_module(self, module: QCModule) -> None:
+    def apply_to_module(self, module: _ModuleLike) -> None:
         module.ezqcid = self.ezqcid
         module.rater = self.rater
         module.notes = self.notes
@@ -109,13 +144,5 @@ class Rating:
         for key, value in self.tags.items():
             if key in module.tags:
                 module.tags[key].value = value
-
-    @classmethod
-    def from_json_file(cls, path: Path) -> "Rating":
-        return cls.from_legacy_dict(FileUtils.safe_json_load(path))
-
-    def to_json_file(self, path: Path, legacy_module: QCModule | dict[str, Any] | None = None) -> None:
-        FileUtils.safe_json_save(path, self.to_legacy_dict(legacy_module))
-
 
 __all__ = ["Rating"]

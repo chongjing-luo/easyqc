@@ -179,11 +179,12 @@ def test_rating_service_saved_json_is_readable_by_legacy_loader(tmp_path, fixtur
     settings = json.loads((fixtures_dir / "sample_settings.json").read_text(encoding="utf-8"))
     module = QCModule.from_legacy_dict(settings["qcmodule"]["1"])
     rating = Rating.from_module(module)
-    saved_path = RatingService(Project("SAMPLE", tmp_path / "easyqc_SAMPLE")).save_rating(rating)
+    service = RatingService(Project("SAMPLE", tmp_path / "easyqc_SAMPLE"))
+    saved_path = service.save_rating(rating)
 
-    # P2-D: ProjectManager removed; verify the saved JSON is readable via the
-    # service model path (Rating.from_json_file).
-    reloaded = Rating.from_json_file(saved_path)
+    # P2-D: ProjectManager removed; verify the saved JSON is readable through
+    # the Core persistence boundary rather than the pure model.
+    reloaded = service.load_rating(saved_path)
     assert reloaded.module_name == "example"
     # scores values are stored as raw strings in the legacy payload
     score1 = reloaded.scores.get("1") or reloaded.legacy_payload.get("scores", {}).get("1", {})

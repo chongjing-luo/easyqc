@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 import pandas as pd
 
-import models.rating as rating_model
+import core.rating_service as rating_service
 from gui import gui_qcpage as gui_qcpage_module
 from gui.gui_qcpage import gui_qcpage
 
@@ -101,7 +101,7 @@ def test_save_rating_keeps_old_file_if_atomic_write_fails(monkeypatch, tmp_path)
     def fail_save(*args, **kwargs):
         raise OSError("boom")
 
-    monkeypatch.setattr(rating_model.FileUtils, "safe_json_save", fail_save)
+    monkeypatch.setattr(rating_service.FileUtils, "safe_json_save", fail_save)
     monkeypatch.setattr(gui_qcpage_module.messagebox, "showerror", lambda *args, **kwargs: None)
 
     page.save_rating()

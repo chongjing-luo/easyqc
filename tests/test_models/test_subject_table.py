@@ -34,8 +34,8 @@ def test_subject_table_warns_on_duplicate_ezqcid_but_does_not_raise() -> None:
     """F-IMP-5: duplicate ezqcid is warned (real data may have legitimate
     duplicate rows), not fatal — but it must be visible."""
     df = pd.DataFrame({"ezqcid": ["S1", "S1", "S2"]})
-    # should NOT raise
-    table = SubjectTable.from_dataframe(df)
+    with pytest.warns(RuntimeWarning, match="1 个重复 ezqcid"):
+        table = SubjectTable.from_dataframe(df)
     assert len(table.dataframe) == 3
 
 

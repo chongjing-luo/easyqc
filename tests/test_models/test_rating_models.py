@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from models.qcmodule import QCModule
 from models.rating import Rating
 
@@ -40,14 +42,14 @@ def test_rating_from_module_and_apply_to_module(fixtures_dir: Path) -> None:
     assert module.tags["1"].value is True
 
 
-def test_rating_json_file_round_trip(tmp_path, fixtures_dir: Path) -> None:
-    settings = json.loads((fixtures_dir / "sample_settings.json").read_text(encoding="utf-8"))
-    module = QCModule.from_legacy_dict(settings["qcmodule"]["1"])
-    rating = Rating.from_module(module)
-    path = tmp_path / rating.filename
+def test_rating_rejects_an_untyped_legacy_module() -> None:
+    rating = Rating(
+        module_name="example",
+        rater="r1",
+        ezqcid="SUB001",
+        scores={},
+        tags={},
+    )
 
-    rating.to_json_file(path, module)
-    loaded = Rating.from_json_file(path)
-
-    assert loaded.module_name == "example"
-    assert loaded.scores["1"] == "Good"
+    with pytest.raises(TypeError, match="mapping or typed module"):
+        rating.to_legacy_dict(object())

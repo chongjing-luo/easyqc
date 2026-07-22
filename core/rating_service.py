@@ -13,6 +13,10 @@ from models.rating import Rating
 from utils.file_utils import FileUtils
 
 
+def _load_rating_file(path: Path) -> Rating:
+    return Rating.from_legacy_dict(FileUtils.safe_json_load(path))
+
+
 @dataclass
 class LoadedRatingsState:
     ratings: list[Rating]
@@ -56,7 +60,7 @@ class RatingService:
             return False
 
         try:
-            rating = Rating.from_json_file(path)
+            rating = _load_rating_file(path)
         except Exception:
             return False
 
@@ -67,7 +71,7 @@ class RatingService:
         )
 
     def load_rating(self, path: Path) -> Rating:
-        return Rating.from_json_file(path)
+        return _load_rating_file(path)
 
     @staticmethod
     def find_rating_files_in_rater_dir(
@@ -81,7 +85,7 @@ class RatingService:
 
     @staticmethod
     def load_legacy_rating_file(path: Path) -> dict[str, Any]:
-        return Rating.from_json_file(path).to_legacy_dict()
+        return _load_rating_file(path).to_legacy_dict()
 
     def save_rating(self, rating: Rating, legacy_module: QCModule | dict[str, Any] | None = None) -> Path:
         target_dir = self.project.rating_dir / rating.module_name / rating.rater
