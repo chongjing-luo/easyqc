@@ -2,7 +2,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-541%20passed%20%7C%204%20skipped-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-1020%20passed%20%7C%204%20skipped-brightgreen.svg)](tests/)
 
 EasyQC 是一个可配置的 MRI 人工视觉质量控制工作台。它将"打开图像 → 记录评分 → 追踪进度 → 聚合结果"的完整人工 QC 链条整合为可追踪、可复用、项目化的软件工作流。
 
@@ -16,12 +16,18 @@ EasyQC 是一个可配置的 MRI 人工视觉质量控制工作台。它将"打�
 |---|---|
 | **Python** | 3.10 或更高版本 |
 | **操作系统** | Linux、macOS、Windows |
-| **内存** | 建议 4GB 以上 |
+| **内存** | 16GB 以上（正式基线；通常不超过 100,000 行 × 约 300 列） |
 | **外部查看器**（可选） | FreeSurfer freeview、HCP wb_view、FSLeyes、MRIcroGL、ITK-SNAP 等 |
 
 ---
 
 ## 安装
+
+当前源码检出仍使用下面的开发/迁移期安装方式。正式分发的主路线已经确定为：
+由 `easyqc-install` 创建并维护一个固定版本、与系统 Python 隔离的私有环境，
+支持在线/离线载荷、安装后验证、并排更新和一键回滚。该安装器的核心、CLI 与
+启动器已经实现，但 Windows/macOS/Ubuntu 原生发布矩阵尚未全部完成，因此本
+README 不把它描述成已经发布的跨平台安装包。
 
 ### 方式一：安装脚本（推荐 Linux/macOS）
 
@@ -76,7 +82,8 @@ EasyQC 采用 **flat layout**：`easyqc/` 目录本身**不是**可安装的 Pyt
 - **运行方式**：始终在项目根目录执行 `python easyqc.py`（或 `./start.sh`，后者会自动 `cd` 到正确目录）。不要从其他目录直接 `import easyqc`。
 - **不支持 `pip install`**：本项目不打包为可安装包。如需在新机器部署，使用上面的安装脚本或手动创建虚拟环境 + `pip install -r requirements.txt`。
 - **测试配置**：`pytest.ini` 的 `pythonpath = .` 同样依赖 flat layout（pytest 从项目根发现 `core/`/`utils/`/`models/`）。
-- **打包分发**：如需零依赖可执行文件，使用 PyInstaller（见下方「打包为独立可执行文件」），而非 `pip install`。
+- **正式分发**：主路线是 `easyqc-install` 管理的私有 Python 环境；仓库中的
+  PyInstaller 方案仅保留为可选历史/诊断路线，不是当前发布阻塞项。
 
 这一布局是有意的工程取舍：避免 `easyqc/` 目录与 `easyqc.py` 脚本同名引发的打包冲突，保持运行入口最简。重构为标准 src-layout 包属于未来可选改进，当前 flat layout 已稳定且有测试守卫（`tests/test_scripts/test_startup_scripts.py::test_flat_layout_imports_work_from_easyqc_root`）。
 
@@ -95,16 +102,16 @@ python easyqc.py             # 所有平台
 尚未完成迁移时影响真实项目：
 
 ```bash
-python easyqc.py --ui qt-preview   # Qt 只读表格迁移预览
+python easyqc.py --ui qt-preview   # Qt Table/QC/配置迁移预览
 python easyqc.py --ui tk           # 显式使用当前稳定 GUI（迁移期回退）
 ```
 
-Qt Preview 已包含共享 Core 服务和专业只读 Table 工作区：类型感知的可视化
+Qt Preview 已包含共享 Core 服务和不直接修改源表的专业 Table 工作区：类型感知的可视化
 Filter Builder、多列排序、列显示/重排、固定 `ezqcid`、完整结果计数、分页、
 精确查找和安全的 QC 身份校验。筛选与排序界面不显示或要求编辑 JSON。Qt 的
 Table、QC 与项目配置现已通过同一个共享 Core 上下文接通真实项目，耗时
-query/load/export 已移出 GUI 线程；但完整第三方组件清单、三平台原生包和人工
-可访问性门禁尚未完成，因此仍需显式选择 Preview，默认入口继续使用 tkinter。
+query/load/export 已移出 GUI 线程；但四个平台的真实 CI、三平台原生安装/UI
+与人工可访问性门禁尚未完成，因此仍需显式选择 Preview，默认入口继续使用 tkinter。
 两种 GUI 读取同一套现有 JSON/CSV 事实，Qt 层不会另建权威数据库。
 
 ### CLI 模式（直接打开指定 QC 页面）
@@ -381,9 +388,11 @@ runtime。普通 `pytest` 保留为诊断手段，不作为双 GUI 迁移期的�
 
 ---
 
-## 打包为自带 Python 运行时的可执行目录
+## 可选历史路线：冻结为自带 Python 的可执行目录
 
-EasyQC 支持通过 PyInstaller 打包为自带 Python、PySide6、pandas、NumPy 的
+这一节记录已经验证过的 PyInstaller 诊断/可选路线，便于复现既有证据；它不
+是当前主分发方案，也未取得 Windows/macOS 原生发布结论。EasyQC 可以通过
+PyInstaller 打包为自带 Python、PySide6、pandas、NumPy 的
 `onedir` 目录。用户无需另装 Python 包；Ubuntu 22.04 x86_64 基线产物还会
 显式携带经过固定哈希验证的 `libxcb-cursor0` 运行库。其他系统依赖仍由最终
 产物的 `ldd` 与原生 smoke 门禁判定，不能据此扩展为“所有 Linux”兼容声明。
@@ -409,7 +418,8 @@ python build.py --version 1.0.0
 sysroot；PyInstaller 只能接收验证后的 `libxcb-cursor.so.0`。产物还必须包含
 `THIRD_PARTY_LICENSES/xcb-util-cursor.txt` 与确定性的 provenance 记录。
 
-> PyInstaller 只能为**当前平台**打包。要获得 Linux/macOS/Windows 的包，请在各自平台上分别运行 `python build.py`。
+> PyInstaller 只能为**当前平台**打包。下面的命令不是正式发布流程；任何未来
+> 冻结包都必须在对应原生平台重新构建、完成许可证清单并通过独立发布门禁。
 
 ### 输出
 
@@ -419,8 +429,8 @@ sysroot；PyInstaller 只能接收验证后的 `libxcb-cursor.so.0`。产物还�
 | **macOS** | `dist/EasyQC-v1.0.0-macos-arm64/EasyQC.app` | 待原生构建记录 |
 | **Windows** | `dist/EasyQC-v1.0.0-windows-AMD64/EasyQC.exe` | 待原生构建记录 |
 
-产物目录可复制到同平台、兼容系统库的机器运行，无需安装 Python 或 Python
-包。`build.py` 会验证最终 cursor 哈希、MIT/X notice、provenance、精确的
+已验证的 Ubuntu 诊断产物可在兼容环境中运行，但不能据此承诺其他系统或未来
+发行版。`build.py` 会验证最终 cursor 哈希、MIT/X notice、provenance、精确的
 platformdirs 4.10.1 metadata/notice 与 `libqxcb.so` 的产物内 `ldd` 闭包，再
 运行 `--help`、offscreen 以及 Linux native xcb Qt Preview 事件循环 smoke；
 运行时会主动移除外部 `LD_LIBRARY_PATH`。打包 smoke 前后完整 artifact
