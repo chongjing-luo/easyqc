@@ -246,7 +246,7 @@ def install_candidate(
         materialized = adapter.materialize(materialization_request)
     except Exception as exc:
         raise ManagedRuntimeError(f"materialization phase failed: {exc}") from exc
-    python_executable, entrypoint = _validate_materialization_paths(
+    python_executable, entrypoint = validate_materialization_result(
         staging_root, manifest, materialized
     )
 
@@ -303,38 +303,16 @@ def install_candidate(
             f"{manifest.easyqc.version!r}; got exit {process.returncode}"
         )
 
-    receipt = InstallReceiptV1(
-        schema_version=1,
-        release_id=manifest.release_id,
-        target=manifest.target,
-        install_scope="user",
-        install_root=str(install_root),
-        manifest_sha256=manifest.sha256,
-        source_sha256=manifest.easyqc.source_sha256,
-        uv=ReceiptUvV1(version=manifest.uv.version, sha256=manifest.uv.sha256),
-        python=ReceiptPythonV1(
-            version=manifest.python.version,
-            build=manifest.python.build,
-            key=manifest.python.key,
-            payload_sha256=manifest.python.sha256,
-        ),
-        lock_sha256=manifest.lock.sha256,
-        artifact_manifest_sha256=verified.artifact_manifest_sha256,
-        installed_file_set_sha256=_installed_file_set_sha256(staging_root),
-        smoke=SmokeReceiptV1(
-            contract_version=manifest.smoke_contract_version,
-            passed=True,
-            completed_at_utc=completed_at,
-            report_sha256=hashlib.sha256(report_bytes).hexdigest(),
-        ),
-        installed_at_utc=_utc_now(),
-        controller_version=_CONTROLLER_VERSION,
-    )
-    receipt_path = staging_root / "install-receipt.json"
-    _atomic_write_durable(receipt_path, receipt.canonical_bytes, "install receipt")
-    _load_version_authority(
+    receipt = write_install_receipt(
         staging_root,
         install_root,
+        manifest,
+        verified,
+        install_scope="user",
+        smoke_report_bytes=report_bytes,
+        smoke_completed_at_utc=completed_at,
+        installed_at_utc=_utc_now(),
+        controller_version=_CONTROLLER_VERSION,
         expected_release_id=manifest.release_id,
     )
 
@@ -348,7 +326,7 @@ def install_candidate(
     except OSError as exc:
         raise ManagedRuntimeError(f"version finalization failed: {exc}") from exc
 
-    _activate_release(install_root, manifest.release_id)
+    activate_release(install_root, manifest.release_id)
     return receipt
 
 
@@ -431,8 +409,18 @@ def launch_active(
     version_root = root / "versions" / pointer.active_release_id
     manifest, _ = _load_version_authority(version_root, root)
     python_executable, entrypoint = _fixed_launch_paths(version_root, manifest)
-    _require_regular_nonsymlink(python_executable, "active Python executable")
-    _require_regular_nonsymlink(entrypoint, "active entrypoint")
+    _require_contained_launch_file(
+        python_executable,
+        version_root,
+        "active Python executable",
+        allow_symlink=True,
+    )
+    _require_contained_launch_file(
+        entrypoint,
+        version_root,
+        "active entrypoint",
+        allow_symlink=False,
+    )
     try:
         process = subprocess.run(
             [str(python_executable), str(entrypoint), *tuple(argv)],
@@ -454,8 +442,15 @@ def launch_active(
     return process
 
 
-def _activate_release(install_root: Path, release_id: str) -> ActivationPointerV1:
-    version_root = install_root / "versions" / release_id
+def activate_release(install_root: Path, release_id: str) -> ActivationPointerV1:
+    """Validate one receipt-backed release and atomically make it active."""
+
+    install_root = _candidate_install_root(install_root)
+    try:
+        identity = ActivationPointerV1(release_id, None, 0)
+    except ManagedRuntimeContractError as exc:
+        raise ManagedRuntimeError(f"invalid activation release ID: {exc}") from exc
+    version_root = install_root / "versions" / identity.active_release_id
     _load_version_authority(version_root, install_root)
     pointer_path = install_root / "state" / "activation.txt"
     if pointer_path.exists() or pointer_path.is_symlink():
@@ -467,16 +462,16 @@ def _activate_release(install_root: Path, release_id: str) -> ActivationPointerV
         _load_version_authority(
             install_root / "versions" / current.active_release_id, install_root
         )
-        if current.active_release_id == release_id:
+        if current.active_release_id == identity.active_release_id:
             raise ManagedRuntimeError("release is already active")
         pointer = ActivationPointerV1(
-            active_release_id=release_id,
+            active_release_id=identity.active_release_id,
             previous_release_id=current.active_release_id,
             generation=current.generation + 1,
         )
     else:
         pointer = ActivationPointerV1(
-            active_release_id=release_id,
+            active_release_id=identity.active_release_id,
             previous_release_id=None,
             generation=1,
         )
@@ -527,31 +522,132 @@ def _load_version_authority(
     return manifest, receipt
 
 
-def _validate_materialization_paths(
-    staging_root: Path,
+def validate_materialization_result(
+    version_root: Path,
     manifest: ReleaseManifestV1,
     result: MaterializationResult,
 ) -> tuple[Path, Path]:
+    """Validate the adapter's two fixed launch paths inside one version root.
+
+    The environment Python may be a symlink because uv creates that form on
+    supported POSIX targets.  Its fully resolved regular file must still live
+    inside the same immutable version root.  The application entrypoint remains
+    a regular non-symlink file.
+    """
+
     if not isinstance(result, MaterializationResult):
         raise ManagedRuntimeError("adapter returned an invalid materialization result")
-    expected_python, expected_entrypoint = _fixed_launch_paths(staging_root, manifest)
-    resolved_stage = staging_root.resolve(strict=True)
-    returned: list[tuple[Path, Path, str]] = [
-        (result.python_executable, expected_python, "Python executable"),
-        (result.entrypoint, expected_entrypoint, "entrypoint"),
+    expected_python, expected_entrypoint = _fixed_launch_paths(version_root, manifest)
+    resolved_root = version_root.resolve(strict=True)
+    returned: list[tuple[Path, Path, str, bool]] = [
+        (result.python_executable, expected_python, "Python executable", True),
+        (result.entrypoint, expected_entrypoint, "entrypoint", False),
     ]
-    for candidate, expected, label in returned:
+    for candidate, expected, label, allow_symlink in returned:
         if not isinstance(candidate, Path):
             raise ManagedRuntimeError(f"adapter {label} path is not pathlib.Path")
         try:
             resolved = candidate.resolve(strict=True)
-            resolved.relative_to(resolved_stage)
+            resolved.relative_to(resolved_root)
         except (OSError, ValueError) as exc:
-            raise ManagedRuntimeError(f"adapter {label} path is outside staging root") from exc
-        if resolved != expected.resolve(strict=False):
+            raise ManagedRuntimeError(
+                f"adapter {label} path is outside version root"
+            ) from exc
+        if candidate != expected:
             raise ManagedRuntimeError(f"adapter {label} path is not the fixed launch path")
-        _require_regular_nonsymlink(candidate, f"adapter {label}")
+        _require_contained_launch_file(
+            candidate,
+            version_root,
+            f"adapter {label}",
+            allow_symlink=allow_symlink,
+        )
     return expected_python, expected_entrypoint
+
+
+def write_install_receipt(
+    version_root: Path,
+    install_root: Path,
+    manifest: ReleaseManifestV1,
+    verified_artifacts: VerifiedArtifactSet,
+    *,
+    install_scope: str,
+    smoke_report_bytes: bytes,
+    smoke_completed_at_utc: str,
+    installed_at_utc: str,
+    controller_version: str,
+    expected_release_id: str | None = None,
+) -> InstallReceiptV1:
+    """Construct, atomically write and revalidate one install receipt."""
+
+    root = _candidate_install_root(install_root)
+    if not isinstance(version_root, Path) or not version_root.is_absolute():
+        raise ManagedRuntimeError("version root must be an explicit absolute path")
+    if version_root.is_symlink() or not version_root.is_dir():
+        raise ManagedRuntimeError("version root must be an existing real directory")
+    try:
+        resolved_version = version_root.resolve(strict=True)
+        resolved_versions_root = (root / "versions").resolve(strict=True)
+    except (OSError, ValueError) as exc:
+        raise ManagedRuntimeError("cannot resolve receipt version root") from exc
+    if resolved_version.parent != resolved_versions_root:
+        raise ManagedRuntimeError("version root must be directly below versions")
+    path_release_id = expected_release_id or manifest.release_id
+    if (
+        expected_release_id is None
+        and version_root.name != manifest.release_id
+    ):
+        raise ManagedRuntimeError("version path does not match manifest release ID")
+    if verified_artifacts.manifest_sha256 != manifest.sha256:
+        raise ManagedRuntimeError("verified manifest identity does not match receipt")
+    if (
+        verified_artifacts.artifact_manifest_sha256
+        != _manifest_artifact_set_sha256(manifest)
+    ):
+        raise ManagedRuntimeError("verified artifact identity does not match receipt")
+    if not isinstance(smoke_report_bytes, bytes):
+        raise ManagedRuntimeError("smoke report must be bytes")
+    stored_smoke = _read_regular_bytes(
+        version_root / "smoke-report.json", "smoke report"
+    )
+    if stored_smoke != smoke_report_bytes:
+        raise ManagedRuntimeError("stored smoke report bytes changed before receipt")
+    receipt_path = version_root / "install-receipt.json"
+    if receipt_path.exists() or receipt_path.is_symlink():
+        raise ManagedRuntimeError("install receipt already exists")
+    receipt = InstallReceiptV1(
+        schema_version=1,
+        release_id=manifest.release_id,
+        target=manifest.target,
+        install_scope=install_scope,
+        install_root=str(root),
+        manifest_sha256=manifest.sha256,
+        source_sha256=manifest.easyqc.source_sha256,
+        uv=ReceiptUvV1(version=manifest.uv.version, sha256=manifest.uv.sha256),
+        python=ReceiptPythonV1(
+            version=manifest.python.version,
+            build=manifest.python.build,
+            key=manifest.python.key,
+            payload_sha256=manifest.python.sha256,
+        ),
+        lock_sha256=manifest.lock.sha256,
+        artifact_manifest_sha256=verified_artifacts.artifact_manifest_sha256,
+        installed_file_set_sha256=_installed_file_set_sha256(version_root),
+        smoke=SmokeReceiptV1(
+            contract_version=manifest.smoke_contract_version,
+            passed=True,
+            completed_at_utc=smoke_completed_at_utc,
+            report_sha256=hashlib.sha256(smoke_report_bytes).hexdigest(),
+        ),
+        installed_at_utc=installed_at_utc,
+        controller_version=controller_version,
+    )
+    _atomic_write_durable(receipt_path, receipt.canonical_bytes, "install receipt")
+    _, stored_receipt = _load_version_authority(
+        version_root,
+        root,
+        expected_release_id=path_release_id,
+    )
+    return stored_receipt
 
 
 def _fixed_launch_paths(
@@ -829,6 +925,32 @@ def _require_regular_nonsymlink(path: Path, label: str) -> None:
         raise ManagedRuntimeError(f"{label} must be a regular non-symlink file")
 
 
+def _require_contained_launch_file(
+    path: Path,
+    version_root: Path,
+    label: str,
+    *,
+    allow_symlink: bool,
+) -> None:
+    try:
+        metadata = path.lstat()
+        resolved_root = version_root.resolve(strict=True)
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(resolved_root)
+        resolved_metadata = resolved.stat()
+    except (OSError, ValueError) as exc:
+        raise ManagedRuntimeError(
+            f"{label} is missing or escapes the version root"
+        ) from exc
+    if stat.S_ISLNK(metadata.st_mode):
+        if not allow_symlink:
+            raise ManagedRuntimeError(f"{label} must not be a symlink")
+    elif not stat.S_ISREG(metadata.st_mode):
+        raise ManagedRuntimeError(f"{label} must be a regular file")
+    if not stat.S_ISREG(resolved_metadata.st_mode):
+        raise ManagedRuntimeError(f"{label} must resolve to a regular file")
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace(
         "+00:00", "Z"
@@ -843,10 +965,13 @@ __all__ = [
     "UvAdapter",
     "VerifiedArtifact",
     "VerifiedArtifactSet",
+    "activate_release",
     "install_candidate",
     "launch_active",
     "load_install_receipt",
     "read_activation_pointer",
     "rollback",
+    "validate_materialization_result",
     "verify_artifact_set",
+    "write_install_receipt",
 ]
