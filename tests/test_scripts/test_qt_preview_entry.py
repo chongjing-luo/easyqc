@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+import subprocess
+
 import pytest
 
 import easyqc as entrypoint
@@ -35,3 +39,30 @@ def test_entrypoint_keeps_tk_default_and_routes_only_explicit_preview(monkeypatc
 
     assert entrypoint.main([]) == 0
     assert len(calls) == 1
+
+
+def test_version_returns_without_importing_or_constructing_a_gui(
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setitem(sys.modules, "gui.app", None)
+
+    assert entrypoint.main(["--version"]) == 0
+    assert capsys.readouterr().out == "1.0.0\n"
+
+
+def test_direct_version_process_has_exact_machine_output() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+
+    process = subprocess.run(
+        [sys.executable, str(project_root / "easyqc.py"), "--version"],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+
+    assert process.returncode == 0
+    assert process.stdout == "1.0.0\n"
+    assert process.stderr == ""
