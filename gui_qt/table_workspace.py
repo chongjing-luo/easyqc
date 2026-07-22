@@ -31,13 +31,16 @@ from PySide6.QtWidgets import (
 
 from core.table_view_service import QcIdentityError, TableViewError, TableViewService
 from gui_qt.columns_panel import ColumnsPanel
-from gui_qt.filter_panel import FilterPanel, operator_label
+from gui_qt.filter_dialog import FilterDialog
+from gui_qt.filter_panel import operator_label
 from gui_qt.sort_panel import SortPanel
 from gui_qt.table_model import QtTableModel, QtTableRowReference
 from gui_qt.task_runner import RevisionedTaskController
 from models.table_view_state import (
     ColumnViewState,
     FilterCondition,
+    FilterExpression,
+    FilterGroup,
     SortRule,
     TableViewResult,
     TableViewState,
@@ -75,6 +78,7 @@ class QtTableWorkspace(QWidget):
         self.initial_state = self.service.default_state(page_size=page_size)
         self.applied_state = self.initial_state
         self.draft_state: TableViewState | None = None
+        self.filter_dialog: FilterDialog | None = None
         self.result = self.service.apply_state(self.applied_state)
         self.row_window = self.service.get_window(
             self.result,
@@ -236,9 +240,9 @@ class QtTableWorkspace(QWidget):
         self.error_label.setAccessibleName("Table action error")
         layout.addWidget(self.error_label)
 
-        self.filter_button.clicked.connect(lambda: self._open_tab(0, begin_filter=True))
-        self.sort_button.clicked.connect(lambda: self._open_tab(1))
-        self.columns_button.clicked.connect(lambda: self._open_tab(2))
+        self.filter_button.clicked.connect(self.open_filter_dialog)
+        self.sort_button.clicked.connect(lambda: self._open_tab(0))
+        self.columns_button.clicked.connect(lambda: self._open_tab(1))
         self.find_button.clicked.connect(lambda: self.find_identity_exact(self.find_edit.text()))
         self.find_edit.returnPressed.connect(lambda: self.find_identity_exact(self.find_edit.text()))
         self.open_qc_button.clicked.connect(self.open_selected_qc)
@@ -288,18 +292,17 @@ class QtTableWorkspace(QWidget):
         )
 
     def _replace_inspector_panels(self) -> None:
+        if self.filter_dialog is not None:
+            self.filter_dialog.reject()
+            self.filter_dialog = None
         while self.tabs.count():
             widget = self.tabs.widget(0)
             self.tabs.removeTab(0)
             widget.deleteLater()
-        self.filter_panel = FilterPanel(self.service.profiles, self.tabs)
         self.sort_panel = SortPanel(self.initial_state.columns.order, self.tabs)
         self.columns_panel = ColumnsPanel(self.initial_state.columns, self.tabs)
-        self.tabs.addTab(self.filter_panel, "Filter")
         self.tabs.addTab(self.sort_panel, "Sort")
         self.tabs.addTab(self.columns_panel, "Columns")
-        self.filter_panel.applyRequested.connect(self.apply_filter_draft)
-        self.filter_panel.cancelRequested.connect(self.cancel_filter_draft)
         self.sort_panel.applyRequested.connect(self.apply_sort_rules)
         self.columns_panel.applyRequested.connect(self.apply_column_state)
         self.columns_panel.resetRequested.connect(
@@ -356,6 +359,18 @@ class QtTableWorkspace(QWidget):
             for column, width in previous.columns.widths
             if column in available
         )
+        expression = previous.effective_filter
+        compatible_groups: list[FilterGroup] = []
+        for group in expression.groups:
+            conditions = tuple(
+                condition
+                for condition in group.conditions
+                if condition.column in available
+            )
+            if conditions:
+                compatible_groups.append(
+                    FilterGroup(group.group_id, group.join, conditions)
+                )
         return TableViewState(
             columns=ColumnViewState(
                 order=order,
@@ -363,10 +378,9 @@ class QtTableWorkspace(QWidget):
                 widths=widths,
                 pinned=pinned,
             ),
-            conditions=tuple(
-                condition
-                for condition in previous.conditions
-                if condition.column in available
+            filter=FilterExpression(
+                expression.group_join,
+                tuple(compatible_groups),
             ),
             sort_rules=tuple(
                 rule for rule in previous.sort_rules if rule.column in available
@@ -431,50 +445,126 @@ class QtTableWorkspace(QWidget):
                 self.selection_outside_view = True
                 self._update_status()
 
-    def _open_tab(self, index: int, *, begin_filter: bool = False) -> None:
+    def _open_tab(self, index: int) -> None:
         self.tabs.setCurrentIndex(index)
         self.tabs.show()
-        if begin_filter:
-            self.begin_filter_edit()
+
+    def open_filter_dialog(self) -> FilterDialog:
+        """Open one non-blocking modal draft over the current applied filter."""
+
+        if self.filter_dialog is not None and self.filter_dialog.isVisible():
+            self.filter_dialog.raise_()
+            self.filter_dialog.activateWindow()
+            return self.filter_dialog
+        dialog = FilterDialog(
+            self.service.profiles,
+            self.applied_state.effective_filter,
+            self,
+        )
+        dialog.applyRequested.connect(
+            lambda expression, current=dialog: self._apply_filter_from_dialog(
+                current,
+                expression,
+            )
+        )
+        dialog.finished.connect(
+            lambda _result, current=dialog: self._filter_dialog_finished(current)
+        )
+        self.filter_dialog = dialog
+        dialog.open()
+        return dialog
+
+    def _filter_dialog_finished(self, dialog: FilterDialog) -> None:
+        if self.filter_dialog is dialog:
+            self.filter_dialog = None
+
+    def _apply_filter_from_dialog(
+        self,
+        dialog: FilterDialog,
+        expression: object,
+    ) -> None:
+        if not isinstance(expression, FilterExpression):
+            dialog.set_error("Filter dialog returned an invalid draft")
+            return
+        candidate = self.applied_state.with_filter(expression)
+        if not self._commit_state(candidate, reset_page=True):
+            group_id, condition_id = self._locate_filter_error(
+                expression,
+                self.error_text,
+            )
+            dialog.set_error(
+                self.error_text,
+                group_id=group_id,
+                condition_id=condition_id,
+            )
+            return
+        dialog.complete_apply()
+
+    def _locate_filter_error(
+        self,
+        expression: FilterExpression,
+        message: str,
+    ) -> tuple[str | None, str | None]:
+        for group in expression.groups:
+            if group.group_id in message:
+                for condition in group.conditions:
+                    if condition.condition_id in message:
+                        return group.group_id, condition.condition_id
+                return group.group_id, None
+        for group in expression.groups:
+            for condition in group.conditions:
+                probe = FilterExpression(
+                    "all",
+                    (FilterGroup(group.group_id, "all", (condition,)),),
+                )
+                try:
+                    self.service.validate_state(self.applied_state.with_filter(probe))
+                except TableViewError:
+                    return group.group_id, condition.condition_id
+        return None, None
 
     def begin_filter_edit(self) -> None:
         if self.draft_state is None:
             self.draft_state = replace(self.applied_state)
-            self.filter_panel.set_conditions(self.applied_state.conditions)
-        self.filter_panel.set_error("")
 
     def set_filter_draft(self, conditions: tuple[FilterCondition, ...]) -> None:
         if self.draft_state is None:
             self.begin_filter_edit()
-        self.draft_state = replace(self.draft_state, conditions=tuple(conditions))
-        self.filter_panel.set_conditions(tuple(conditions))
+        self.draft_state = self.draft_state.with_conditions(tuple(conditions))
 
     def cancel_filter_draft(self) -> None:
         self.draft_state = None
-        self.filter_panel.set_conditions(self.applied_state.conditions)
-        self.filter_panel.set_error("")
 
     def apply_filter_draft(self) -> bool:
         if self.draft_state is None:
             self.begin_filter_edit()
-        conditions = self.filter_panel.conditions()
-        candidate = replace(self.applied_state, conditions=conditions)
+        candidate = self.draft_state
         if not self._commit_state(candidate, reset_page=True):
-            self.filter_panel.set_error(self.error_text)
             return False
         self.draft_state = None
-        self.filter_panel.set_error("")
         return True
 
     def remove_applied_condition(self, condition_id: str) -> bool:
-        conditions = tuple(
-            condition
-            for condition in self.applied_state.conditions
-            if condition.condition_id != condition_id
-        )
-        if len(conditions) == len(self.applied_state.conditions):
+        expression = self.applied_state.effective_filter
+        removed = False
+        groups: list[FilterGroup] = []
+        for group in expression.groups:
+            conditions = tuple(
+                condition
+                for condition in group.conditions
+                if condition.condition_id != condition_id
+            )
+            removed = removed or len(conditions) != len(group.conditions)
+            if conditions:
+                groups.append(FilterGroup(group.group_id, group.join, conditions))
+        if not removed:
             return False
-        return self._commit_state(replace(self.applied_state, conditions=conditions), reset_page=True)
+        return self._commit_state(
+            self.applied_state.with_filter(
+                FilterExpression(expression.group_join, tuple(groups))
+            ),
+            reset_page=True,
+        )
 
     def apply_sort_rules(self, rules: tuple[SortRule, ...]) -> bool:
         applied = self._commit_state(
@@ -682,7 +772,6 @@ class QtTableWorkspace(QWidget):
             self.page_offset = 0
         self._set_error("")
         self._render_result()
-        self.filter_panel.set_conditions(self.applied_state.conditions)
         self.sort_panel.set_rules(self.applied_state.sort_rules)
         self.columns_panel.set_state(self.applied_state.columns)
 
@@ -709,7 +798,6 @@ class QtTableWorkspace(QWidget):
             return
         self._pending_state = None
         self._pending_reset_page = False
-        self.filter_panel.set_conditions(self.applied_state.conditions)
         self.sort_panel.set_rules(self.applied_state.sort_rules)
         self.columns_panel.set_state(self.applied_state.columns)
         message = str(error).strip() or type(error).__name__

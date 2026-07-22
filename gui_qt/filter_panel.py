@@ -1,331 +1,127 @@
-"""Typed visual filter editor for the Qt Table workspace."""
+"""Grouped filter draft editor used by the Qt Filter dialog."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
-    QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QPushButton,
     QScrollArea,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from models.table_view_state import ColumnKind, ColumnProfile, FilterCondition
+from gui_qt.filter_condition_row import FilterConditionRow, operator_label
+from models.table_view_state import (
+    MAX_FILTER_CONDITIONS,
+    MAX_FILTER_CONDITIONS_PER_GROUP,
+    MAX_FILTER_GROUPS,
+    ColumnProfile,
+    FilterCondition,
+    FilterExpression,
+    FilterGroup,
+)
 
 
-_OPERATORS_BY_KIND = {
-    ColumnKind.TEXT: ("==", "!=", "contains", "startswith", "endswith", "in", "not_in", "isna", "notna"),
-    ColumnKind.NUMBER: ("==", "!=", ">", ">=", "<", "<=", "between", "in", "not_in", "isna", "notna"),
-    ColumnKind.BOOLEAN: ("==", "!=", "isna", "notna"),
-    ColumnKind.DATETIME: ("==", "!=", ">", ">=", "<", "<=", "between", "in", "not_in", "isna", "notna"),
-}
-
-_OPERATOR_LABELS = {
-    "==": "is",
-    "!=": "is not",
-    "contains": "contains",
-    "startswith": "starts with",
-    "endswith": "ends with",
-    ">": "greater than",
-    ">=": "at least",
-    "<": "less than",
-    "<=": "at most",
-    "between": "between",
-    "in": "is one of",
-    "not_in": "is not one of",
-    "isna": "is empty",
-    "notna": "is not empty",
-}
-
-
-def operator_label(code: str) -> str:
-    return _OPERATOR_LABELS.get(code, code)
-
-
-class FilterConditionRow(QFrame):
-    """One type-aware condition; it contains no query implementation."""
+class FilterGroupEditor(QGroupBox):
+    """Edit one stable-ID filter group without running a query."""
 
     removeRequested = Signal(object)
+    conditionCountChanged = Signal()
 
     def __init__(
         self,
         profiles: tuple[ColumnProfile, ...],
-        condition_id: str,
+        group_id: str,
+        condition_id_factory: Callable[[], str],
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        if not profiles:
-            raise ValueError("FilterConditionRow requires at least one column profile")
-        self.setObjectName("filterConditionRow")
-        self._profiles = {profile.name: profile for profile in profiles}
-        self.condition_id = condition_id
-        self.operator_codes: tuple[str, ...] = ()
-        self.value_control_kind = "literal"
-        self._build_ui()
-        self._populate_columns()
-        self._refresh_operators()
-
-    @property
-    def profile(self) -> ColumnProfile:
-        return self._profiles[self.column_combo.currentData()]
-
-    def _build_ui(self) -> None:
-        layout = QGridLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(6)
-
-        self.column_combo = QComboBox(self)
-        self.column_combo.setObjectName("filterColumn")
-        self.operator_combo = QComboBox(self)
-        self.operator_combo.setObjectName("filterOperator")
-        self.remove_button = QPushButton("Remove", self)
-        self.remove_button.setObjectName("removeFilterCondition")
-        self.remove_button.setAccessibleName("Remove filter condition")
-
-        self.value_stack = QStackedWidget(self)
-        self.literal_edit = QLineEdit(self.value_stack)
-        self.literal_edit.setObjectName("filterValue")
-        self.choice_combo = QComboBox(self.value_stack)
-        self.choice_combo.setObjectName("filterChoice")
-        self.choice_combo.setEditable(False)
-        self.membership_edit = QLineEdit(self.value_stack)
-        self.membership_edit.setObjectName("filterMembership")
-        self.membership_edit.setPlaceholderText("Comma-separated values")
-        self.range_widget = QWidget(self.value_stack)
-        range_layout = QHBoxLayout(self.range_widget)
-        range_layout.setContentsMargins(0, 0, 0, 0)
-        self.range_start = QLineEdit(self.range_widget)
-        self.range_start.setObjectName("filterRangeStart")
-        self.range_start.setPlaceholderText("From")
-        self.range_end = QLineEdit(self.range_widget)
-        self.range_end.setObjectName("filterRangeEnd")
-        self.range_end.setPlaceholderText("To")
-        range_layout.addWidget(self.range_start)
-        range_layout.addWidget(QLabel("to", self.range_widget))
-        range_layout.addWidget(self.range_end)
-        self.no_value_label = QLabel("No value required", self.value_stack)
-
-        for widget in (
-            self.literal_edit,
-            self.choice_combo,
-            self.membership_edit,
-            self.range_widget,
-            self.no_value_label,
-        ):
-            self.value_stack.addWidget(widget)
-
-        layout.addWidget(self.column_combo, 0, 0)
-        layout.addWidget(self.operator_combo, 0, 1)
-        layout.addWidget(self.remove_button, 0, 2)
-        layout.addWidget(self.value_stack, 1, 0, 1, 3)
-        layout.setColumnStretch(0, 2)
-        layout.setColumnStretch(1, 2)
-
-        self.column_combo.currentIndexChanged.connect(self._refresh_operators)
-        self.operator_combo.currentIndexChanged.connect(self._refresh_value_control)
-        self.remove_button.clicked.connect(lambda: self.removeRequested.emit(self))
-
-    def _populate_columns(self) -> None:
-        for profile in self._profiles.values():
-            self.column_combo.addItem(profile.name, profile.name)
-
-    def _refresh_operators(self) -> None:
-        current = self.operator_combo.currentData()
-        self.operator_codes = _OPERATORS_BY_KIND[self.profile.kind]
-        self.operator_combo.blockSignals(True)
-        self.operator_combo.clear()
-        for code in self.operator_codes:
-            self.operator_combo.addItem(operator_label(code), code)
-        selected = self.operator_combo.findData(current)
-        self.operator_combo.setCurrentIndex(selected if selected >= 0 else 0)
-        self.operator_combo.blockSignals(False)
-        self._refresh_value_control()
-
-    def _refresh_value_control(self) -> None:
-        operator = self.operator_combo.currentData()
-        profile = self.profile
-        if operator in {"isna", "notna"}:
-            self.value_control_kind = "none"
-            self.value_stack.setCurrentWidget(self.no_value_label)
-        elif operator == "between":
-            self.value_control_kind = "range"
-            self.value_stack.setCurrentWidget(self.range_widget)
-        elif operator in {"in", "not_in"}:
-            self.value_control_kind = "multi"
-            self.value_stack.setCurrentWidget(self.membership_edit)
-        elif operator in {"==", "!="} and (profile.kind == ColumnKind.BOOLEAN or profile.values):
-            self.value_control_kind = "choice"
-            self.choice_combo.clear()
-            values = (True, False) if profile.kind == ColumnKind.BOOLEAN else profile.values
-            for value in values:
-                self.choice_combo.addItem(str(value), value)
-            self.value_stack.setCurrentWidget(self.choice_combo)
-        else:
-            self.value_control_kind = "literal"
-            if profile.kind == ColumnKind.NUMBER:
-                self.literal_edit.setPlaceholderText("Number")
-            elif profile.kind == ColumnKind.DATETIME:
-                self.literal_edit.setPlaceholderText("YYYY-MM-DD or date-time")
-            else:
-                self.literal_edit.setPlaceholderText("Value")
-            self.value_stack.setCurrentWidget(self.literal_edit)
-
-    def set_column(self, column: str) -> None:
-        index = self.column_combo.findData(column)
-        if index < 0:
-            raise ValueError(f"Unknown filter column: {column}")
-        self.column_combo.setCurrentIndex(index)
-
-    def set_operator(self, operator: str) -> None:
-        index = self.operator_combo.findData(operator)
-        if index < 0:
-            raise ValueError(f"Operator is not valid for the selected column: {operator}")
-        self.operator_combo.setCurrentIndex(index)
-
-    def set_value(self, value: Any) -> None:
-        if self.value_control_kind == "none":
-            return
-        if self.value_control_kind == "range":
-            values = tuple(value or ()) if not isinstance(value, str) else tuple(value.split(",", 1))
-            if len(values) == 2:
-                self.range_start.setText(str(values[0]))
-                self.range_end.setText(str(values[1]))
-            return
-        if self.value_control_kind == "multi":
-            values = value if isinstance(value, (tuple, list)) else (value,)
-            self.membership_edit.setText(", ".join(str(item) for item in values if item is not None))
-            return
-        if self.value_control_kind == "choice":
-            for index in range(self.choice_combo.count()):
-                if self.choice_combo.itemData(index) == value or str(self.choice_combo.itemData(index)) == str(value):
-                    self.choice_combo.setCurrentIndex(index)
-                    return
-            return
-        self.literal_edit.setText("" if value is None else str(value))
-
-    def set_condition(self, condition: FilterCondition) -> None:
-        self.condition_id = condition.condition_id or self.condition_id
-        self.set_column(condition.column)
-        self.set_operator(condition.operator)
-        self.set_value(condition.value)
-
-    def is_blank(self) -> bool:
-        if self.value_control_kind == "none" or self.value_control_kind == "choice":
-            return False
-        if self.value_control_kind == "range":
-            return not self.range_start.text().strip() and not self.range_end.text().strip()
-        if self.value_control_kind == "multi":
-            return not self.membership_edit.text().strip()
-        return not self.literal_edit.text().strip()
-
-    def condition(self) -> FilterCondition:
-        operator = str(self.operator_combo.currentData())
-        value: Any = None
-        if self.value_control_kind == "range":
-            value = (self.range_start.text().strip(), self.range_end.text().strip())
-        elif self.value_control_kind == "multi":
-            value = tuple(part.strip() for part in self.membership_edit.text().split(",") if part.strip())
-        elif self.value_control_kind == "choice":
-            value = self.choice_combo.currentData()
-        elif self.value_control_kind == "literal":
-            value = self.literal_edit.text()
-        return FilterCondition(
-            column=str(self.column_combo.currentData()),
-            operator=operator,
-            value=value,
-            condition_id=self.condition_id,
-        )
-
-
-class FilterPanel(QWidget):
-    """Own condition widgets for one draft; applied state lives elsewhere."""
-
-    applyRequested = Signal()
-    cancelRequested = Signal()
-
-    def __init__(self, profiles: tuple[ColumnProfile, ...], parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        if not profiles:
-            raise ValueError("FilterPanel requires at least one column profile")
-        self.setObjectName("filterPanel")
-        self._profiles = tuple(profiles)
-        self._sequence = 0
+        if not group_id.strip():
+            raise ValueError("FilterGroupEditor requires a group_id")
+        self._profiles = profiles
+        self._condition_id_factory = condition_id_factory
+        self.group_id = group_id
+        self._total_add_allowed = True
         self.condition_rows: list[FilterConditionRow] = []
+        self.setObjectName("filterGroup")
         self._build_ui()
         self.add_condition()
-
-    def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
-        heading = QLabel("Match all conditions", self)
-        heading.setObjectName("panelHeading")
-        layout.addWidget(heading)
-
-        scroll = QScrollArea(self)
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        self.rows_host = QWidget(scroll)
-        self.rows_layout = QVBoxLayout(self.rows_host)
-        self.rows_layout.setContentsMargins(0, 0, 0, 0)
-        self.rows_layout.setSpacing(8)
-        self.rows_layout.addStretch(1)
-        scroll.setWidget(self.rows_host)
-        layout.addWidget(scroll, 1)
-
-        self.error_label = QLabel("", self)
-        self.error_label.setObjectName("filterError")
-        self.error_label.setWordWrap(True)
-        layout.addWidget(self.error_label)
-
-        actions = QHBoxLayout()
-        self.add_button = QPushButton("Add condition", self)
-        self.clear_button = QPushButton("Clear", self)
-        self.cancel_button = QPushButton("Cancel", self)
-        self.apply_button = QPushButton("Apply", self)
-        self.apply_button.setObjectName("primaryAction")
-        actions.addWidget(self.add_button)
-        actions.addWidget(self.clear_button)
-        actions.addStretch(1)
-        actions.addWidget(self.cancel_button)
-        actions.addWidget(self.apply_button)
-        layout.addLayout(actions)
-
-        self.add_button.clicked.connect(self.add_condition)
-        self.clear_button.clicked.connect(self.clear_conditions)
-        self.cancel_button.clicked.connect(self.cancelRequested.emit)
-        self.apply_button.clicked.connect(self.applyRequested.emit)
 
     @property
     def error_text(self) -> str:
         return self.error_label.text()
 
-    def set_error(self, message: str) -> None:
-        self.error_label.setText(message)
+    def _build_ui(self) -> None:
+        self.setTitle("Filter group")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
 
-    def _next_id(self) -> str:
-        self._sequence += 1
-        return f"filter-{self._sequence}"
+        header = QHBoxLayout()
+        header.addWidget(QLabel("Within this group", self))
+        self.join_combo = QComboBox(self)
+        self.join_combo.addItem("Match all conditions", "all")
+        self.join_combo.addItem("Match any condition", "any")
+        self.join_combo.setAccessibleName(f"Combination for filter group {self.group_id}")
+        self.remove_group_button = QPushButton("Remove group", self)
+        self.remove_group_button.setAccessibleName(f"Remove filter group {self.group_id}")
+        header.addWidget(self.join_combo)
+        header.addStretch(1)
+        header.addWidget(self.remove_group_button)
+        layout.addLayout(header)
 
-    def add_condition(self, condition: FilterCondition | None = None) -> FilterConditionRow:
-        condition_id = condition.condition_id if condition and condition.condition_id else self._next_id()
+        self.rows_host = QWidget(self)
+        self.rows_layout = QVBoxLayout(self.rows_host)
+        self.rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.rows_layout.setSpacing(6)
+        self.rows_layout.addStretch(1)
+        layout.addWidget(self.rows_host)
+
+        self.error_label = QLabel("", self)
+        self.error_label.setObjectName("filterGroupError")
+        self.error_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.error_label.setWordWrap(True)
+        self.error_label.setAccessibleName(f"Error for filter group {self.group_id}")
+        self.error_label.setVisible(False)
+        layout.addWidget(self.error_label)
+
+        self.add_condition_button = QPushButton("Add condition", self)
+        self.add_condition_button.setAccessibleName(
+            f"Add condition to filter group {self.group_id}"
+        )
+        layout.addWidget(self.add_condition_button, 0, Qt.AlignmentFlag.AlignLeft)
+        self.add_condition_button.clicked.connect(
+            lambda _checked=False: self.add_condition()
+        )
+        self.remove_group_button.clicked.connect(lambda: self.removeRequested.emit(self))
+
+    def add_condition(
+        self, condition: FilterCondition | None = None
+    ) -> FilterConditionRow:
+        if len(self.condition_rows) >= MAX_FILTER_CONDITIONS_PER_GROUP:
+            raise ValueError(
+                f"Filter group contains at most {MAX_FILTER_CONDITIONS_PER_GROUP} conditions"
+            )
+        condition_id = (
+            condition.condition_id
+            if condition is not None and condition.condition_id
+            else self._condition_id_factory()
+        )
         row = FilterConditionRow(self._profiles, condition_id, self.rows_host)
         row.removeRequested.connect(self.remove_condition)
         if condition is not None:
             row.set_condition(condition)
         self.condition_rows.append(row)
         self.rows_layout.insertWidget(self.rows_layout.count() - 1, row)
+        self._update_limit_state()
+        self.conditionCountChanged.emit()
         return row
 
     def remove_condition(self, row: FilterConditionRow) -> None:
@@ -336,23 +132,303 @@ class FilterPanel(QWidget):
         row.deleteLater()
         if not self.condition_rows:
             self.add_condition()
+        self._update_limit_state()
+        self.conditionCountChanged.emit()
 
-    def clear_conditions(self) -> None:
-        self.set_conditions(())
-        self.set_error("")
-
-    def set_conditions(self, conditions: tuple[FilterCondition, ...]) -> None:
+    def set_group(self, group: FilterGroup) -> None:
+        self.group_id = group.group_id
+        self.join_combo.setAccessibleName(f"Combination for filter group {self.group_id}")
+        self.remove_group_button.setAccessibleName(f"Remove filter group {self.group_id}")
+        self.add_condition_button.setAccessibleName(
+            f"Add condition to filter group {self.group_id}"
+        )
+        self.error_label.setAccessibleName(f"Error for filter group {self.group_id}")
+        index = self.join_combo.findData(group.join)
+        if index < 0:
+            raise ValueError(f"Unknown filter group join: {group.join}")
+        self.join_combo.setCurrentIndex(index)
         for row in self.condition_rows:
             row.setParent(None)
             row.deleteLater()
         self.condition_rows.clear()
-        for condition in conditions:
+        for condition in group.conditions:
             self.add_condition(condition)
         if not self.condition_rows:
             self.add_condition()
+        self._update_limit_state()
+
+    def set_error(self, message: str) -> None:
+        self.error_label.setText(message)
+        self.error_label.setVisible(bool(message))
+        if message:
+            self.join_combo.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def conditions(self) -> tuple[FilterCondition, ...]:
         return tuple(row.condition() for row in self.condition_rows if not row.is_blank())
 
+    def group(self) -> FilterGroup:
+        return FilterGroup(
+            group_id=self.group_id,
+            join=str(self.join_combo.currentData()),
+            conditions=self.conditions(),
+        )
 
-__all__ = ["FilterConditionRow", "FilterPanel", "operator_label"]
+    def _update_limit_state(self) -> None:
+        self.add_condition_button.setEnabled(
+            self._total_add_allowed
+            and len(self.condition_rows) < MAX_FILTER_CONDITIONS_PER_GROUP
+        )
+
+    def set_total_add_allowed(self, allowed: bool) -> None:
+        self._total_add_allowed = bool(allowed)
+        self._update_limit_state()
+
+
+class FilterPanel(QWidget):
+    """Own a grouped filter draft; applied state and query execution live elsewhere."""
+
+    def __init__(self, profiles: tuple[ColumnProfile, ...], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        if not profiles:
+            raise ValueError("FilterPanel requires at least one column profile")
+        self.setObjectName("filterPanel")
+        self.setAccessibleName("Grouped filter editor")
+        self._profiles = tuple(profiles)
+        self._group_sequence = 0
+        self._condition_sequence = 0
+        self._used_group_ids: set[str] = set()
+        self._used_condition_ids: set[str] = set()
+        self.group_editors: list[FilterGroupEditor] = []
+        self._build_ui()
+        self.add_group()
+
+    @property
+    def error_text(self) -> str:
+        return self.error_label.text()
+
+    @property
+    def condition_rows(self) -> list[FilterConditionRow]:
+        return self.group_editors[0].condition_rows if self.group_editors else []
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Across groups", self))
+        self.top_join_combo = QComboBox(self)
+        self.top_join_combo.setObjectName("filterTopJoin")
+        self.top_join_combo.addItem("Match all groups", "all")
+        self.top_join_combo.addItem("Match any group", "any")
+        self.top_join_combo.setAccessibleName("Combination across filter groups")
+        top.addWidget(self.top_join_combo)
+        top.addStretch(1)
+        self.add_group_button = QPushButton("Add group", self)
+        self.add_group_button.setAccessibleName("Add filter group")
+        top.addWidget(self.add_group_button)
+        layout.addLayout(top)
+
+        self.scroll = QScrollArea(self)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.groups_host = QWidget(self.scroll)
+        self.groups_layout = QVBoxLayout(self.groups_host)
+        self.groups_layout.setContentsMargins(0, 0, 0, 0)
+        self.groups_layout.setSpacing(10)
+        self.groups_layout.addStretch(1)
+        self.scroll.setWidget(self.groups_host)
+        layout.addWidget(self.scroll, 1)
+
+        self.error_label = QLabel("", self)
+        self.error_label.setObjectName("filterDialogError")
+        self.error_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.error_label.setWordWrap(True)
+        self.error_label.setAccessibleName("Filter dialog error")
+        self.error_label.setVisible(False)
+        layout.addWidget(self.error_label)
+        self.add_group_button.clicked.connect(
+            lambda _checked=False: self.add_group()
+        )
+
+    def _next_group_id(self) -> str:
+        while True:
+            self._group_sequence += 1
+            candidate = f"group-{self._group_sequence}"
+            if candidate not in self._used_group_ids:
+                self._used_group_ids.add(candidate)
+                return candidate
+
+    def _next_condition_id(self) -> str:
+        while True:
+            self._condition_sequence += 1
+            candidate = f"filter-{self._condition_sequence}"
+            if candidate not in self._used_condition_ids:
+                self._used_condition_ids.add(candidate)
+                return candidate
+
+    def add_group(self, group: FilterGroup | None = None) -> FilterGroupEditor:
+        if len(self.group_editors) >= MAX_FILTER_GROUPS:
+            raise ValueError(f"Filter contains at most {MAX_FILTER_GROUPS} groups")
+        incoming_count = max(1, len(group.conditions) if group is not None else 1)
+        current_count = sum(
+            len(editor.condition_rows) for editor in self.group_editors
+        )
+        if current_count + incoming_count > MAX_FILTER_CONDITIONS:
+            raise ValueError(
+                f"Filter contains at most {MAX_FILTER_CONDITIONS} conditions"
+            )
+        group_id = group.group_id if group is not None else self._next_group_id()
+        self._used_group_ids.add(group_id)
+        if group is not None:
+            self._used_condition_ids.update(
+                condition.condition_id
+                for condition in group.conditions
+                if condition.condition_id
+            )
+        editor = FilterGroupEditor(
+            self._profiles,
+            group_id,
+            self._next_condition_id,
+            self.groups_host,
+        )
+        editor.removeRequested.connect(self.remove_group)
+        if group is not None:
+            editor.set_group(group)
+        self.group_editors.append(editor)
+        editor.conditionCountChanged.connect(self._update_condition_limits)
+        self.groups_layout.insertWidget(self.groups_layout.count() - 1, editor)
+        self._update_group_titles()
+        self._update_condition_limits()
+        return editor
+
+    def remove_group(self, editor: FilterGroupEditor) -> None:
+        if editor not in self.group_editors:
+            return
+        self.group_editors.remove(editor)
+        editor.setParent(None)
+        editor.deleteLater()
+        if not self.group_editors:
+            self.add_group()
+        self._update_group_titles()
+        self._update_condition_limits()
+
+    def set_expression(self, expression: FilterExpression) -> None:
+        if not isinstance(expression, FilterExpression):
+            raise TypeError("FilterPanel requires a FilterExpression")
+        self.clear_errors()
+        self._used_group_ids = {group.group_id for group in expression.groups}
+        self._used_condition_ids = {
+            condition.condition_id
+            for group in expression.groups
+            for condition in group.conditions
+            if condition.condition_id
+        }
+        index = self.top_join_combo.findData(expression.group_join)
+        if index < 0:
+            raise ValueError(f"Unknown top-level filter join: {expression.group_join}")
+        self.top_join_combo.setCurrentIndex(index)
+        for editor in self.group_editors:
+            editor.setParent(None)
+            editor.deleteLater()
+        self.group_editors.clear()
+        for group in expression.groups:
+            self.add_group(group)
+        if not self.group_editors:
+            self.add_group()
+        self._update_group_titles()
+        self._update_condition_limits()
+
+    def expression(self) -> FilterExpression:
+        groups: list[FilterGroup] = []
+        for editor in self.group_editors:
+            group = editor.group()
+            if group.conditions:
+                groups.append(group)
+        if sum(len(group.conditions) for group in groups) > MAX_FILTER_CONDITIONS:
+            raise ValueError(f"Filter contains at most {MAX_FILTER_CONDITIONS} conditions")
+        return FilterExpression(
+            group_join=str(self.top_join_combo.currentData()),
+            groups=tuple(groups),
+        )
+
+    def reset_draft(self) -> None:
+        self.set_expression(FilterExpression())
+
+    def clear_errors(self) -> None:
+        self.error_label.setText("")
+        self.error_label.setVisible(False)
+        for group in self.group_editors:
+            group.set_error("")
+            for row in group.condition_rows:
+                row.set_error("")
+
+    def set_error(
+        self,
+        message: str,
+        *,
+        group_id: str | None = None,
+        condition_id: str | None = None,
+    ) -> None:
+        self.clear_errors()
+        if condition_id is not None:
+            for group in self.group_editors:
+                for row in group.condition_rows:
+                    if row.condition_id == condition_id and (
+                        group_id is None or group.group_id == group_id
+                    ):
+                        row.set_error(message)
+                        self.scroll.ensureWidgetVisible(row)
+                        return
+        if group_id is not None:
+            for group in self.group_editors:
+                if group.group_id == group_id:
+                    group.set_error(message)
+                    self.scroll.ensureWidgetVisible(group)
+                    return
+        self.error_label.setText(message)
+        self.error_label.setVisible(bool(message))
+        if message:
+            self.error_label.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _update_group_titles(self) -> None:
+        for index, editor in enumerate(self.group_editors, start=1):
+            editor.setTitle(f"Group {index}")
+
+    def _update_condition_limits(self) -> None:
+        condition_count = sum(
+            len(group.condition_rows) for group in self.group_editors
+        )
+        can_add = condition_count < MAX_FILTER_CONDITIONS
+        for group in self.group_editors:
+            group.set_total_add_allowed(can_add)
+        self.add_group_button.setEnabled(
+            len(self.group_editors) < MAX_FILTER_GROUPS and can_add
+        )
+
+    # Stage 5 flat-draft compatibility surface. The dialog uses expressions.
+    def add_condition(self, condition: FilterCondition | None = None) -> FilterConditionRow:
+        return self.group_editors[0].add_condition(condition)
+
+    def clear_conditions(self) -> None:
+        self.set_conditions(())
+
+    def set_conditions(self, conditions: tuple[FilterCondition, ...]) -> None:
+        group = FilterGroup("legacy-flat", "all", tuple(conditions))
+        self.set_expression(
+            FilterExpression("all", (group,)) if conditions else FilterExpression()
+        )
+
+    def conditions(self) -> tuple[FilterCondition, ...]:
+        return tuple(
+            condition
+            for group in self.expression().groups
+            for condition in group.conditions
+        )
+
+
+__all__ = [
+    "FilterConditionRow",
+    "FilterGroupEditor",
+    "FilterPanel",
+    "operator_label",
+]
