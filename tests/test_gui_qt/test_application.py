@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 from pandas.testing import assert_frame_equal
+from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication, QLabel, QTableView
 
 from core.app_services import build_app_services
@@ -20,13 +21,35 @@ from gui_qt.application import (
 )
 
 
-def test_get_or_create_qapplication_reuses_single_fusion_instance(qapp):
-    app = get_or_create_qapplication(["easyqc-test"])
+def test_get_or_create_qapplication_reuses_instance_without_overriding_host_theme(qapp):
+    original_stylesheet = qapp.styleSheet()
+    original_font = QFont(qapp.font())
+    original_palette = QPalette(qapp.palette())
+    host_stylesheet = "QWidget { color: #123456; }"
+    host_font = QFont(original_font)
+    host_font.setPointSize(max(8, original_font.pointSize() + 1))
+    host_palette = QPalette(original_palette)
+    host_palette.setColor(QPalette.ColorRole.Window, QColor("#abcdef"))
+    qapp.setStyleSheet(host_stylesheet)
+    qapp.setFont(host_font)
+    qapp.setPalette(host_palette)
+    style_before = qapp.style()
 
-    assert app is qapp
-    assert QApplication.instance() is app
-    assert app.property("easyqcBaseStyle") == "Fusion"
-    assert app.applicationName() == "EasyQC"
+    try:
+        app = get_or_create_qapplication(["easyqc-test"])
+
+        assert app is qapp
+        assert QApplication.instance() is app
+        assert app.style() is style_before
+        assert app.styleSheet() == host_stylesheet
+        assert app.font() == host_font
+        assert app.palette() == host_palette
+        assert app.applicationName() == "EasyQC"
+        assert app.organizationName() == "EasyQC"
+    finally:
+        qapp.setStyleSheet(original_stylesheet)
+        qapp.setFont(original_font)
+        qapp.setPalette(original_palette)
 
 
 def test_preview_window_renders_injected_core_table_and_closes_cleanly(qtbot, tmp_path):

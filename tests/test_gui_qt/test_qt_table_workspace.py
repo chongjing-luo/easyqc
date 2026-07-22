@@ -6,8 +6,15 @@ from dataclasses import replace
 
 import pandas as pd
 from pandas.testing import assert_frame_equal
-from PySide6.QtCore import QPoint, Qt
-from PySide6.QtWidgets import QDialogButtonBox, QTabWidget
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, Qt
+from PySide6.QtWidgets import (
+    QDialogButtonBox,
+    QScrollArea,
+    QSplitter,
+    QTabWidget,
+    QToolBar,
+    QToolButton,
+)
 
 from core.table_view_service import TableViewError, TableViewService
 from gui_qt.table_workspace import QtTableWorkspace
@@ -37,6 +44,209 @@ def _full_result_frame(workspace: QtTableWorkspace) -> pd.DataFrame:
         0,
         max(1, workspace.result.matched_total),
     ).dataframe
+
+
+def test_table_uses_standard_overflow_toolbars_without_fixed_chip_geometry(qtbot):
+    workspace = QtTableWorkspace(_source())
+    qtbot.addWidget(workspace)
+    workspace.resize(360, 560)
+    workspace.show()
+    qtbot.waitUntil(lambda: workspace.width() == 360)
+
+    action_toolbar = workspace.findChild(QToolBar, "tableToolbar")
+    applied_toolbar = workspace.findChild(QToolBar, "appliedFilterChips")
+    extension = action_toolbar.findChild(QToolButton, "qt_toolbar_ext_button")
+
+    assert action_toolbar is workspace.action_toolbar
+    assert applied_toolbar is workspace.applied_toolbar
+    assert extension is not None and extension.isVisible()
+    assert action_toolbar.isMovable() is False
+    assert applied_toolbar.isMovable() is False
+    assert applied_toolbar.minimumHeight() < applied_toolbar.maximumHeight()
+    assert workspace.findChild(QScrollArea, "appliedFilterChips") is None
+    assert workspace.findChild(QSplitter, "tableWorkspaceSplitter") is None
+    assert workspace.findChild(QTabWidget, "tableInspector") is None
+    assert len(workspace.critical_shortcuts) == len(workspace.critical_actions)
+    assert all(shortcut.key().toString() for shortcut in workspace.critical_shortcuts)
+
+
+def test_applied_filter_actions_use_toolbar_overflow_and_remain_removable(qtbot):
+    workspace = QtTableWorkspace(_source())
+    qtbot.addWidget(workspace)
+    workspace.resize(300, 560)
+    workspace.show()
+    workspace.begin_filter_edit()
+    workspace.set_filter_draft(
+        (
+            FilterCondition("site", "==", "A", "site-a"),
+            FilterCondition("age", ">", 25, "age-over-25"),
+            FilterCondition("passed", "==", True, "passed-only"),
+        )
+    )
+    assert workspace.apply_filter_draft()
+    qtbot.waitUntil(lambda: workspace.applied_toolbar.isVisible())
+
+    extension = workspace.applied_toolbar.findChild(
+        QToolButton,
+        "qt_toolbar_ext_button",
+    )
+    assert extension is not None and extension.isVisible()
+    assert [action.data() for action in workspace.applied_toolbar.actions()] == [
+        "site-a",
+        "age-over-25",
+        "passed-only",
+    ]
+
+    workspace.applied_toolbar.actions()[0].trigger()
+
+    assert all(
+        condition.condition_id != "site-a"
+        for condition in workspace.applied_state.conditions
+    )
+    assert workspace.filter_count == 2
+
+
+def test_multi_pinned_width_uses_all_sections_and_caps_at_45_percent(qtbot):
+    workspace = QtTableWorkspace(_source())
+    qtbot.addWidget(workspace)
+    workspace.resize(640, 560)
+    workspace.show()
+    assert workspace.apply_column_state(
+        ColumnViewState(
+            order=("ezqcid", "age", "site", "passed"),
+            widths=(("ezqcid", 260), ("age", 240), ("site", 132), ("passed", 132)),
+            pinned=("ezqcid", "age"),
+        )
+    )
+    qtbot.waitUntil(lambda: workspace.pinned_view.horizontalScrollBar().maximum() > 0)
+
+    surface_width = workspace.table_surface.contentsRect().width()
+    cap = int(surface_width * workspace.PINNED_SURFACE_FRACTION)
+    expected_content = (
+        workspace.pinned_view.horizontalHeader().sectionSize(0)
+        + workspace.pinned_view.horizontalHeader().sectionSize(1)
+        + workspace.pinned_view.verticalHeader().width()
+        + 2 * workspace.pinned_view.frameWidth()
+    )
+
+    assert workspace._pinned_content_width() == expected_content
+    assert workspace.pinned_view.width() == min(expected_content, cap)
+    assert workspace.pinned_view.width() <= cap
+    assert (
+        workspace.pinned_view.horizontalScrollBarPolicy()
+        == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    )
+    assert workspace.pinned_view.horizontalScrollBar().maximum() > 0
+
+
+def test_pinned_width_recomputes_after_resize_and_section_change(qtbot):
+    workspace = QtTableWorkspace(_source())
+    qtbot.addWidget(workspace)
+    workspace.resize(1200, 560)
+    workspace.show()
+    assert workspace.apply_column_state(
+        ColumnViewState(
+            order=("ezqcid", "age", "site", "passed"),
+            widths=(("ezqcid", 220), ("age", 200)),
+            pinned=("ezqcid", "age"),
+        )
+    )
+    qtbot.waitUntil(
+        lambda: workspace.pinned_view.width() == workspace._pinned_content_width()
+    )
+    expanded_width = workspace.pinned_view.width()
+
+    workspace.resize(520, 560)
+    qtbot.waitUntil(lambda: workspace.pinned_view.width() < expanded_width)
+    assert workspace.pinned_view.width() <= int(
+        workspace.table_surface.contentsRect().width()
+        * workspace.PINNED_SURFACE_FRACTION
+    )
+
+    before_section_resize = workspace._pinned_content_width()
+    workspace.pinned_view.setColumnWidth(1, 300)
+    qtbot.waitUntil(
+        lambda: workspace._pinned_content_width() > before_section_resize
+    )
+    assert workspace.pinned_view.width() <= int(
+        workspace.table_surface.contentsRect().width()
+        * workspace.PINNED_SURFACE_FRACTION
+    )
+
+
+def test_font_style_and_screen_events_schedule_pinned_width_recompute(
+    qtbot,
+    monkeypatch,
+):
+    workspace = QtTableWorkspace(_source())
+    qtbot.addWidget(workspace)
+    workspace.show()
+    events = []
+    monkeypatch.setattr(
+        workspace,
+        "_schedule_pinned_width_update",
+        lambda: events.append("scheduled"),
+    )
+
+    for event_type in (
+        QEvent.Type.FontChange,
+        QEvent.Type.StyleChange,
+        QEvent.Type.ScreenChangeInternal,
+    ):
+        QCoreApplication.sendEvent(workspace, QEvent(event_type))
+
+    assert events == ["scheduled", "scheduled", "scheduled"]
+
+
+def test_narrow_toolbar_actions_are_keyboard_reachable(qtbot):
+    opened = []
+    workspace = QtTableWorkspace(_source(), on_open_qc=opened.append)
+    qtbot.addWidget(workspace)
+    workspace.resize(360, 560)
+    workspace.show()
+    qtbot.waitUntil(lambda: workspace.width() == 360)
+    workspace.activateWindow()
+    workspace.table_view.setFocus()
+    qtbot.waitUntil(workspace.table_view.hasFocus)
+
+    qtbot.keyClick(
+        workspace.table_view,
+        Qt.Key.Key_F,
+        Qt.KeyboardModifier.ControlModifier,
+    )
+    assert "exact ezqcid" in workspace.error_text
+
+    qtbot.keyClick(
+        workspace.table_view,
+        Qt.Key.Key_F,
+        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+    )
+    assert workspace.filter_dialog is not None and workspace.filter_dialog.isVisible()
+    workspace.filter_dialog.reject()
+
+    qtbot.keyClick(
+        workspace.table_view,
+        Qt.Key.Key_S,
+        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+    )
+    assert workspace.sort_dialog is not None and workspace.sort_dialog.isVisible()
+    workspace.sort_dialog.reject()
+
+    qtbot.keyClick(
+        workspace.table_view,
+        Qt.Key.Key_C,
+        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+    )
+    assert workspace.columns_dialog is not None and workspace.columns_dialog.isVisible()
+    workspace.columns_dialog.reject()
+
+    assert workspace.select_source_position(0)
+    qtbot.keyClick(
+        workspace.table_view,
+        Qt.Key.Key_Return,
+        Qt.KeyboardModifier.ControlModifier,
+    )
+    assert opened == ["SUB001"]
 
 
 def test_filter_draft_cancel_apply_and_invalid_input_preserve_last_result(qtbot):
@@ -351,6 +561,7 @@ def test_multi_sort_header_state_and_column_layout_are_applied(qtbot):
     assert workspace.pinned_view is not None
     assert workspace.pinned_view.isColumnHidden(0) is False
     assert workspace.table_view.isColumnHidden(0) is True
+    assert workspace.applied_state.columns.width_for("site") == 211
 
 
 def test_sort_dialog_cancel_duplicate_and_apply_are_transactional(qtbot):

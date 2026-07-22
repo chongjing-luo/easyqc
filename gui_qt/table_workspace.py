@@ -7,8 +7,8 @@ from dataclasses import replace
 from typing import Any
 
 import pandas as pd
-from PySide6.QtCore import QItemSelectionModel, Qt, Slot
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtCore import QEvent, QItemSelectionModel, QTimer, Qt, Slot
+from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -17,13 +17,12 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLayout,
     QLineEdit,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
-    QSplitter,
     QTableView,
-    QToolButton,
+    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -49,6 +48,8 @@ from models.table_view_state import (
 class QtTableWorkspace(QWidget):
     """Coordinate typed view state, bounded rendering and identity-safe actions."""
 
+    PINNED_SURFACE_FRACTION = 0.45
+
     def __init__(
         self,
         source: pd.DataFrame,
@@ -63,6 +64,7 @@ class QtTableWorkspace(QWidget):
             raise TypeError("QtTableWorkspace source must be a pandas DataFrame")
         self.setObjectName("qtTableWorkspace")
         self.setAccessibleName("EasyQC Table workspace")
+        self._pinned_width_update_pending = False
         self.service = TableViewService(source)
         if background_row_threshold <= 0:
             raise ValueError("background_row_threshold must be greater than zero")
@@ -96,7 +98,7 @@ class QtTableWorkspace(QWidget):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
 
         title_row = QHBoxLayout()
         table_title = QLabel("Subjects", self)
@@ -110,48 +112,78 @@ class QtTableWorkspace(QWidget):
         title_row.addWidget(self.count_label)
         layout.addLayout(title_row)
 
-        toolbar = QFrame(self)
-        toolbar.setObjectName("tableToolbar")
-        toolbar_layout = QHBoxLayout(toolbar)
-        toolbar_layout.setContentsMargins(10, 8, 10, 8)
-        toolbar_layout.setSpacing(6)
-        self.filter_button = QPushButton("Filter", toolbar)
-        self.sort_button = QPushButton("Sort", toolbar)
-        self.columns_button = QPushButton("Columns", toolbar)
+        self.action_toolbar = QToolBar("Table actions", self)
+        self.action_toolbar.setObjectName("tableToolbar")
+        self.action_toolbar.setAccessibleName("Table actions")
+        self.action_toolbar.setMovable(False)
+        self.action_toolbar.setFloatable(False)
+        self.action_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self._toolbar_shortcuts: list[QShortcut] = []
+
+        self.filter_action = self._add_toolbar_action(
+            self.action_toolbar,
+            "Filter",
+            QKeySequence("Ctrl+Shift+F"),
+            self.open_filter_dialog,
+        )
+        self.sort_action = self._add_toolbar_action(
+            self.action_toolbar,
+            "Sort",
+            QKeySequence("Ctrl+Shift+S"),
+            self.open_sort_dialog,
+        )
+        self.columns_action = self._add_toolbar_action(
+            self.action_toolbar,
+            "Columns",
+            QKeySequence("Ctrl+Shift+C"),
+            self.open_columns_dialog,
+        )
+        self.action_toolbar.addSeparator()
+        self.filter_button = self.action_toolbar.widgetForAction(self.filter_action)
+        self.sort_button = self.action_toolbar.widgetForAction(self.sort_action)
+        self.columns_button = self.action_toolbar.widgetForAction(self.columns_action)
         self.filter_button.setObjectName("filterButton")
         self.sort_button.setObjectName("sortButton")
         self.columns_button.setObjectName("columnsButton")
-        toolbar_layout.addWidget(self.filter_button)
-        toolbar_layout.addWidget(self.sort_button)
-        toolbar_layout.addWidget(self.columns_button)
-        toolbar_layout.addStretch(1)
-        self.find_edit = QLineEdit(toolbar)
+        self.find_edit = QLineEdit(self.action_toolbar)
         self.find_edit.setObjectName("findIdentity")
+        self.find_edit.setAccessibleName("Exact ezqcid to find")
         self.find_edit.setPlaceholderText("Find exact ezqcid")
         self.find_edit.setClearButtonEnabled(True)
-        self.find_button = QPushButton("Find", toolbar)
-        self.open_qc_button = QPushButton("Open QC…", toolbar)
+        self.action_toolbar.addWidget(self.find_edit)
+        self.find_action = self._add_toolbar_action(
+            self.action_toolbar,
+            "Find",
+            QKeySequence("Ctrl+F"),
+            lambda: self.find_identity_exact(self.find_edit.text()),
+        )
+        self.open_qc_action = self._add_toolbar_action(
+            self.action_toolbar,
+            "Open QC…",
+            QKeySequence("Ctrl+Return"),
+            self.open_selected_qc,
+        )
+        self.find_button = self.action_toolbar.widgetForAction(self.find_action)
+        self.open_qc_button = self.action_toolbar.widgetForAction(self.open_qc_action)
         self.open_qc_button.setObjectName("primaryAction")
         self.open_qc_button.setAccessibleName("Open selected subject QC")
-        toolbar_layout.addWidget(self.find_edit)
-        toolbar_layout.addWidget(self.find_button)
-        toolbar_layout.addWidget(self.open_qc_button)
-        layout.addWidget(toolbar)
+        self.critical_actions = (
+            self.filter_action,
+            self.sort_action,
+            self.columns_action,
+            self.find_action,
+            self.open_qc_action,
+        )
+        self.critical_shortcuts = tuple(self._toolbar_shortcuts)
+        layout.addWidget(self.action_toolbar)
 
-        self.chips_scroll = QScrollArea(self)
-        self.chips_scroll.setObjectName("appliedFilterChips")
-        self.chips_scroll.setWidgetResizable(True)
-        self.chips_scroll.setFrameShape(QFrame.NoFrame)
-        self.chips_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.chips_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.chips_host = QWidget(self.chips_scroll)
-        self.chips_layout = QHBoxLayout(self.chips_host)
-        self.chips_layout.setContentsMargins(0, 0, 0, 0)
-        self.chips_layout.setSpacing(6)
-        self.chips_layout.addStretch(1)
-        self.chips_scroll.setWidget(self.chips_host)
-        self.chips_scroll.setFixedHeight(36)
-        layout.addWidget(self.chips_scroll)
+        self.applied_toolbar = QToolBar("Applied view", self)
+        self.applied_toolbar.setObjectName("appliedFilterChips")
+        self.applied_toolbar.setAccessibleName("Applied filters")
+        self.applied_toolbar.setMovable(False)
+        self.applied_toolbar.setFloatable(False)
+        self.applied_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        layout.addWidget(self.applied_toolbar)
 
         self.empty_state_label = QLabel(
             "No project table is connected to Qt Preview. Use the default GUI for real QC.",
@@ -162,10 +194,9 @@ class QtTableWorkspace(QWidget):
         self.empty_state_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.empty_state_label)
 
-        self.splitter = QSplitter(Qt.Horizontal, self)
-        self.splitter.setObjectName("tableWorkspaceSplitter")
-        self.table_surface = QFrame(self.splitter)
+        self.table_surface = QFrame(self)
         self.table_surface.setObjectName("tableSurface")
+        self.table_surface.setMinimumWidth(0)
         table_layout = QHBoxLayout(self.table_surface)
         table_layout.setContentsMargins(0, 0, 0, 0)
         table_layout.setSpacing(0)
@@ -185,21 +216,22 @@ class QtTableWorkspace(QWidget):
         self.table_view.setModel(self.table_model)
         self.pinned_view.setModel(self.table_model)
         self.pinned_view.setSelectionModel(self.table_view.selectionModel())
-        self.pinned_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.pinned_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.pinned_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.pinned_view.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.pinned_view.verticalHeader().setVisible(True)
         self.table_view.verticalHeader().setVisible(False)
-        self.pinned_view.horizontalHeader().setStretchLastSection(True)
+        self.pinned_view.horizontalHeader().setStretchLastSection(False)
         self.table_view.horizontalHeader().setStretchLastSection(False)
         self.table_view.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.pinned_view.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.pinned_view.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self.pinned_view.setMinimumWidth(0)
+        self.table_view.setMinimumWidth(0)
         table_layout.addWidget(self.pinned_view)
         table_layout.addWidget(self.table_view, 1)
 
-        self.splitter.addWidget(self.table_surface)
-        self.splitter.setStretchFactor(0, 1)
-        layout.addWidget(self.splitter, 1)
+        layout.addWidget(self.table_surface, 1)
 
         footer = QFrame(self)
         footer.setObjectName("tableFooter")
@@ -209,6 +241,14 @@ class QtTableWorkspace(QWidget):
         self.columns_status_label = QLabel("", footer)
         self.sort_status_label = QLabel("", footer)
         self.selection_status_label = QLabel("No row selected", footer)
+        for status_label in (
+            self.range_label,
+            self.columns_status_label,
+            self.sort_status_label,
+            self.selection_status_label,
+        ):
+            status_label.setMinimumWidth(0)
+            status_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         footer_layout.addWidget(self.range_label)
         footer_layout.addWidget(self.columns_status_label)
         footer_layout.addWidget(self.sort_status_label)
@@ -233,12 +273,7 @@ class QtTableWorkspace(QWidget):
         self.error_label.setAccessibleName("Table action error")
         layout.addWidget(self.error_label)
 
-        self.filter_button.clicked.connect(self.open_filter_dialog)
-        self.sort_button.clicked.connect(self.open_sort_dialog)
-        self.columns_button.clicked.connect(self.open_columns_dialog)
-        self.find_button.clicked.connect(lambda: self.find_identity_exact(self.find_edit.text()))
         self.find_edit.returnPressed.connect(lambda: self.find_identity_exact(self.find_edit.text()))
-        self.open_qc_button.clicked.connect(self.open_selected_qc)
         self.previous_button.clicked.connect(self.previous_page)
         self.next_button.clicked.connect(self.next_page)
         self.page_size_combo.currentIndexChanged.connect(self._page_size_changed)
@@ -251,6 +286,23 @@ class QtTableWorkspace(QWidget):
         self.table_view.verticalScrollBar().valueChanged.connect(self.pinned_view.verticalScrollBar().setValue)
         self.pinned_view.verticalScrollBar().valueChanged.connect(self.table_view.verticalScrollBar().setValue)
 
+    def _add_toolbar_action(
+        self,
+        toolbar: QToolBar,
+        text: str,
+        shortcut: QKeySequence,
+        callback: Callable[[], Any],
+    ) -> QAction:
+        action = QAction(text, toolbar)
+        action.setToolTip(f"{text} ({shortcut.toString(QKeySequence.NativeText)})")
+        action.triggered.connect(callback)
+        toolbar.addAction(action)
+        shortcut_binding = QShortcut(shortcut, self)
+        shortcut_binding.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        shortcut_binding.activated.connect(callback)
+        self._toolbar_shortcuts.append(shortcut_binding)
+        return action
+
     @staticmethod
     def _configure_table(table: QTableView) -> None:
         table.setAlternatingRowColors(True)
@@ -259,9 +311,56 @@ class QtTableWorkspace(QWidget):
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setSortingEnabled(False)
         table.setWordWrap(False)
-        table.verticalHeader().setDefaultSectionSize(30)
-        table.horizontalHeader().setMinimumSectionSize(72)
         table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+    def event(self, event: QEvent) -> bool:
+        handled = super().event(event)
+        if event.type() in (
+            QEvent.Type.FontChange,
+            QEvent.Type.StyleChange,
+            QEvent.Type.ScreenChangeInternal,
+        ) and hasattr(self, "table_surface"):
+            self._schedule_pinned_width_update()
+        return handled
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "table_surface"):
+            self._schedule_pinned_width_update()
+
+    def _schedule_pinned_width_update(self) -> None:
+        if self._pinned_width_update_pending:
+            return
+        self._pinned_width_update_pending = True
+        QTimer.singleShot(0, self._apply_scheduled_pinned_width_update)
+
+    def _apply_scheduled_pinned_width_update(self) -> None:
+        self._pinned_width_update_pending = False
+        self._update_pinned_view_width()
+
+    def _pinned_content_width(self) -> int:
+        """Return the current metric-derived width of all pinned sections."""
+
+        columns = tuple(str(column) for column in self.table_model.snapshot().columns)
+        pinned = set(self.applied_state.columns.pinned)
+        header = self.pinned_view.horizontalHeader()
+        sections_width = sum(
+            header.sectionSize(section)
+            for section, column in enumerate(columns)
+            if column in pinned and not header.isSectionHidden(section)
+        )
+        return (
+            sections_width
+            + self.pinned_view.verticalHeader().width()
+            + 2 * self.pinned_view.frameWidth()
+        )
+
+    def _update_pinned_view_width(self) -> None:
+        if not self.pinned_view.isVisibleTo(self):
+            return
+        available_width = max(0, self.table_surface.contentsRect().width())
+        cap = int(available_width * self.PINNED_SURFACE_FRACTION)
+        self.pinned_view.setFixedWidth(min(self._pinned_content_width(), cap))
 
     @property
     def error_text(self) -> str:
@@ -666,9 +765,22 @@ class QtTableWorkspace(QWidget):
             self.cycle_header_sort(str(columns[section]), additive=additive)
 
     def apply_column_state(self, columns: ColumnViewState) -> bool:
+        current_widths = dict(
+            self._columns_with_current_widths(self.applied_state.columns).widths
+        )
+        current_widths.update(dict(columns.widths))
+        columns = replace(
+            columns,
+            widths=tuple(
+                (column, current_widths[column])
+                for column in columns.order
+                if column in current_widths
+            ),
+        )
         return self._commit_state(
             replace(self.applied_state, columns=columns),
             reset_page=False,
+            capture_current_widths=False,
         )
 
     def _page_size_changed(self) -> None:
@@ -792,11 +904,18 @@ class QtTableWorkspace(QWidget):
         self.on_open_qc(identity)
         return True
 
-    def _commit_state(self, candidate: TableViewState, *, reset_page: bool) -> bool:
-        candidate = replace(
-            candidate,
-            columns=self._columns_with_current_widths(candidate.columns),
-        )
+    def _commit_state(
+        self,
+        candidate: TableViewState,
+        *,
+        reset_page: bool,
+        capture_current_widths: bool = True,
+    ) -> bool:
+        if capture_current_widths:
+            candidate = replace(
+                candidate,
+                columns=self._columns_with_current_widths(candidate.columns),
+            )
         next_state = replace(candidate, revision=self.applied_state.revision + 1)
         try:
             validated_state = self.service.validate_state(next_state)
@@ -912,11 +1031,10 @@ class QtTableWorkspace(QWidget):
             self.pinned_view.setColumnWidth(index, width)
             self.pinned_view.setColumnHidden(index, str(column) not in pinned)
             self.table_view.setColumnHidden(index, str(column) in pinned)
-        has_pinned = bool(visible and str(visible[0]) in pinned)
+        has_pinned = any(str(column) in pinned for column in visible)
         self.pinned_view.setVisible(has_pinned)
         if has_pinned:
-            width = self.applied_state.columns.width_for(str(visible[0]), 132)
-            self.pinned_view.setFixedWidth(width + self.pinned_view.verticalHeader().sizeHint().width() + 2)
+            self._schedule_pinned_width_update()
 
         header = self.table_view.horizontalHeader()
         if self.applied_state.sort_rules:
@@ -934,15 +1052,13 @@ class QtTableWorkspace(QWidget):
         else:
             header.setSortIndicatorShown(False)
 
-    def _pinned_section_resized(self, section: int, _old: int, size: int) -> None:
+    def _pinned_section_resized(self, section: int, _old: int, _size: int) -> None:
         columns = tuple(str(column) for column in self.table_model.snapshot().columns)
         if (
             0 <= section < len(columns)
             and columns[section] in self.applied_state.columns.pinned
         ):
-            self.pinned_view.setFixedWidth(
-                size + self.pinned_view.verticalHeader().sizeHint().width() + 2
-            )
+            self._schedule_pinned_width_update()
 
     def _restore_selection(self) -> None:
         selection_model = self.table_view.selectionModel()
@@ -964,21 +1080,23 @@ class QtTableWorkspace(QWidget):
         self.selection_outside_view = False
 
     def _render_chips(self) -> None:
-        while self.chips_layout.count() > 1:
-            item = self.chips_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        for action in self.applied_toolbar.actions():
+            self.applied_toolbar.removeAction(action)
+            action.deleteLater()
         for condition in self.applied_state.conditions:
-            chip = QToolButton(self.chips_host)
-            chip.setObjectName("filterChip")
-            chip.setText(f"{self._condition_summary(condition)}  ×")
-            chip.setAccessibleName(f"Remove filter {self._condition_summary(condition)}")
-            chip.clicked.connect(
+            summary = self._condition_summary(condition)
+            action = QAction(f"{summary}  ×", self.applied_toolbar)
+            action.setData(condition.condition_id)
+            action.setToolTip(f"Remove filter {summary}")
+            action.triggered.connect(
                 lambda _checked=False, condition_id=condition.condition_id: self.remove_applied_condition(condition_id)
             )
-            self.chips_layout.insertWidget(self.chips_layout.count() - 1, chip)
-        self.chips_scroll.setVisible(bool(self.applied_state.conditions))
+            self.applied_toolbar.addAction(action)
+            chip = self.applied_toolbar.widgetForAction(action)
+            if chip is not None:
+                chip.setObjectName("filterChip")
+                chip.setAccessibleName(f"Remove filter {summary}")
+        self.applied_toolbar.setVisible(bool(self.applied_state.conditions))
 
     @staticmethod
     def _condition_summary(condition: FilterCondition) -> str:
@@ -1000,9 +1118,9 @@ class QtTableWorkspace(QWidget):
         visible = len(self.applied_state.columns.visible_columns)
         column_total = len(self.applied_state.columns.order)
         self.columns_status_label.setText(f"Columns {visible}/{column_total}")
-        self.filter_button.setText(f"Filter ({len(self.applied_state.conditions)})")
-        self.sort_button.setText(f"Sort ({len(self.applied_state.sort_rules)})")
-        self.columns_button.setText(f"Columns ({visible}/{column_total})")
+        self.filter_action.setText(f"Filter ({len(self.applied_state.conditions)})")
+        self.sort_action.setText(f"Sort ({len(self.applied_state.sort_rules)})")
+        self.columns_action.setText(f"Columns ({visible}/{column_total})")
         self.sort_status_label.setText(
             " · ".join(
                 f"{priority} {rule.column} {'↑' if rule.ascending else '↓'}"
@@ -1027,7 +1145,7 @@ class QtTableWorkspace(QWidget):
             self.page_offset + self.applied_state.page_size < self.result.matched_total
         )
         has_current_selection = bool(self.table_view.selectionModel().selectedRows())
-        self.open_qc_button.setEnabled(self.on_open_qc is not None and has_current_selection)
+        self.open_qc_action.setEnabled(self.on_open_qc is not None and has_current_selection)
 
     def _set_error(self, message: str) -> None:
         self.error_label.setText(message)

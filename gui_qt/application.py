@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from core.app_services import AppServices, build_app_services
 from gui_qt.main_window import QtMainWindow
-from gui_qt.theme import apply_application_theme
+from gui_qt.theme import configure_application_identity
 from utils.logger import get_logging_status
 
 
@@ -32,12 +32,12 @@ def schedule_qt_startup_warning(window, message: str | None) -> None:
 
 
 def get_or_create_qapplication(argv: Sequence[str] | None = None) -> QApplication:
-    """Return the process's sole QApplication and apply EasyQC content style."""
+    """Return the sole QApplication without overriding its platform theme."""
 
     app = QApplication.instance()
     if app is None:
         app = QApplication(list(argv or sys.argv))
-    apply_application_theme(app)
+    configure_application_identity(app)
     return app
 
 
