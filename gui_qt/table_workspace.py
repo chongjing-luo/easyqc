@@ -4,15 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
+from threading import Event
 from typing import Any
 
 import pandas as pd
-from PySide6.QtCore import QEvent, QItemSelectionModel, QTimer, Qt, Slot
+from PySide6.QtCore import QEvent, QItemSelectionModel, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QComboBox,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -27,6 +30,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.table_export_service import (
+    DEFAULT_EXPORT_CHUNK_ROWS,
+    ExportReceipt,
+    TableExportCancelled,
+    TableExportError,
+    TableExportService,
+)
 from core.table_view_service import QcIdentityError, TableViewError, TableViewService
 from gui_qt.columns_dialog import ColumnsDialog
 from gui_qt.filter_dialog import FilterDialog
@@ -48,6 +58,7 @@ from models.table_view_state import (
 class QtTableWorkspace(QWidget):
     """Coordinate typed view state, bounded rendering and identity-safe actions."""
 
+    exportProgress = Signal(int, int, int)
     PINNED_SURFACE_FRACTION = 0.45
 
     def __init__(
@@ -66,6 +77,7 @@ class QtTableWorkspace(QWidget):
         self.setAccessibleName("EasyQC Table workspace")
         self._pinned_width_update_pending = False
         self.service = TableViewService(source)
+        self.export_service = TableExportService(self.service)
         if background_row_threshold <= 0:
             raise ValueError("background_row_threshold must be greater than zero")
         self.background_row_threshold = int(background_row_threshold)
@@ -73,8 +85,16 @@ class QtTableWorkspace(QWidget):
         self.task_controller.resultReady.connect(self._accept_background_result)
         self.task_controller.errorRaised.connect(self._handle_background_error)
         self.task_controller.busyChanged.connect(self._set_background_busy)
+        self.export_task_controller = RevisionedTaskController(self)
+        self.export_task_controller.resultReady.connect(self._accept_export_result)
+        self.export_task_controller.errorRaised.connect(self._handle_export_error)
+        self.export_task_controller.busyChanged.connect(self._set_export_busy)
+        self.exportProgress.connect(self._update_export_progress)
         self._pending_state: TableViewState | None = None
         self._pending_reset_page = False
+        self._export_cancel_event: Event | None = None
+        self._export_revision: int | None = None
+        self.last_export_receipt: ExportReceipt | None = None
         self.on_open_qc = on_open_qc
         self.initial_state = self.service.default_state(page_size=page_size)
         self.applied_state = self.initial_state
@@ -157,6 +177,19 @@ class QtTableWorkspace(QWidget):
             QKeySequence("Ctrl+F"),
             lambda: self.find_identity_exact(self.find_edit.text()),
         )
+        self.export_action = self._add_toolbar_action(
+            self.action_toolbar,
+            "Export…",
+            QKeySequence("Ctrl+E"),
+            self._choose_export_destination,
+        )
+        self.cancel_export_action = self._add_toolbar_action(
+            self.action_toolbar,
+            "Cancel export",
+            QKeySequence("Ctrl+Shift+E"),
+            self.cancel_export,
+        )
+        self.cancel_export_action.setVisible(False)
         self.open_qc_action = self._add_toolbar_action(
             self.action_toolbar,
             "Open QC…",
@@ -172,6 +205,8 @@ class QtTableWorkspace(QWidget):
             self.sort_action,
             self.columns_action,
             self.find_action,
+            self.export_action,
+            self.cancel_export_action,
             self.open_qc_action,
         )
         self.critical_shortcuts = tuple(self._toolbar_shortcuts)
@@ -240,11 +275,14 @@ class QtTableWorkspace(QWidget):
         self.range_label = QLabel("", footer)
         self.columns_status_label = QLabel("", footer)
         self.sort_status_label = QLabel("", footer)
+        self.export_status_label = QLabel("", footer)
+        self.export_status_label.setAccessibleName("Table export status")
         self.selection_status_label = QLabel("No row selected", footer)
         for status_label in (
             self.range_label,
             self.columns_status_label,
             self.sort_status_label,
+            self.export_status_label,
             self.selection_status_label,
         ):
             status_label.setMinimumWidth(0)
@@ -252,6 +290,7 @@ class QtTableWorkspace(QWidget):
         footer_layout.addWidget(self.range_label)
         footer_layout.addWidget(self.columns_status_label)
         footer_layout.addWidget(self.sort_status_label)
+        footer_layout.addWidget(self.export_status_label)
         footer_layout.addStretch(1)
         footer_layout.addWidget(self.selection_status_label)
         footer_layout.addWidget(QLabel("Rows", footer))
@@ -299,7 +338,7 @@ class QtTableWorkspace(QWidget):
         toolbar.addAction(action)
         shortcut_binding = QShortcut(shortcut, self)
         shortcut_binding.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        shortcut_binding.activated.connect(callback)
+        shortcut_binding.activated.connect(action.trigger)
         self._toolbar_shortcuts.append(shortcut_binding)
         return action
 
@@ -499,6 +538,7 @@ class QtTableWorkspace(QWidget):
         self._pending_state = None
         self._pending_reset_page = False
         self.service = service
+        self.export_service = TableExportService(service)
         self.initial_state = service.default_state(page_size=previous.page_size)
         candidate = (
             self._compatible_state(previous, service)
@@ -783,6 +823,124 @@ class QtTableWorkspace(QWidget):
             capture_current_widths=False,
         )
 
+    def _choose_export_destination(self) -> None:
+        destination, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export applied table",
+            "",
+            "CSV files (*.csv)",
+        )
+        if destination:
+            self.start_export(destination)
+
+    def start_export(
+        self,
+        destination: str | Path,
+        *,
+        chunk_size: int = DEFAULT_EXPORT_CHUNK_ROWS,
+    ) -> bool:
+        """Submit one captured applied-result export without blocking Qt."""
+
+        if self.export_task_controller.busy:
+            self._set_error("A table export is already running")
+            return False
+        try:
+            output_path = Path(destination)
+        except TypeError:
+            self._set_error("Export destination must be a filesystem path")
+            return False
+        token = Event()
+        revision = self.result.state.revision
+        result = self.result
+        columns = self.applied_state.columns.visible_columns
+        exporter = self.export_service
+        self._export_cancel_event = token
+        self._export_revision = revision
+        self.last_export_receipt = None
+        self.export_status_label.setText(
+            f"Exporting 0 / {result.matched_total:,} rows…"
+        )
+        self._set_error("")
+        self.export_task_controller.submit(
+            revision,
+            lambda: exporter.export_applied_csv(
+                result,
+                columns,
+                output_path,
+                token,
+                lambda completed, total: self.exportProgress.emit(
+                    revision,
+                    completed,
+                    total,
+                ),
+                chunk_size=chunk_size,
+            ),
+        )
+        return True
+
+    def cancel_export(self) -> bool:
+        """Request cooperative cancellation of the current chunked export."""
+
+        if not self.export_task_controller.busy or self._export_cancel_event is None:
+            return False
+        self._export_cancel_event.set()
+        self.export_status_label.setText("Cancelling export…")
+        self.cancel_export_action.setEnabled(False)
+        return True
+
+    @Slot(int, int, int)
+    def _update_export_progress(
+        self,
+        revision: int,
+        completed: int,
+        total: int,
+    ) -> None:
+        if revision != self._export_revision:
+            return
+        self.export_status_label.setText(
+            f"Exporting {completed:,} / {total:,} rows…"
+        )
+
+    @Slot(int, object)
+    def _accept_export_result(self, revision: int, result: object) -> None:
+        if revision != self._export_revision:
+            return
+        if not isinstance(result, ExportReceipt):
+            self._handle_export_error(
+                revision,
+                TableExportError("Background table export returned an invalid receipt"),
+            )
+            return
+        self.last_export_receipt = result
+        self.export_status_label.setText(
+            f"Exported {result.rows:,} rows · {result.destination.name}"
+        )
+        self._set_error("")
+        self._clear_export_request()
+
+    @Slot(int, object)
+    def _handle_export_error(self, revision: int, error: object) -> None:
+        if revision != self._export_revision:
+            return
+        if isinstance(error, TableExportCancelled):
+            self.export_status_label.setText("Export cancelled")
+            self._set_error("")
+        else:
+            message = str(error).strip() or type(error).__name__
+            self.export_status_label.setText("Export failed")
+            self._set_error(message)
+        self._clear_export_request()
+
+    @Slot(bool)
+    def _set_export_busy(self, busy: bool) -> None:
+        self.export_action.setEnabled(not busy)
+        self.cancel_export_action.setVisible(busy)
+        self.cancel_export_action.setEnabled(busy)
+
+    def _clear_export_request(self) -> None:
+        self._export_cancel_event = None
+        self._export_revision = None
+
     def _page_size_changed(self) -> None:
         page_size = self.page_size_combo.currentData()
         if page_size is not None and int(page_size) != self.applied_state.page_size:
@@ -985,6 +1143,9 @@ class QtTableWorkspace(QWidget):
         self._pending_reset_page = False
         self._close_open_dialogs()
         self.task_controller.cancel()
+        if self._export_cancel_event is not None:
+            self._export_cancel_event.set()
+        self.export_task_controller.cancel()
         super().closeEvent(event)
 
     def _columns_with_current_widths(self, columns: ColumnViewState) -> ColumnViewState:

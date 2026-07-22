@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from threading import Event
+import time
 
 import pandas as pd
 from pandas.testing import assert_frame_equal
-from PySide6.QtCore import QCoreApplication, QEvent, QPoint, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QTimer, Qt
 from PySide6.QtWidgets import (
     QDialogButtonBox,
+    QFileDialog,
     QScrollArea,
     QSplitter,
     QTabWidget,
@@ -17,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.table_view_service import TableViewError, TableViewService
+from core.table_export_service import TableExportError
 from gui_qt.table_workspace import QtTableWorkspace
 from models.table_view_state import (
     ColumnViewState,
@@ -247,6 +251,277 @@ def test_narrow_toolbar_actions_are_keyboard_reachable(qtbot):
         Qt.KeyboardModifier.ControlModifier,
     )
     assert opened == ["SUB001"]
+
+
+def test_export_action_runs_complete_result_in_background_and_reports_receipt(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = QtTableWorkspace(_source(), page_size=2)
+    qtbot.addWidget(workspace)
+    workspace.show()
+    assert workspace.apply_sort_rules((SortRule("site", True), SortRule("age", False)))
+    destination = tmp_path / "applied.csv"
+    expected = _full_result_frame(workspace).loc[
+        :, workspace.applied_state.columns.visible_columns
+    ]
+    before_state = workspace.applied_state
+    before_result = workspace.result
+    progress = []
+    event_loop_ticks = []
+    workspace.exportProgress.connect(
+        lambda revision, completed, total: progress.append(
+            (revision, completed, total)
+        )
+    )
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(destination), "CSV files (*.csv)"),
+    )
+    real_export = workspace.export_service.export_applied_csv
+
+    def delayed_export(*args, **kwargs):
+        time.sleep(0.05)
+        return real_export(*args, **kwargs)
+
+    monkeypatch.setattr(workspace.export_service, "export_applied_csv", delayed_export)
+    QTimer.singleShot(0, lambda: event_loop_ticks.append(True))
+
+    workspace.export_action.trigger()
+
+    assert workspace.export_task_controller.busy
+    assert not workspace.export_action.isEnabled()
+    assert workspace.cancel_export_action.isVisible()
+    qtbot.waitUntil(lambda: workspace.last_export_receipt is not None, timeout=3000)
+
+    actual = pd.read_csv(destination, encoding="utf-8")
+    assert_frame_equal(actual, expected)
+    assert len(actual) == workspace.result.matched_total > len(workspace.row_window.dataframe)
+    assert event_loop_ticks == [True]
+    assert progress[-1] == (
+        before_state.revision,
+        before_result.matched_total,
+        before_result.matched_total,
+    )
+    assert workspace.last_export_receipt.rows == before_result.matched_total
+    assert workspace.last_export_receipt.state_revision == before_state.revision
+    assert "Exported 5 rows" in workspace.export_status_label.text()
+    assert workspace.export_action.isEnabled()
+    assert not workspace.cancel_export_action.isVisible()
+    assert workspace.applied_state is before_state
+    assert workspace.result is before_result
+
+
+def test_cancel_export_preserves_destination_and_restores_actions(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+):
+    source = pd.DataFrame(
+        {
+            "ezqcid": [f"S{index:04d}" for index in range(200)],
+            "value": list(range(200)),
+        }
+    )
+    workspace = QtTableWorkspace(source, page_size=5)
+    qtbot.addWidget(workspace)
+    workspace.show()
+    destination = tmp_path / "existing.csv"
+    original = b"trusted\n"
+    destination.write_bytes(original)
+    before_state = workspace.applied_state
+    before_result = workspace.result
+    progress = []
+    workspace.exportProgress.connect(
+        lambda _revision, completed, total: progress.append((completed, total))
+    )
+    real_get_window = workspace.service.get_window
+
+    def delayed_window(*args, **kwargs):
+        time.sleep(0.01)
+        return real_get_window(*args, **kwargs)
+
+    monkeypatch.setattr(workspace.service, "get_window", delayed_window)
+    assert workspace.start_export(destination, chunk_size=1)
+    qtbot.waitUntil(lambda: bool(progress), timeout=2000)
+
+    workspace.cancel_export_action.trigger()
+
+    qtbot.waitUntil(lambda: not workspace.export_task_controller.busy, timeout=3000)
+    assert destination.read_bytes() == original
+    assert list(tmp_path.glob(f".{destination.name}.*.partial")) == []
+    assert "cancelled" in workspace.export_status_label.text().lower()
+    assert workspace.last_export_receipt is None
+    assert workspace.export_action.isEnabled()
+    assert not workspace.cancel_export_action.isVisible()
+    assert workspace.applied_state is before_state
+    assert workspace.result is before_result
+
+
+def test_export_failure_is_visible_and_keeps_existing_destination(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = QtTableWorkspace(_source())
+    qtbot.addWidget(workspace)
+    destination = tmp_path / "existing.csv"
+    original = b"trusted\n"
+    destination.write_bytes(original)
+
+    def fail_export(*_args, **_kwargs):
+        raise TableExportError("synthetic export failure")
+
+    monkeypatch.setattr(workspace.export_service, "export_applied_csv", fail_export)
+    assert workspace.start_export(destination, chunk_size=1)
+    qtbot.waitUntil(lambda: bool(workspace.error_text), timeout=2000)
+    qtbot.waitUntil(lambda: not workspace.export_task_controller.busy, timeout=2000)
+
+    assert destination.read_bytes() == original
+    assert "synthetic export failure" in workspace.error_text
+    assert "failed" in workspace.export_status_label.text().lower()
+    assert workspace.last_export_receipt is None
+    assert workspace.export_action.isEnabled()
+    assert not workspace.cancel_export_action.isVisible()
+
+
+def test_export_keeps_captured_view_when_workspace_changes(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = QtTableWorkspace(_source(), page_size=2)
+    qtbot.addWidget(workspace)
+    workspace.show()
+    assert workspace.apply_sort_rules((SortRule("site", True), SortRule("age", False)))
+    destination = tmp_path / "captured.csv"
+    captured_result = workspace.result
+    captured_columns = workspace.applied_state.columns.visible_columns
+    captured_frame = workspace.service.get_window(
+        captured_result,
+        0,
+        captured_result.matched_total,
+        captured_columns,
+    ).dataframe
+    entered = Event()
+    release = Event()
+    real_export = workspace.export_service.export_applied_csv
+
+    def gated_export(*args, **kwargs):
+        entered.set()
+        assert release.wait(2)
+        return real_export(*args, **kwargs)
+
+    monkeypatch.setattr(workspace.export_service, "export_applied_csv", gated_export)
+    assert workspace.start_export(destination, chunk_size=2)
+    qtbot.waitUntil(entered.is_set, timeout=2000)
+
+    try:
+        assert workspace.apply_column_state(
+            replace(workspace.applied_state.columns, hidden=("passed",))
+        )
+        assert workspace.apply_sort_rules((SortRule("age", True),))
+        assert workspace.applied_state.revision > captured_result.state.revision
+    finally:
+        release.set()
+    qtbot.waitUntil(lambda: workspace.last_export_receipt is not None, timeout=3000)
+
+    assert_frame_equal(pd.read_csv(destination), captured_frame)
+    assert workspace.last_export_receipt.columns == captured_columns
+    assert (
+        workspace.last_export_receipt.state_revision
+        == captured_result.state.revision
+    )
+    assert workspace.result.state.revision > captured_result.state.revision
+
+
+def test_running_export_rejects_second_request_and_disabled_shortcut(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = QtTableWorkspace(_source())
+    qtbot.addWidget(workspace)
+    workspace.show()
+    workspace.activateWindow()
+    workspace.table_view.setFocus()
+    first_destination = tmp_path / "first.csv"
+    second_destination = tmp_path / "second.csv"
+    entered = Event()
+    release = Event()
+    real_export = workspace.export_service.export_applied_csv
+    dialog_calls = []
+
+    def gated_export(*args, **kwargs):
+        entered.set()
+        assert release.wait(2)
+        return real_export(*args, **kwargs)
+
+    monkeypatch.setattr(workspace.export_service, "export_applied_csv", gated_export)
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (dialog_calls.append(True) or "", ""),
+    )
+    assert workspace.start_export(first_destination, chunk_size=2)
+    qtbot.waitUntil(entered.is_set, timeout=2000)
+
+    try:
+        assert not workspace.start_export(second_destination, chunk_size=2)
+        assert "already running" in workspace.error_text
+        qtbot.keyClick(
+            workspace.table_view,
+            Qt.Key.Key_E,
+            Qt.KeyboardModifier.ControlModifier,
+        )
+        assert dialog_calls == []
+    finally:
+        release.set()
+
+    qtbot.waitUntil(lambda: workspace.last_export_receipt is not None, timeout=3000)
+    assert workspace.last_export_receipt.destination == first_destination
+    assert not second_destination.exists()
+
+
+def test_closing_workspace_cancels_export_and_cleans_partial(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+):
+    workspace = QtTableWorkspace(_source())
+    qtbot.addWidget(workspace)
+    workspace.show()
+    destination = tmp_path / "existing.csv"
+    original = b"trusted\n"
+    destination.write_bytes(original)
+    entered = Event()
+    release = Event()
+    real_get_window = workspace.service.get_window
+
+    def gated_window(*args, **kwargs):
+        entered.set()
+        assert release.wait(2)
+        return real_get_window(*args, **kwargs)
+
+    monkeypatch.setattr(workspace.service, "get_window", gated_window)
+    assert workspace.start_export(destination, chunk_size=1)
+    qtbot.waitUntil(entered.is_set, timeout=2000)
+    assert list(tmp_path.glob(f".{destination.name}.*.partial"))
+
+    try:
+        workspace.close()
+        assert not workspace.export_task_controller.busy
+    finally:
+        release.set()
+    qtbot.waitUntil(
+        lambda: not list(tmp_path.glob(f".{destination.name}.*.partial")),
+        timeout=3000,
+    )
+
+    assert destination.read_bytes() == original
+    assert workspace.last_export_receipt is None
 
 
 def test_filter_draft_cancel_apply_and_invalid_input_preserve_last_result(qtbot):
