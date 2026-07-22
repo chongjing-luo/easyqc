@@ -297,6 +297,79 @@ def test_automated_runner_retains_failed_attempt_and_rejects_overwrite(
     assert after == before
 
 
+def test_automated_runner_retains_and_surfaces_bounded_failure_output(
+    easyqc_root: Path,
+    tmp_path: Path,
+) -> None:
+    request = _request(run_id="runner-diagnostics-001")
+    request_path = tmp_path / "request-diagnostics.json"
+    plan_path = tmp_path / "plan-diagnostics.json"
+    attempt_root = tmp_path / "attempt-diagnostics"
+    plan = AutomatedCheckPlanV1.from_json_object(
+        {
+            "schema_version": 1,
+            "command_version": "platform-v1",
+            "checks": [
+                {
+                    "name": "diagnostic-suite",
+                    "argv": [
+                        sys.executable,
+                        "-c",
+                        (
+                            "import sys;"
+                            "sys.stdout.write('o'*70000+'VISIBLE-STDOUT-MARKER\\n');"
+                            "sys.stderr.write('e'*70000+'VISIBLE-STDERR-MARKER\\n');"
+                            "raise SystemExit(9)"
+                        ),
+                    ],
+                    "timeout_seconds": 30.0,
+                    "report_path": "reports/diagnostic-suite.json",
+                    "classification": "test-report",
+                }
+            ],
+        }
+    )
+    _write(request_path, request.canonical_bytes)
+    _write(plan_path, plan.canonical_bytes)
+
+    completed = _run_script(
+        easyqc_root,
+        tmp_path,
+        "run_platform_verification.py",
+        "--request",
+        str(request_path),
+        "--check-plan",
+        str(plan_path),
+        "--attempt-root",
+        str(attempt_root),
+    )
+
+    assert completed.returncode == 1
+    assert "VISIBLE-STDOUT-MARKER" in completed.stderr
+    assert "VISIBLE-STDERR-MARKER" in completed.stderr
+    stdout_path = attempt_root / "reports" / "diagnostic-suite.stdout.log"
+    stderr_path = attempt_root / "reports" / "diagnostic-suite.stderr.log"
+    assert stdout_path.stat().st_size == 64 * 1024
+    assert stderr_path.stat().st_size == 64 * 1024
+    assert stdout_path.read_text(encoding="utf-8").startswith("[truncated")
+    assert stderr_path.read_text(encoding="utf-8").startswith("[truncated")
+    assert stdout_path.read_text(encoding="utf-8").endswith(
+        "VISIBLE-STDOUT-MARKER\n"
+    )
+    assert stderr_path.read_text(encoding="utf-8").endswith(
+        "VISIBLE-STDERR-MARKER\n"
+    )
+    raw = RawVerificationResultV1.from_canonical_bytes(
+        (attempt_root / "raw-verification-result.json").read_bytes()
+    )
+    assert {
+        (artifact.path, artifact.classification) for artifact in raw.artifacts
+    } >= {
+        ("reports/diagnostic-suite.stdout.log", "log"),
+        ("reports/diagnostic-suite.stderr.log", "log"),
+    }
+
+
 def test_automated_runner_hashes_large_child_streams_without_embedding_them(
     easyqc_root: Path,
     tmp_path: Path,

@@ -47,6 +47,7 @@ _RESERVED_PATHS = {
     "raw-verification-result.json",
     "verification-run.json",
 }
+_DIAGNOSTIC_TAIL_BYTES = 64 * 1024
 
 
 def _read_authority(path: Path, parser: object, label: str) -> object:
@@ -73,6 +74,55 @@ def _stream_identity(handle: BinaryIO) -> tuple[int, str]:
         size += len(chunk)
         digest.update(chunk)
     return size, digest.hexdigest()
+
+
+def _diagnostic_tail(
+    handle: BinaryIO,
+    *,
+    size: int,
+    sha256: str,
+) -> bytes:
+    if size <= _DIAGNOSTIC_TAIL_BYTES:
+        handle.seek(0)
+        return handle.read()
+    marker = (
+        f"[truncated to final {_DIAGNOSTIC_TAIL_BYTES} bytes; "
+        f"full_size={size}; full_sha256={sha256}]\n"
+    ).encode("ascii")
+    retained_bytes = _DIAGNOSTIC_TAIL_BYTES - len(marker)
+    handle.seek(size - retained_bytes)
+    return marker + handle.read(retained_bytes)
+
+
+def _diagnostic_report_path(report_path: str, stream_name: str) -> str:
+    report = PurePosixPath(report_path)
+    return (report.parent / f"{report.stem}.{stream_name}.log").as_posix()
+
+
+def _retain_and_surface_failure_stream(
+    *,
+    check_name: str,
+    stream_name: str,
+    handle: BinaryIO,
+    size: int,
+    sha256: str,
+    root: Path,
+    report_path: str,
+) -> RawEvidenceArtifactV1 | None:
+    if size == 0:
+        return None
+    data = _diagnostic_tail(handle, size=size, sha256=sha256)
+    relative_path = _diagnostic_report_path(report_path, stream_name)
+    destination = _report_destination(root, relative_path)
+    write_new_verification_authority(destination, data)
+    print(
+        f"--- {check_name} {stream_name} diagnostic tail ---",
+        file=sys.stderr,
+    )
+    print(data.decode("utf-8", errors="replace"), file=sys.stderr, end="")
+    if not data.endswith(b"\n"):
+        print(file=sys.stderr)
+    return RawEvidenceArtifactV1(path=relative_path, classification="log")
 
 
 def _report_destination(root: Path, relative_path: str) -> Path:
@@ -114,7 +164,7 @@ def _prepare_report_directories(
 def _execute_check(
     check: AutomatedCheckV1,
     root: Path,
-) -> tuple[RawTestEvidenceV1, str]:
+) -> tuple[RawTestEvidenceV1, str, tuple[RawEvidenceArtifactV1, ...]]:
     name = check.name
     started_at = _utc_now()
     started = time.perf_counter()
@@ -147,6 +197,23 @@ def _execute_check(
         passed = returncode == 0 and not timed_out and failure_kind is None
         stdout_bytes, stdout_sha256 = _stream_identity(stdout)
         stderr_bytes, stderr_sha256 = _stream_identity(stderr)
+        diagnostic_artifacts: list[RawEvidenceArtifactV1] = []
+        if not passed:
+            for stream_name, handle, size, sha256 in (
+                ("stdout", stdout, stdout_bytes, stdout_sha256),
+                ("stderr", stderr, stderr_bytes, stderr_sha256),
+            ):
+                artifact = _retain_and_surface_failure_stream(
+                    check_name=name,
+                    stream_name=stream_name,
+                    handle=handle,
+                    size=size,
+                    sha256=sha256,
+                    root=root,
+                    report_path=check.report_path,
+                )
+                if artifact is not None:
+                    diagnostic_artifacts.append(artifact)
         report = {
             "schema_version": 1,
             "check_name": name,
@@ -180,6 +247,7 @@ def _execute_check(
             report_path=check.report_path,
         ),
         limitation,
+        tuple(diagnostic_artifacts),
     )
 
 
@@ -207,9 +275,11 @@ def run_automated_request(
     started_at = _utc_now()
     tests: list[RawTestEvidenceV1] = []
     limitations: list[str] = []
+    diagnostic_artifacts: list[RawEvidenceArtifactV1] = []
     for check in plan.checks:
-        test, limitation = _execute_check(check, root)
+        test, limitation, check_diagnostics = _execute_check(check, root)
         tests.append(test)
+        diagnostic_artifacts.extend(check_diagnostics)
         if limitation:
             limitations.append(limitation)
     completed_at = _utc_now()
@@ -234,7 +304,8 @@ def run_automated_request(
                 classification=check.classification,
             )
             for check in plan.checks
-        ),
+        )
+        + tuple(diagnostic_artifacts),
         limitations=tuple(limitations),
     )
     raw_path = root / "raw-verification-result.json"
