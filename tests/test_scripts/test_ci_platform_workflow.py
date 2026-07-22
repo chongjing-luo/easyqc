@@ -3,9 +3,12 @@ from __future__ import annotations
 from dataclasses import replace
 import hashlib
 import importlib
+import json
+import os
 from pathlib import Path
 import re
 import subprocess
+import textwrap
 
 import pytest
 
@@ -69,21 +72,35 @@ def _workflow_text(easyqc_root: Path) -> str:
     )
 
 
-def _matrix(text: str) -> dict[str, dict[str, str]]:
-    pattern = re.compile(
-        r"(?m)^\s*- name: (?P<name>[^\n]+)\n"
-        r"\s+runner: (?P<runner>\S+)\n"
-        r"\s+row_id: (?P<row_id>\S+)\n"
-        r"\s+lock_path: (?P<lock_path>\S+)$"
+def _selected_matrix(text: str, platform: str, tmp_path: Path) -> dict[str, object]:
+    match = re.search(
+        r"(?ms)^      - name: Select CI matrix\n"
+        r".*?^        run: \|\n"
+        r"(?P<script>(?:(?:          [^\n]*)?\n)+?)"
+        r"(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
+        text,
     )
-    return {
-        match.group("name"): {
-            "runner": match.group("runner"),
-            "row_id": match.group("row_id"),
-            "lock_path": match.group("lock_path"),
+    assert match is not None, "workflow must contain the matrix selector step"
+    output_path = tmp_path / f"github-output-{platform}.txt"
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "SELECTED_PLATFORM": platform,
+            "GITHUB_OUTPUT": str(output_path),
         }
-        for match in pattern.finditer(text)
-    }
+    )
+
+    result = subprocess.run(
+        ["bash", "-eu", "-o", "pipefail", "-c", textwrap.dedent(match.group("script"))],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert result.returncode == 0, result.stderr
+    output = output_path.read_text(encoding="utf-8").strip()
+    assert output.startswith("matrix=")
+    return json.loads(output.removeprefix("matrix="))
 
 
 def _preparation_module():
@@ -134,13 +151,63 @@ def _fixture_input(module: object, tmp_path: Path):
 
 def test_workflow_has_exact_four_pinned_ci_rows_and_no_native_rows(
     easyqc_root: Path,
+    tmp_path: Path,
 ) -> None:
     text = _workflow_text(easyqc_root)
+    selected = _selected_matrix(text, "all", tmp_path)
+    rows = selected["include"]
+    assert isinstance(rows, list)
+    matrix = {
+        row["name"]: {
+            "runner": row["runner"],
+            "row_id": row["row_id"],
+            "lock_path": row["lock_path"],
+        }
+        for row in rows
+    }
 
-    assert _matrix(text) == EXPECTED_MATRIX
+    assert matrix == EXPECTED_MATRIX
+    assert "needs: select-matrix" in text
+    assert "matrix: ${{ fromJSON(needs.select-matrix.outputs.matrix) }}" in text
     assert "runs-on: ${{ matrix.runner }}" in text
     assert "-latest" not in text
     assert all(row_id not in text for row_id in NATIVE_ROW_IDS)
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected_names"),
+    [
+        ("ubuntu", {"Ubuntu 22.04 x86_64", "Ubuntu 24.04 x86_64"}),
+        ("windows", {"Windows Server 2022 x64"}),
+        ("macos", {"macOS 15 arm64"}),
+        ("all", set(EXPECTED_MATRIX)),
+    ],
+)
+def test_manual_dispatch_selects_only_the_requested_platform_rows(
+    easyqc_root: Path,
+    tmp_path: Path,
+    platform: str,
+    expected_names: set[str],
+) -> None:
+    text = _workflow_text(easyqc_root)
+
+    assert re.search(
+        r"(?m)^      platform:\n"
+        r"        description: Select the hosted platform family\n"
+        r"        required: true\n"
+        r"        default: ubuntu\n"
+        r"        type: choice\n"
+        r"        options:\n"
+        r"          - ubuntu\n"
+        r"          - windows\n"
+        r"          - macos\n"
+        r"          - all$",
+        text,
+    )
+    selected = _selected_matrix(text, platform, tmp_path)
+    rows = selected["include"]
+    assert isinstance(rows, list)
+    assert {row["name"] for row in rows} == expected_names
 
 
 def test_workflow_pins_actions_runtime_permissions_and_failure_artifacts(

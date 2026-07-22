@@ -14,6 +14,16 @@ on:
         description: Optional exact release-manifest SHA-256; provide with release ID
         required: false
         type: string
+      platform:
+        description: Select the hosted platform family
+        required: true
+        default: ubuntu
+        type: choice
+        options:
+          - ubuntu
+          - windows
+          - macos
+          - all
 
 permissions:
   contents: read
@@ -23,28 +33,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  select-matrix:
+    name: Select hosted platform rows
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - name: Select CI matrix
+        id: select
+        shell: bash
+        env:
+          SELECTED_PLATFORM: ${{ inputs.platform || 'all' }}
+        run: |
+          ubuntu_22='{"name":"Ubuntu 22.04 x86_64","runner":"ubuntu-22.04","row_id":"ci-ubuntu-22.04-x86_64","lock_path":"packaging/locks/python-3.10.17/linux-x86_64/test.txt"}'
+          ubuntu_24='{"name":"Ubuntu 24.04 x86_64","runner":"ubuntu-24.04","row_id":"ci-ubuntu-24.04-x86_64","lock_path":"packaging/locks/python-3.10.17/linux-x86_64/test.txt"}'
+          windows='{"name":"Windows Server 2022 x64","runner":"windows-2022","row_id":"ci-windows-2022-x86_64","lock_path":"packaging/locks/python-3.10.17/windows-x86_64/test.txt"}'
+          macos='{"name":"macOS 15 arm64","runner":"macos-15","row_id":"ci-macos-15-arm64","lock_path":"packaging/locks/python-3.10.17/macos-arm64/test.txt"}'
+
+          case "$SELECTED_PLATFORM" in
+            ubuntu) rows="$ubuntu_22,$ubuntu_24" ;;
+            windows) rows="$windows" ;;
+            macos) rows="$macos" ;;
+            all) rows="$ubuntu_22,$ubuntu_24,$windows,$macos" ;;
+            *)
+              printf 'Unsupported platform selection: %s\n' "$SELECTED_PLATFORM" >&2
+              exit 2
+              ;;
+          esac
+
+          printf 'matrix={"include":[%s]}\n' "$rows" >> "$GITHUB_OUTPUT"
+
   verify:
+    needs: select-matrix
     name: ${{ matrix.name }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: Ubuntu 22.04 x86_64
-            runner: ubuntu-22.04
-            row_id: ci-ubuntu-22.04-x86_64
-            lock_path: packaging/locks/python-3.10.17/linux-x86_64/test.txt
-          - name: Ubuntu 24.04 x86_64
-            runner: ubuntu-24.04
-            row_id: ci-ubuntu-24.04-x86_64
-            lock_path: packaging/locks/python-3.10.17/linux-x86_64/test.txt
-          - name: Windows Server 2022 x64
-            runner: windows-2022
-            row_id: ci-windows-2022-x86_64
-            lock_path: packaging/locks/python-3.10.17/windows-x86_64/test.txt
-          - name: macOS 15 arm64
-            runner: macos-15
-            row_id: ci-macos-15-arm64
-            lock_path: packaging/locks/python-3.10.17/macos-arm64/test.txt
+      matrix: ${{ fromJSON(needs.select-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
