@@ -4,7 +4,14 @@ import pandas as pd
 import pytest
 
 from core.table_view_service import QcIdentityError, TableViewError, TableViewService
-from models.table_view_state import ColumnViewState, FilterCondition, SortRule
+from models.table_view_state import (
+    ColumnViewState,
+    FilterCondition,
+    FilterExpression,
+    FilterGroup,
+    MAX_FILTER_GROUPS,
+    SortRule,
+)
 
 
 def _source() -> pd.DataFrame:
@@ -233,3 +240,221 @@ def test_ezqcid_layout_must_remain_visible_first_and_pinned() -> None:
     ):
         with pytest.raises(TableViewError, match="ezqcid"):
             service.apply_state(replace(default, columns=columns))
+
+
+def _group(
+    group_id: str,
+    join: str,
+    *conditions: FilterCondition,
+) -> FilterGroup:
+    return FilterGroup(group_id=group_id, join=join, conditions=conditions)
+
+
+@pytest.mark.parametrize(
+    ("group_join", "expected"),
+    [
+        ("all", ["SUB002"]),
+        ("any", ["SUB001", "SUB002", "SUB003", "SUB004"]),
+    ],
+)
+def test_grouped_filters_apply_join_within_and_across_groups(
+    group_join: str, expected: list[str]
+) -> None:
+    service = TableViewService(_source())
+    state = service.default_state().with_filter(
+        FilterExpression(
+            group_join=group_join,
+            groups=(
+                _group(
+                    "site-or-age",
+                    "any",
+                    FilterCondition("site", "==", "A", "site-a"),
+                    FilterCondition("age", ">=", "31", "age-31"),
+                ),
+                _group(
+                    "failed-with-score",
+                    "all",
+                    FilterCondition("passed", "==", False, "failed"),
+                    FilterCondition("score", "notna", None, "score-present"),
+                ),
+            ),
+        )
+    )
+
+    result = service.apply_state(state)
+
+    assert _result_frame(service, result)["ezqcid"].tolist() == expected
+
+
+def test_grouped_filters_preserve_null_disabled_and_stable_sort_semantics() -> None:
+    service = TableViewService(_source())
+    state = (
+        service.default_state()
+        .with_filter(
+            FilterExpression(
+                group_join="any",
+                groups=(
+                    _group(
+                        "missing",
+                        "any",
+                        FilterCondition("score", "isna", None, "score-null"),
+                        FilterCondition(
+                            "age", ">", 100, "disabled-age", enabled=False
+                        ),
+                    ),
+                    _group(
+                        "young-known-site",
+                        "all",
+                        FilterCondition("age", "<", 30, "young"),
+                        FilterCondition("site", "notna", None, "site-present"),
+                    ),
+                ),
+            )
+        )
+        .with_sort_rules((SortRule("age", ascending=True),))
+    )
+
+    result = service.apply_state(state)
+
+    assert result.source_positions.tolist() == [2, 0, 3]
+    assert _result_frame(service, result)["ezqcid"].tolist() == [
+        "SUB003",
+        "SUB001",
+        "SUB004",
+    ]
+
+
+def test_flat_and_single_all_group_are_semantically_equivalent() -> None:
+    service = TableViewService(_source())
+    conditions = (
+        FilterCondition("age", ">=", "29", "age-29"),
+        FilterCondition("site", "notna", None, "known-site"),
+    )
+    sort_rules = (SortRule("score", ascending=False),)
+    flat = service.default_state().with_conditions(conditions).with_sort_rules(sort_rules)
+    grouped = (
+        service.default_state()
+        .with_filter(FilterExpression("all", (_group("legacy", "all", *conditions),)))
+        .with_sort_rules(sort_rules)
+    )
+
+    flat_result = service.apply_state(flat)
+    grouped_result = service.apply_state(grouped)
+
+    assert grouped_result.source_positions.tolist() == flat_result.source_positions.tolist()
+    assert grouped_result.state.conditions == flat_result.state.conditions
+
+
+@pytest.mark.parametrize(
+    ("expression", "message"),
+    [
+        (
+            FilterExpression(
+                "all",
+                (_group("broken-group", "xor", FilterCondition("site", "==", "A", "site-a")),),
+            ),
+            "broken-group",
+        ),
+        (
+            FilterExpression(
+                "all",
+                (
+                    _group("duplicate-group", "all", FilterCondition("site", "==", "A", "site-a")),
+                    _group("duplicate-group", "all", FilterCondition("age", ">", 20, "age-20")),
+                ),
+            ),
+            "duplicate-group",
+        ),
+        (
+            FilterExpression(
+                "all",
+                (
+                    _group(
+                        "duplicate-condition-owner",
+                        "all",
+                        FilterCondition("site", "==", "A", "same-condition"),
+                        FilterCondition("age", ">", 20, "same-condition"),
+                    ),
+                ),
+            ),
+            "same-condition",
+        ),
+        (
+            FilterExpression(
+                "all",
+                (FilterGroup(group_id=None, join="all"),),
+            ),
+            "group_id",
+        ),
+        (
+            FilterExpression(
+                "all",
+                (
+                    _group(
+                        "typed-identities",
+                        "all",
+                        FilterCondition("site", "==", "A", None),
+                    ),
+                ),
+            ),
+            "typed-identities.*condition_id",
+        ),
+    ],
+)
+def test_invalid_group_state_names_id_and_preserves_prior_result_and_source(
+    expression: FilterExpression, message: str
+) -> None:
+    source = _source()
+    original = source.copy(deep=True)
+    service = TableViewService(source)
+    prior = service.apply_state(service.default_state())
+    prior_positions = prior.source_positions.copy()
+    candidate = service.default_state().with_filter(expression)
+
+    with pytest.raises(TableViewError, match=message):
+        service.apply_state(candidate)
+
+    assert prior.source_positions.tolist() == prior_positions.tolist()
+    pd.testing.assert_frame_equal(source, original)
+    assert service.apply_state(service.default_state()).source_positions.tolist() == [
+        0,
+        1,
+        2,
+        3,
+    ]
+
+
+def test_zero_groups_and_groups_with_only_disabled_conditions_are_no_filter() -> None:
+    service = TableViewService(_source())
+    empty = service.default_state().with_filter(FilterExpression("all", ()))
+    disabled = service.default_state().with_filter(
+        FilterExpression(
+            "all",
+            (
+                _group(
+                    "disabled-only",
+                    "any",
+                    FilterCondition("site", "==", "A", "off", enabled=False),
+                ),
+            ),
+        )
+    )
+
+    assert service.apply_state(empty).source_positions.tolist() == [0, 1, 2, 3]
+    assert service.apply_state(disabled).source_positions.tolist() == [0, 1, 2, 3]
+
+
+def test_typed_group_collection_is_bounded_before_mask_evaluation() -> None:
+    service = TableViewService(_source())
+    state = service.default_state().with_filter(
+        FilterExpression(
+            "all",
+            tuple(
+                FilterGroup(group_id=f"group-{index}", join="all")
+                for index in range(MAX_FILTER_GROUPS + 1)
+            ),
+        )
+    )
+
+    with pytest.raises(TableViewError, match=f"最多包含 {MAX_FILTER_GROUPS}"):
+        service.apply_state(state)

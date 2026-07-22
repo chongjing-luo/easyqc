@@ -18,6 +18,11 @@ from models.table_view_state import (
     ColumnProfile,
     ColumnViewState,
     FilterCondition,
+    FilterExpression,
+    FilterGroup,
+    MAX_FILTER_CONDITIONS,
+    MAX_FILTER_CONDITIONS_PER_GROUP,
+    MAX_FILTER_GROUPS,
     RowWindow,
     TableViewResult,
     TableViewState,
@@ -83,11 +88,9 @@ class TableViewService:
         normalized = self.validate_state(state)
         source_positions = np.arange(len(self._source), dtype=np.int64)
 
-        if normalized.conditions:
-            mask = pd.Series(True, index=self._source.index, dtype=bool)
-            for condition in normalized.conditions:
-                if condition.enabled:
-                    mask &= self._condition_mask(self._source, condition)
+        expression_mask = self._filter_expression_mask(normalized.effective_filter)
+        if expression_mask is not None:
+            mask = expression_mask
             source_positions = source_positions[mask.to_numpy(dtype=bool)]
 
         if normalized.sort_rules and len(source_positions):
@@ -226,14 +229,29 @@ class TableViewService:
         if state.page_size <= 0:
             raise TableViewError("每页行数必须大于 0")
 
-        conditions = tuple(self._normalize_condition(condition) for condition in state.conditions)
+        if state.filter is None:
+            conditions = tuple(
+                self._normalize_condition(condition) for condition in state.conditions
+            )
+            normalized_filter = None
+        else:
+            normalized_filter = self._normalize_filter_expression(state.filter)
+            conditions = tuple(
+                condition
+                for group in normalized_filter.groups
+                for condition in group.conditions
+            )
         sort_columns: list[str] = []
         for rule in state.sort_rules:
             self._require_column(rule.column)
             sort_columns.append(rule.column)
         if len(set(sort_columns)) != len(sort_columns):
             raise TableViewError("多列排序不能重复使用同一列")
-        return replace(state, conditions=conditions)
+        return replace(
+            state,
+            conditions=conditions,
+            filter=normalized_filter,
+        )
 
     def validate_qc_identity(
         self,
@@ -304,6 +322,8 @@ class TableViewService:
         return ColumnKind.TEXT
 
     def _normalize_condition(self, condition: FilterCondition) -> FilterCondition:
+        if not isinstance(condition, FilterCondition):
+            raise TableViewError("每个筛选条件必须是 FilterCondition")
         self._require_column(condition.column)
         profile = self._profile_by_name[condition.column]
         operator = condition.operator.strip().lower()
@@ -313,6 +333,89 @@ class TableViewService:
             )
         value = None if operator in _VALUELESS_OPERATORS else self._normalize_value(profile, operator, condition.value)
         return replace(condition, operator=operator, value=value)
+
+    def _normalize_filter_expression(
+        self, expression: FilterExpression
+    ) -> FilterExpression:
+        if not isinstance(expression, FilterExpression):
+            raise TableViewError("筛选表达式必须是 FilterExpression")
+        if len(expression.groups) > MAX_FILTER_GROUPS:
+            raise TableViewError(f"筛选最多包含 {MAX_FILTER_GROUPS} 个组")
+        group_join = self._normalize_join(expression.group_join, "顶层筛选")
+        seen_groups: set[str] = set()
+        seen_conditions: set[str] = set()
+        total_conditions = 0
+        normalized_groups: list[FilterGroup] = []
+        for group_index, group in enumerate(expression.groups):
+            if not isinstance(group, FilterGroup):
+                raise TableViewError(
+                    f"筛选组 #{group_index + 1} 必须是 FilterGroup"
+                )
+            if not isinstance(group.group_id, str) or not group.group_id.strip():
+                raise TableViewError(f"筛选组 #{group_index + 1} 的 group_id 不能为空")
+            group_id = group.group_id.strip()
+            if group_id in seen_groups:
+                raise TableViewError(f"筛选组 ID 重复: {group_id}")
+            seen_groups.add(group_id)
+            join = self._normalize_join(group.join, f"筛选组 '{group_id}'")
+            if len(group.conditions) > MAX_FILTER_CONDITIONS_PER_GROUP:
+                raise TableViewError(
+                    f"筛选组 '{group_id}' 最多包含 "
+                    f"{MAX_FILTER_CONDITIONS_PER_GROUP} 个条件"
+                )
+            total_conditions += len(group.conditions)
+            if total_conditions > MAX_FILTER_CONDITIONS:
+                raise TableViewError(
+                    f"筛选最多包含 {MAX_FILTER_CONDITIONS} 个条件"
+                )
+            normalized_conditions: list[FilterCondition] = []
+            for condition_index, condition in enumerate(group.conditions):
+                if not isinstance(condition, FilterCondition):
+                    raise TableViewError(
+                        f"筛选组 '{group_id}' 的条件 #{condition_index + 1} "
+                        "必须是 FilterCondition"
+                    )
+                if (
+                    not isinstance(condition.condition_id, str)
+                    or not condition.condition_id.strip()
+                ):
+                    raise TableViewError(
+                        f"筛选组 '{group_id}' 的条件 #{condition_index + 1} "
+                        "缺少 condition_id"
+                    )
+                condition_id = condition.condition_id.strip()
+                if condition_id in seen_conditions:
+                    raise TableViewError(f"筛选条件 ID 重复: {condition_id}")
+                seen_conditions.add(condition_id)
+                normalized_conditions.append(
+                    self._normalize_condition(
+                        replace(condition, condition_id=condition_id)
+                    )
+                )
+            normalized_groups.append(
+                FilterGroup(
+                    group_id=group_id,
+                    join=join,
+                    conditions=tuple(normalized_conditions),
+                )
+            )
+        return FilterExpression(
+            group_join=group_join,
+            groups=tuple(normalized_groups),
+        )
+
+    @staticmethod
+    def _normalize_join(value: str, label: str) -> str:
+        if not isinstance(value, str):
+            raise TableViewError(
+                f"{label} 的组合方式必须是 all 或 any，收到: {value!r}"
+            )
+        join = value.strip().lower()
+        if join not in {"all", "any"}:
+            raise TableViewError(
+                f"{label} 的组合方式必须是 all 或 any，收到: {value!r}"
+            )
+        return join
 
     def _normalize_value(self, profile: ColumnProfile, operator: str, value: Any) -> Any:
         if operator in {"in", "not_in"}:
@@ -389,6 +492,32 @@ class TableViewService:
         if operator == "endswith":
             return strings.str.lower().str.endswith(needle.casefold(), na=False)
         raise TableViewError(f"不支持的筛选操作符: {operator}")
+
+    def _filter_expression_mask(
+        self, expression: FilterExpression
+    ) -> pd.Series | None:
+        group_masks: list[pd.Series] = []
+        for group in expression.groups:
+            condition_masks = [
+                self._condition_mask(self._source, condition)
+                for condition in group.conditions
+                if condition.enabled
+            ]
+            if condition_masks:
+                group_masks.append(self._combine_masks(condition_masks, group.join))
+        if not group_masks:
+            return None
+        return self._combine_masks(group_masks, expression.group_join)
+
+    @staticmethod
+    def _combine_masks(masks: list[pd.Series], join: str) -> pd.Series:
+        combined = masks[0].copy()
+        for mask in masks[1:]:
+            if join == "all":
+                combined &= mask
+            else:
+                combined |= mask
+        return combined
 
     def _require_column(self, column: str) -> None:
         if column not in self._source.columns:
