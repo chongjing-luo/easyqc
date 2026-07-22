@@ -100,6 +100,11 @@ jobs:
         with:
           version: "0.11.29"
           enable-cache: false
+      - name: Install Qt Linux runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libegl1
       - name: Materialize exact test lock
         run: |
           uv pip sync --system --require-hashes "${{ matrix.lock_path }}"

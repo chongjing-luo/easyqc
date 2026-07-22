@@ -276,6 +276,25 @@ def test_workflow_routes_three_reports_through_existing_runner(
     assert "EASYQC_CI_MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}" in text
 
 
+def test_workflow_installs_minimal_egl_runtime_only_on_linux_before_lock(
+    easyqc_root: Path,
+) -> None:
+    text = _workflow_text(easyqc_root)
+    expected_step = (
+        "      - name: Install Qt Linux runtime libraries\n"
+        "        if: runner.os == 'Linux'\n"
+        "        run: |\n"
+        "          sudo apt-get update\n"
+        "          sudo apt-get install --yes --no-install-recommends libegl1\n"
+    )
+
+    assert expected_step in text
+    assert text.count("libegl1") == 1
+    assert text.index("Install Qt Linux runtime libraries") < text.index(
+        "Materialize exact test lock"
+    )
+
+
 def test_workflow_uses_runner_context_only_after_the_job_is_allocated(
     easyqc_root: Path,
 ) -> None:
