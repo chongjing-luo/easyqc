@@ -453,6 +453,8 @@ class RuntimeTransactionController:
             request.manifest,
             materialized,
         )
+        if request.manifest.channel == "stable":
+            _require_stable_installer_entry(final_root)
 
         state.phase = "smoke"
         try:
@@ -715,6 +717,24 @@ def _require_absent(path: Path, label: str) -> None:
     except OSError as exc:
         raise ManagedRuntimeError(f"cannot inspect {label}") from exc
     raise ManagedRuntimeError(f"{label}: {path.name}")
+
+
+def _require_stable_installer_entry(version_root: Path) -> None:
+    """Require the fixed installer entry before a stable receipt can exist."""
+
+    installer = version_root / "app" / "easyqc_install.py"
+    try:
+        metadata = installer.lstat()
+        resolved = installer.resolve(strict=True)
+        resolved.relative_to(version_root.resolve(strict=True))
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        raise ManagedRuntimeError(
+            "stable source is missing the contained easyqc_install.py entry"
+        ) from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise ManagedRuntimeError(
+            "stable easyqc_install.py must be a regular non-symlink file"
+        )
 
 
 def _smoke_passed(

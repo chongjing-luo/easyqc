@@ -10,6 +10,7 @@ from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 import platform
 import shutil
 import stat
+import sys
 
 from platformdirs import PlatformDirs
 
@@ -177,6 +178,44 @@ def resolve_runtime_paths(
         state_root=str(state_root),
         transaction_lock=str(transaction_lock),
     )
+
+
+def detect_native_runtime_target() -> RuntimeTargetV1:
+    """Return the one approved managed-runtime target for this native host.
+
+    Detection is intentionally narrower than generic platform discovery.  A
+    host outside the approved Ubuntu, Windows 11 x64, or macOS 13+ arm64
+    matrix fails explicitly instead of selecting a nearby manifest.
+    """
+
+    os_name = _current_os_name()
+    os_version, distribution_id = _current_os_version(os_name)
+    arch = _normalized_arch(platform.machine())
+    if os_name == "linux":
+        if distribution_id != "ubuntu" or os_version not in {"22.04", "24.04"}:
+            raise ManagedRuntimeError(
+                "managed runtime supports Ubuntu 22.04 or 24.04 only; "
+                f"observed {distribution_id or 'unknown'} {os_version}"
+            )
+        if arch != "x86_64":
+            raise ManagedRuntimeError(
+                "managed runtime supports Ubuntu x86_64 only; "
+                f"observed {arch}"
+            )
+        return RuntimeTargetV1("linux", os_version, arch)
+    if os_name == "windows":
+        if os_version != "11" or arch != "x86_64":
+            raise ManagedRuntimeError(
+                "managed runtime supports Windows 11 x86_64 only; "
+                f"observed Windows {os_version} {arch}"
+            )
+        return RuntimeTargetV1("windows", "11", "x86_64")
+    if arch != "arm64" or _major_version(os_version) < 13:
+        raise ManagedRuntimeError(
+            "managed runtime supports macOS 13+ arm64 only; "
+            f"observed macOS {os_version} {arch}"
+        )
+    return RuntimeTargetV1("macos", "13", "arm64")
 
 
 def inspect_host(paths: ManagedRuntimePaths) -> HostPreflightSnapshot:
@@ -465,7 +504,18 @@ def _current_os_version(os_name: str) -> tuple[str, str | None]:
             raise ManagedRuntimeError(f"cannot inspect Linux release: {exc}") from exc
         return release.get("VERSION_ID", "unknown"), release.get("ID")
     if os_name == "windows":
-        return platform.release(), None
+        release = platform.release()
+        if release == "10":
+            try:
+                build = int(sys.getwindowsversion().build)  # type: ignore[attr-defined]
+            except (AttributeError, TypeError, ValueError):
+                try:
+                    build = int(platform.version().split(".")[-1])
+                except (IndexError, ValueError):
+                    build = 0
+            if build >= 22000:
+                release = "11"
+        return release, None
     version = platform.mac_ver()[0]
     return version or "unknown", None
 
@@ -482,6 +532,7 @@ def _is_privileged(os_name: str) -> bool:
 
 
 __all__ = [
+    "detect_native_runtime_target",
     "HostPreflightSnapshot",
     "ManagedRuntimePaths",
     "PreflightCheck",
