@@ -80,6 +80,28 @@ def test_table_uses_standard_overflow_toolbars_without_fixed_chip_geometry(qtbot
         for action in workspace.critical_actions
         if workspace.action_toolbar.widgetForAction(action) is not None
     )
+    assert workspace.columns_action.text().startswith("列显示")
+
+
+def test_derived_dialog_preparation_error_is_visible_instead_of_escaping(
+    qtbot,
+    monkeypatch,
+):
+    workspace = QtTableWorkspace(
+        _source(),
+        derive_column_callback=lambda name, _expression: name,
+    )
+    qtbot.addWidget(workspace)
+    workspace.show()
+
+    def fail_default_state(*_args, **_kwargs):
+        raise TableViewError("ezqcid 预览状态无效")
+
+    monkeypatch.setattr(workspace.service, "default_state", fail_default_state)
+
+    assert workspace.open_derived_column_dialog() is None
+    assert workspace.error_label.isVisibleTo(workspace)
+    assert workspace.error_label.text() == "ezqcid 预览状态无效"
 
 
 def test_applied_filter_actions_use_toolbar_overflow_and_remain_removable(qtbot):

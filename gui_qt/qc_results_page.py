@@ -18,7 +18,7 @@ class _QtQcResultsTableWorkspace(QtTableWorkspace):
 
     def _rebuild_inspector_panels(self) -> None:
         super()._rebuild_inspector_panels()
-        for index, label in enumerate(("筛选", "排序", "列")):
+        for index, label in enumerate(("筛选", "排序", "列显示")):
             self.inspector_tabs.setTabText(index, label)
 
     def _update_status(self) -> None:
@@ -35,7 +35,7 @@ class _QtQcResultsTableWorkspace(QtTableWorkspace):
             f"筛选 ({len(self.applied_state.conditions)})"
         )
         self.sort_action.setText(f"排序 ({len(self.applied_state.sort_rules)})")
-        self.columns_action.setText(f"列 ({visible}/{column_total})")
+        self.columns_action.setText(f"列显示 ({visible}/{column_total})")
         if self.selection_outside_view:
             self.selection_status_label.setText("所选记录不在当前视图中")
         elif self.selected_source_position is not None:
@@ -54,6 +54,9 @@ class QtQcResultsPage(QWidget):
         source: pd.DataFrame,
         *,
         refresh_callback: Callable[[], bool],
+        derive_column_callback: Callable[[str, str], str] | None = None,
+        derive_preview_source: Callable[[], pd.DataFrame] | None = None,
+        on_derived_column_committed: Callable[[str], None] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -62,6 +65,9 @@ class QtQcResultsPage(QWidget):
         if not callable(refresh_callback):
             raise TypeError("QtQcResultsPage refresh_callback must be callable")
         self._refresh_callback = refresh_callback
+        self._derive_column_callback = derive_column_callback
+        self._derive_preview_source = derive_preview_source
+        self._on_derived_column_committed = on_derived_column_committed
         self._refresh_busy = False
         self.setObjectName("qcResultsPage")
         self.setAccessibleName("质控结果")
@@ -74,6 +80,9 @@ class QtQcResultsPage(QWidget):
 
         self.table_workspace = _QtQcResultsTableWorkspace(
             source,
+            derive_column_callback=self._derive_column_callback,
+            derive_preview_source=self._derive_preview_source,
+            on_derived_column_committed=self._on_derived_column_committed,
             page_size=25,
             parent=self,
         )

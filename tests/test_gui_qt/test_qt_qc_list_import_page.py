@@ -12,7 +12,12 @@ from core.configuration_service import ConfigurationService
 from core.event_bus import EventType
 from core.project_service import ProjectService
 from core.table_service import TableService
-from models.table_view_state import FilterCondition, FilterExpression, FilterGroup
+from models.table_view_state import (
+    FilterCondition,
+    FilterExpression,
+    FilterGroup,
+    SortRule,
+)
 
 
 def _page(qtbot, tmp_path):
@@ -105,7 +110,10 @@ def test_failed_parse_preserves_last_draft_and_active_list(qtbot, tmp_path) -> N
     assert page.error_text
 
 
-def test_preview_search_filter_and_columns_do_not_change_draft(qtbot, tmp_path) -> None:
+def test_preview_search_filter_sort_and_columns_do_not_change_draft(
+    qtbot,
+    tmp_path,
+) -> None:
     page, configuration, _current = _page(qtbot, tmp_path)
     source = tmp_path / "preview.csv"
     pd.DataFrame(
@@ -120,6 +128,17 @@ def test_preview_search_filter_and_columns_do_not_change_draft(qtbot, tmp_path) 
     _wait(page, qtbot)
     original = page.draft
 
+    for button, attribute in (
+        (page.filter_button, "filter_dialog"),
+        (page.sort_button, "sort_dialog"),
+        (page.columns_button, "columns_dialog"),
+    ):
+        qtbot.mouseClick(button, Qt.LeftButton)
+        dialog = getattr(page, attribute)
+        assert dialog is not None and dialog.isVisible()
+        dialog.reject()
+        qtbot.waitUntil(lambda name=attribute: getattr(page, name) is None)
+
     page.preview_search.setText("Prisma")
     page.preview_search.returnPressed.emit()
     _wait(page, qtbot)
@@ -127,6 +146,13 @@ def test_preview_search_filter_and_columns_do_not_change_draft(qtbot, tmp_path) 
     page.preview_search.clear()
     page.preview_search.returnPressed.emit()
     _wait(page, qtbot)
+
+    assert page.apply_preview_sort((SortRule("site", ascending=False),))
+    assert page.preview_model.snapshot()["ezqcid"].tolist() == [
+        "SUB004",
+        "SUB003",
+        "SUB005",
+    ]
 
     expression = FilterExpression(
         groups=(
@@ -148,7 +174,45 @@ def test_preview_search_filter_and_columns_do_not_change_draft(qtbot, tmp_path) 
     pd.testing.assert_frame_equal(page.draft, original)
     pd.testing.assert_frame_equal(configuration.subjects(), _current)
     assert page.filter_button.text().startswith("筛选")
-    assert page.columns_button.text().startswith("列")
+    assert page.sort_button.text().startswith("排序")
+    assert page.columns_button.text().startswith("列显示")
+
+
+def test_import_page_groups_all_four_table_actions_and_derives_subject_column(
+    qtbot,
+    tmp_path,
+) -> None:
+    page, configuration, _current = _page(qtbot, tmp_path)
+
+    action_roots = [
+        button.text().split(" (", 1)[0]
+        for button in (
+            page.filter_button,
+            page.sort_button,
+            page.columns_button,
+            page.derive_button,
+        )
+    ]
+    assert action_roots == ["筛选", "排序", "列显示", "新增列"]
+
+    qtbot.mouseClick(page.derive_button, Qt.LeftButton)
+    dialog = page.derived_column_dialog
+    assert dialog is not None and dialog.isVisible()
+    assert [
+        dialog.columns_list.item(index).text()
+        for index in range(dialog.columns_list.count())
+    ] == ["ezqcid", "site"]
+
+    dialog.name_edit.setText("site_copy")
+    dialog.expression_edit.setPlainText("site")
+    qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
+    qtbot.waitUntil(
+        lambda: "site_copy" in configuration.subjects().columns,
+        timeout=3000,
+    )
+
+    assert configuration.subjects()["site_copy"].tolist() == ["A", "B"]
+    assert page.status_label.text() == "已生成质控前名单列：site_copy"
 
 
 def test_merge_columns_applies_once_and_emits_list_change(qtbot, tmp_path) -> None:

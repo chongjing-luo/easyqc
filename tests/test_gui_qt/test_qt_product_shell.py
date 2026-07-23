@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from core.app_services import build_app_services
 from core.project_context_service import ProjectContextError
+from core.table_view_service import TableViewService
 from gui_qt.application import build_product_window
 from gui_qt.qc_results_page import QtQcResultsPage
 from models.table_view_state import SortRule
@@ -64,18 +65,22 @@ def _add_project(
     prefix="",
     second_module=False,
     module_label=None,
+    identity_first=True,
 ):
     configuration = services.configuration_service
     configuration.create_project(name, tmp_path)
-    configuration.replace_subjects(
-        pd.DataFrame(
-            {
-                "ezqcid": ["SUB001", "SUB002", "SUB003"],
-                "site": ["A", "B", "C"],
-                "image": [f"/{prefix}one.nii", f"/{prefix}two.nii", f"/{prefix}three.nii"],
-            }
-        )
-    )
+    columns = {
+        "ezqcid": ["SUB001", "SUB002", "SUB003"],
+        "site": ["A", "B", "C"],
+        "image": [f"/{prefix}one.nii", f"/{prefix}two.nii", f"/{prefix}three.nii"],
+    }
+    if not identity_first:
+        columns = {
+            "site": columns["site"],
+            "image": columns["image"],
+            "ezqcid": columns["ezqcid"],
+        }
+    configuration.replace_subjects(pd.DataFrame(columns))
     configuration.save_module(
         _module_payload(label=module_label),
         original_name="example",
@@ -214,6 +219,38 @@ def test_results_navigation_owns_direct_shared_results_page(qtbot, tmp_path) -> 
     assert window.findChild(QLabel, "qcResultsTitle") is None
 
 
+def test_non_first_ezqcid_project_loads_and_module_launch_click_responds(
+    qtbot,
+    tmp_path,
+) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    _add_project(
+        services,
+        tmp_path,
+        "SAMPLE",
+        identity_first=False,
+    )
+    window = build_product_window(services)
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
+
+    assert window.current_context.project_name == "SAMPLE"
+    assert window.table_workspace.applied_state.columns.order[0] == "ezqcid"
+    window.navigation.setCurrentRow(window.modules_page_index)
+    qtbot.mouseClick(
+        window.config_workspace.module_start_buttons["AnatQC"],
+        Qt.LeftButton,
+    )
+    qtbot.waitUntil(lambda: window.qc_controller is not None, timeout=3000)
+
+    assert window.qc_controller.isVisible()
+    assert (
+        window.config_workspace.module_launch_status_label.text()
+        == "已启动质控：AnatQC label"
+    )
+
+
 def test_pre_qc_derived_column_action_persists_and_refreshes_both_tables(
     qtbot,
     tmp_path,
@@ -237,7 +274,9 @@ def test_pre_qc_derived_column_action_persists_and_refreshes_both_tables(
     )
 
     assert window.table_workspace.derive_action.text() == "新增列"
-    assert window.results_workspace.derive_action is None
+    assert window.results_workspace.derive_action.text() == "新增列"
+    assert window.table_workspace.columns_action.text().startswith("列显示")
+    assert window.results_workspace.columns_action.text().startswith("列显示")
     qtbot.mouseClick(window.table_workspace.derive_button, Qt.LeftButton)
     dialog = window.table_workspace.derived_column_dialog
     assert dialog is not None and dialog.isVisible()
@@ -266,6 +305,92 @@ def test_pre_qc_derived_column_action_persists_and_refreshes_both_tables(
         profile.name for profile in window.results_workspace.service.profiles
     }
     assert window.table_workspace.derive_status_label.text() == "已生成列：site_copy"
+
+
+def test_results_page_derived_action_persists_from_subject_columns_only(
+    qtbot,
+    tmp_path,
+) -> None:
+    window, services = _window(qtbot, tmp_path)
+    window.navigation.setCurrentRow(window.results_page_index)
+    result_projection = window.current_context.subjects.copy(deep=True)
+    result_projection["AnatQC.rater1.score1"] = ["Good", "Fair", "Good"]
+    window.results_workspace.replace_service(
+        TableViewService(result_projection),
+        preserve_state=False,
+    )
+
+    assert window.results_workspace.derive_button is not None
+    qtbot.mouseClick(window.results_workspace.derive_button, Qt.LeftButton)
+    dialog = window.results_workspace.derived_column_dialog
+    assert dialog is not None and dialog.isVisible()
+    assert [
+        dialog.columns_list.item(index).text()
+        for index in range(dialog.columns_list.count())
+    ] == list(window.current_context.subjects.columns)
+    assert not dialog.columns_list.findItems(
+        "AnatQC.rater1.score1",
+        Qt.MatchExactly,
+    )
+
+    dialog.name_edit.setText("site_from_results")
+    dialog.expression_edit.setPlainText("site")
+    qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
+    qtbot.waitUntil(
+        lambda: "site_from_results" in window.current_context.subjects.columns,
+        timeout=5000,
+    )
+    qtbot.waitUntil(
+        lambda: not window.context_task_controller.busy,
+        timeout=5000,
+    )
+
+    assert services.configuration_service.subjects()["site_from_results"].tolist() == [
+        "A",
+        "B",
+        "C",
+    ]
+
+
+def test_three_requested_pages_present_same_table_action_order(qtbot, tmp_path) -> None:
+    window, _services = _window(qtbot, tmp_path)
+
+    def root(text: str) -> str:
+        return text.split(" (", 1)[0]
+
+    import_page = window.config_workspace.subjects_tab
+    import_actions = [
+        root(button.text())
+        for button in (
+            import_page.filter_button,
+            import_page.sort_button,
+            import_page.columns_button,
+            import_page.derive_button,
+        )
+    ]
+    pre_qc_actions = [
+        root(action.text())
+        for action in (
+            window.table_workspace.filter_action,
+            window.table_workspace.sort_action,
+            window.table_workspace.columns_action,
+            window.table_workspace.derive_action,
+        )
+    ]
+    result_actions = [
+        root(action.text())
+        for action in (
+            window.results_workspace.filter_action,
+            window.results_workspace.sort_action,
+            window.results_workspace.columns_action,
+            window.results_workspace.derive_action,
+        )
+    ]
+
+    expected = ["筛选", "排序", "列显示", "新增列"]
+    assert import_actions == expected
+    assert pre_qc_actions == expected
+    assert result_actions == expected
 
 
 def test_results_refresh_preserves_clean_qc_controller_and_view_state(
@@ -459,7 +584,7 @@ def test_pre_qc_and_results_share_one_chinese_table_inspector_vocabulary(
     expected_outer = {
         "筛选",
         "排序",
-        "列",
+        "列显示",
         "查找",
         "上一页",
         "下一页",
@@ -522,7 +647,7 @@ def test_pre_qc_and_results_share_one_chinese_table_inspector_vocabulary(
         assert [workspace.inspector_tabs.tabText(index) for index in range(3)] == [
             "筛选",
             "排序",
-            "列",
+            "列显示",
         ]
         assert workspace.inspector_filter_panel.top_join_combo.itemText(0) == "满足全部组"
         assert workspace.inspector_filter_panel.group_editors[0].join_combo.itemText(0) == (

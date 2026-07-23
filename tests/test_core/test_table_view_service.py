@@ -30,6 +30,32 @@ def _result_frame(service: TableViewService, result) -> pd.DataFrame:
     return service.get_window(result, offset=0, limit=max(1, result.matched_total)).dataframe
 
 
+def test_default_state_places_ezqcid_first_without_mutating_source_order() -> None:
+    source = pd.DataFrame(
+        {
+            "site": ["A", "B"],
+            "ezqcid": ["SUB001", "SUB002"],
+            "age": [29, 31],
+        }
+    )
+    original_columns = tuple(source.columns)
+    service = TableViewService(source)
+
+    state = service.default_state(page_size=10)
+    result = service.apply_state(state)
+    window = service.get_window(
+        result,
+        0,
+        10,
+        columns=state.columns.visible_columns,
+    )
+
+    assert state.columns.order == ("ezqcid", "site", "age")
+    assert state.columns.pinned == ("ezqcid",)
+    assert tuple(window.dataframe.columns) == ("ezqcid", "site", "age")
+    assert tuple(source.columns) == original_columns
+
+
 def test_apply_filters_complete_source_before_taking_render_window() -> None:
     source = pd.DataFrame(
         {

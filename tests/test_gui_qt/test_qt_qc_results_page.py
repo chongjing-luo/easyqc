@@ -52,7 +52,7 @@ def test_results_page_is_direct_read_only_shared_table_without_repeated_title(
         "刷新结果",
         "筛选 (0)",
         "排序 (0)",
-        "列 (3/3)",
+        "列显示 (3/3)",
         "查找",
         "导出…",
     ]
@@ -76,7 +76,7 @@ def test_results_page_is_direct_read_only_shared_table_without_repeated_title(
     assert [
         table.inspector_tabs.tabText(index)
         for index in range(table.inspector_tabs.count())
-    ] == ["筛选", "排序", "列"]
+    ] == ["筛选", "排序", "列显示"]
     assert table.find_identity_exact("SUB003")
     qtbot.waitUntil(lambda: not table._pinned_width_update_pending)
 

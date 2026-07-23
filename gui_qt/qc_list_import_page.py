@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from typing import Callable
 
 import pandas as pd
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -31,13 +31,16 @@ from PySide6.QtWidgets import (
 from core.configuration_service import ConfigurationService
 from core.table_view_service import TableViewError, TableViewService
 from gui_qt.columns_dialog import ColumnsDialog
+from gui_qt.derived_column_dialog import DerivedColumnDialog
 from gui_qt.filter_dialog import FilterDialog
+from gui_qt.sort_dialog import SortDialog
 from gui_qt.table_model import QtTableModel
 from gui_qt.task_runner import RevisionedTaskController
 from models.table_view_state import (
     ColumnViewState,
     FilterExpression,
     RowWindow,
+    SortRule,
     TableViewResult,
     TableViewState,
 )
@@ -54,6 +57,7 @@ class _PreparedImportPreview:
 class QtQcListImportPage(QWidget):
     """Own one non-authoritative import draft and one explicit apply action."""
 
+    deriveBusyChanged = Signal(bool)
     PAGE_SIZE = 100
 
     def __init__(
@@ -74,8 +78,12 @@ class QtQcListImportPage(QWidget):
         self._preview_state: TableViewState | None = None
         self._preview_result: TableViewResult | None = None
         self._preview_offset = 0
+        self._derive_busy = False
+        self._derive_enabled = self.configuration.current_project is not None
         self.filter_dialog: FilterDialog | None = None
+        self.sort_dialog: SortDialog | None = None
         self.columns_dialog: ColumnsDialog | None = None
+        self.derived_column_dialog: DerivedColumnDialog | None = None
 
         self.task_controller = RevisionedTaskController(self)
         self.task_controller.resultReady.connect(self._handle_result)
@@ -99,6 +107,10 @@ class QtQcListImportPage(QWidget):
     @property
     def error_text(self) -> str:
         return self.error_label.text()
+
+    @property
+    def derive_busy(self) -> bool:
+        return self._derive_busy
 
     @property
     def preview_columns(self) -> ColumnViewState:
@@ -190,18 +202,24 @@ class QtQcListImportPage(QWidget):
         self.preview_search.setAccessibleName("搜索导入预览")
         self.preview_search.setPlaceholderText("搜索预览")
         self.preview_search.setClearButtonEnabled(True)
-        self.preview_search.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        self.preview_search.setMinimumWidth(
-            self.preview_search.fontMetrics().horizontalAdvance("搜索导入预览内容") + 48
-        )
+        self.preview_search.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.preview_search.setMinimumWidth(0)
         self.preview_search.returnPressed.connect(self.run_preview_search)
         preview_toolbar.addWidget(self.preview_search)
         self.filter_button = QPushButton("筛选", self)
-        self.columns_button = QPushButton("列", self)
+        self.sort_button = QPushButton("排序", self)
+        self.columns_button = QPushButton("列显示", self)
+        self.derive_button = QPushButton("新增列", self)
+        self.derive_button.setAccessibleName("为质控前名单新增列")
+        self.derive_button.setToolTip("使用质控前名单中的已有列生成普通新列")
         self.filter_button.clicked.connect(self.open_filter_dialog)
+        self.sort_button.clicked.connect(self.open_sort_dialog)
         self.columns_button.clicked.connect(self.open_columns_dialog)
+        self.derive_button.clicked.connect(self.open_derived_column_dialog)
         preview_toolbar.addWidget(self.filter_button)
+        preview_toolbar.addWidget(self.sort_button)
         preview_toolbar.addWidget(self.columns_button)
+        preview_toolbar.addWidget(self.derive_button)
         layout.addLayout(preview_toolbar)
 
         self.preview_table = QTableView(self)
@@ -423,7 +441,9 @@ class QtQcListImportPage(QWidget):
             self.read_preview_button,
             self.preview_search,
             self.filter_button,
+            self.sort_button,
             self.columns_button,
+            self.derive_button,
             self.merge_columns_radio,
             self.append_rows_radio,
             self.clear_button,
@@ -436,6 +456,7 @@ class QtQcListImportPage(QWidget):
             raise TypeError("Current QC list must be a pandas DataFrame")
         self._current = frame.copy(deep=True)
         self._update_stats()
+        self._update_actions()
 
     def _install_draft(self, frame: pd.DataFrame) -> None:
         prepared = self._prepare_import_preview(frame.copy(deep=True), keep_draft=True)
@@ -557,13 +578,33 @@ class QtQcListImportPage(QWidget):
         self._set_error("")
         return True
 
+    def apply_preview_sort(self, rules: tuple[SortRule, ...]) -> bool:
+        if self._preview_service is None or self._preview_state is None:
+            return False
+        if not isinstance(rules, tuple) or not all(
+            isinstance(rule, SortRule) for rule in rules
+        ):
+            raise TypeError("Import preview sort requires SortRule values")
+        candidate = self._preview_state.with_sort_rules(rules)
+        try:
+            result = self._preview_service.apply_state(candidate)
+        except Exception as exc:
+            self._set_error(str(exc))
+            return False
+        self._preview_state = candidate
+        self._preview_result = result
+        self._preview_offset = 0
+        self._render_preview()
+        self._set_error("")
+        return True
+
     def open_filter_dialog(self) -> None:
         if self._preview_service is None or self._preview_state is None:
             return
         if self.filter_dialog is not None:
             self.filter_dialog.reject()
         dialog = FilterDialog(
-            self._preview_service.profiles(),
+            self._preview_service.profiles,
             self._preview_state.effective_filter,
             self,
         )
@@ -577,6 +618,33 @@ class QtQcListImportPage(QWidget):
 
         dialog.applyRequested.connect(apply)
         dialog.finished.connect(lambda _result: setattr(self, "filter_dialog", None))
+        dialog.open()
+
+    def open_sort_dialog(self) -> None:
+        if self._preview_service is None or self._preview_state is None:
+            return
+        if self.sort_dialog is not None:
+            self.sort_dialog.reject()
+        dialog = SortDialog(
+            tuple(self._preview_state.columns.order),
+            self._preview_state.sort_rules,
+            self,
+        )
+        self.sort_dialog = dialog
+
+        def apply(rules: object) -> None:
+            if not isinstance(rules, tuple) or not all(
+                isinstance(rule, SortRule) for rule in rules
+            ):
+                dialog.set_error("排序窗口返回了无效草稿")
+                return
+            if self.apply_preview_sort(rules):
+                dialog.complete_apply()
+            else:
+                dialog.set_error(self.error_text)
+
+        dialog.applyRequested.connect(apply)
+        dialog.finished.connect(lambda _result: setattr(self, "sort_dialog", None))
         dialog.open()
 
     def open_columns_dialog(self) -> None:
@@ -597,6 +665,76 @@ class QtQcListImportPage(QWidget):
         dialog.applyRequested.connect(apply)
         dialog.finished.connect(lambda _result: setattr(self, "columns_dialog", None))
         dialog.open()
+
+    def set_derive_column_enabled(self, enabled: bool) -> None:
+        self._derive_enabled = bool(enabled)
+        self._update_actions()
+
+    def open_derived_column_dialog(self) -> DerivedColumnDialog | None:
+        if not self._derive_enabled or self.configuration.current_project is None:
+            self._set_error("请先打开项目")
+            return None
+        if (
+            self.derived_column_dialog is not None
+            and self.derived_column_dialog.isVisible()
+        ):
+            self.derived_column_dialog.raise_()
+            self.derived_column_dialog.activateWindow()
+            return self.derived_column_dialog
+        try:
+            preview_source = self._current.head(10).copy(deep=True)
+            dialog = DerivedColumnDialog(
+                preview_source,
+                self._persist_derived_subject_column,
+                self,
+            )
+        except Exception as exc:
+            self._set_error(str(exc).strip() or type(exc).__name__)
+            return None
+        dialog.busyChanged.connect(self._set_derive_busy)
+        dialog.columnCommitted.connect(self._derived_column_committed)
+        dialog.finished.connect(
+            lambda _result, current=dialog: self._derived_column_dialog_finished(
+                current
+            )
+        )
+        self.derived_column_dialog = dialog
+        self._set_error("")
+        dialog.open()
+        return dialog
+
+    def _persist_derived_subject_column(self, name: str, expression: str) -> str:
+        return self.configuration.derive_subject_column(
+            name,
+            expression,
+            notify=False,
+        )
+
+    @Slot(bool)
+    def _set_derive_busy(self, busy: bool) -> None:
+        self._derive_busy = bool(busy)
+        self._update_actions()
+        self.deriveBusyChanged.emit(self._derive_busy)
+
+    @Slot(str)
+    def _derived_column_committed(self, name: str) -> None:
+        try:
+            self.refresh_current(self.configuration.subjects())
+            self.configuration.publish_subjects_changed()
+        except Exception as exc:
+            self._set_error(str(exc).strip() or type(exc).__name__)
+            return
+        self.status_label.setText(f"已生成质控前名单列：{name}")
+        self._set_error("")
+
+    def _derived_column_dialog_finished(
+        self,
+        dialog: DerivedColumnDialog,
+    ) -> None:
+        if self.derived_column_dialog is dialog:
+            self.derived_column_dialog = None
+        self._derive_busy = False
+        self._update_actions()
 
     def _render_empty_preview(self) -> None:
         empty = RowWindow(
@@ -635,7 +773,7 @@ class QtQcListImportPage(QWidget):
             columns=self._preview_state.columns.visible_columns,
         )
         self.preview_model.set_window(window)
-        self.preview_model.set_sort_rules(())
+        self.preview_model.set_sort_rules(self._preview_state.sort_rules)
         total = self._preview_result.matched_total
         start = window.offset + 1 if total else 0
         end = window.offset + len(window.dataframe)
@@ -658,13 +796,16 @@ class QtQcListImportPage(QWidget):
     def _update_preview_buttons(self) -> None:
         if self._preview_state is None:
             self.filter_button.setText("筛选")
-            self.columns_button.setText("列")
+            self.sort_button.setText("排序")
+            self.columns_button.setText("列显示")
             return
         filter_count = len(self._preview_state.conditions)
+        sort_count = len(self._preview_state.sort_rules)
         visible = len(self._preview_state.columns.visible_columns)
         total = len(self._preview_state.columns.order)
         self.filter_button.setText("筛选" if not filter_count else f"筛选 ({filter_count})")
-        self.columns_button.setText(f"列 ({visible}/{total})")
+        self.sort_button.setText("排序" if not sort_count else f"排序 ({sort_count})")
+        self.columns_button.setText(f"列显示 ({visible}/{total})")
 
     def _update_stats(self) -> None:
         if self._draft.empty:
@@ -701,7 +842,15 @@ class QtQcListImportPage(QWidget):
         self.apply_button.setEnabled(not busy and has_draft)
         self.clear_button.setEnabled(not busy and has_draft)
         self.filter_button.setEnabled(not busy and self._preview_service is not None)
+        self.sort_button.setEnabled(not busy and self._preview_service is not None)
         self.columns_button.setEnabled(not busy and self._preview_service is not None)
+        self.derive_button.setEnabled(
+            not busy
+            and not self._derive_busy
+            and self._derive_enabled
+            and self.configuration.current_project is not None
+            and bool(self._current.columns.size)
+        )
 
     def _set_error(self, message: str) -> None:
         self.error_label.setText(message)
@@ -710,7 +859,12 @@ class QtQcListImportPage(QWidget):
     def closeEvent(self, event: QCloseEvent) -> None:
         self._pending = None
         self.task_controller.cancel()
-        for dialog in (self.filter_dialog, self.columns_dialog):
+        for dialog in (
+            self.filter_dialog,
+            self.sort_dialog,
+            self.columns_dialog,
+            self.derived_column_dialog,
+        ):
             if dialog is not None:
                 dialog.reject()
         super().closeEvent(event)

@@ -78,6 +78,7 @@ class QtTableWorkspace(QWidget):
         *,
         on_open_qc: Callable[[str], None] | None = None,
         derive_column_callback: Callable[[str, str], str] | None = None,
+        derive_preview_source: Callable[[], pd.DataFrame] | None = None,
         on_derived_column_committed: Callable[[str], None] | None = None,
         page_size: int = 200,
         background_row_threshold: int = 10_000,
@@ -86,6 +87,8 @@ class QtTableWorkspace(QWidget):
         super().__init__(parent)
         if not isinstance(source, pd.DataFrame):
             raise TypeError("QtTableWorkspace source must be a pandas DataFrame")
+        if derive_preview_source is not None and not callable(derive_preview_source):
+            raise TypeError("derive_preview_source must be callable")
         self.setObjectName("qtTableWorkspace")
         self.setAccessibleName("EasyQC 表格工作区")
         self._pinned_width_update_pending = False
@@ -120,6 +123,7 @@ class QtTableWorkspace(QWidget):
         self.last_export_receipt: ExportReceipt | None = None
         self.on_open_qc = on_open_qc
         self.derive_column_callback = derive_column_callback
+        self.derive_preview_source = derive_preview_source
         self.on_derived_column_committed = on_derived_column_committed
         self.initial_state = self.service.default_state(page_size=page_size)
         self.applied_state = self.initial_state
@@ -170,7 +174,7 @@ class QtTableWorkspace(QWidget):
         )
         self.columns_action = self._add_toolbar_action(
             self.action_toolbar,
-            "列",
+            "列显示",
             QKeySequence("Ctrl+Shift+C"),
             self.open_columns_inspector,
         )
@@ -507,7 +511,7 @@ class QtTableWorkspace(QWidget):
         )
         self.inspector_tabs.addTab(self.inspector_filter_panel, "筛选")
         self.inspector_tabs.addTab(self.inspector_sort_panel, "排序")
-        self.inspector_tabs.addTab(self.inspector_columns_panel, "列")
+        self.inspector_tabs.addTab(self.inspector_columns_panel, "列显示")
         self._inspector_origin_revision = None
 
     def _load_inspector_draft(self) -> None:
@@ -1095,13 +1099,24 @@ class QtTableWorkspace(QWidget):
             self.derived_column_dialog.raise_()
             self.derived_column_dialog.activateWindow()
             return self.derived_column_dialog
-        preview_state = self.service.default_state(page_size=10)
-        preview_result = self.service.apply_state(preview_state)
-        preview_source = self.service.get_window(
-            preview_result,
-            0,
-            10,
-        ).dataframe
+        try:
+            if self.derive_preview_source is not None:
+                preview_source = self.derive_preview_source()
+                if not isinstance(preview_source, pd.DataFrame):
+                    raise TypeError("新增列预览来源必须是表格")
+                preview_source = preview_source.head(10).copy(deep=True)
+            else:
+                preview_state = self.service.default_state(page_size=10)
+                preview_result = self.service.apply_state(preview_state)
+                preview_source = self.service.get_window(
+                    preview_result,
+                    0,
+                    10,
+                    columns=preview_state.columns.order,
+                ).dataframe
+        except Exception as exc:
+            self._set_error(str(exc).strip() or type(exc).__name__)
+            return None
         dialog = DerivedColumnDialog(
             preview_source,
             self.derive_column_callback,
@@ -1115,6 +1130,7 @@ class QtTableWorkspace(QWidget):
             )
         )
         self.derived_column_dialog = dialog
+        self._set_error("")
         dialog.open()
         return dialog
 
@@ -1752,7 +1768,7 @@ class QtTableWorkspace(QWidget):
         self.columns_status_label.setText(f"列 {visible}/{column_total}")
         self.filter_action.setText(f"筛选 ({len(self.applied_state.conditions)})")
         self.sort_action.setText(f"排序 ({len(self.applied_state.sort_rules)})")
-        self.columns_action.setText(f"列 ({visible}/{column_total})")
+        self.columns_action.setText(f"列显示 ({visible}/{column_total})")
         self.sort_status_label.setText(
             " · ".join(
                 f"{priority} {rule.column} {'↑' if rule.ascending else '↓'}"

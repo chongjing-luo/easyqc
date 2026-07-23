@@ -250,6 +250,11 @@ class QtMainWindow(QMainWindow):
                 if self._injected_preview
                 else self._persist_derived_subject_column
             ),
+            derive_preview_source=(
+                None
+                if self._injected_preview
+                else self._derived_subject_preview
+            ),
             on_derived_column_committed=(
                 None
                 if self._injected_preview
@@ -258,6 +263,9 @@ class QtMainWindow(QMainWindow):
             parent=self.pre_qc_list_page,
         )
         self.table_workspace.deriveBusyChanged.connect(
+            lambda _busy: self._update_context_controls()
+        )
+        self.config_workspace.subjects_tab.deriveBusyChanged.connect(
             lambda _busy: self._update_context_controls()
         )
         table_layout.addWidget(self.table_workspace, 1)
@@ -277,9 +285,27 @@ class QtMainWindow(QMainWindow):
         self.results_page = QtQcResultsPage(
             source,
             refresh_callback=self.refresh_results,
+            derive_column_callback=(
+                None
+                if self._injected_preview
+                else self._persist_derived_subject_column
+            ),
+            derive_preview_source=(
+                None
+                if self._injected_preview
+                else self._derived_subject_preview
+            ),
+            on_derived_column_committed=(
+                None
+                if self._injected_preview
+                else self._derived_subject_column_committed
+            ),
             parent=self.workspace_stack,
         )
         self.results_workspace = self.results_page.table_workspace
+        self.results_workspace.deriveBusyChanged.connect(
+            lambda _busy: self._update_context_controls()
+        )
 
         self.direct_pages = (
             self.project_page,
@@ -596,6 +622,11 @@ class QtMainWindow(QMainWindow):
             notify=False,
         )
 
+    def _derived_subject_preview(self) -> pd.DataFrame:
+        """Return ordinary subject columns, excluding rebuildable result fields."""
+
+        return self.current_context.subjects.head(10).copy(deep=True)
+
     @Slot(str)
     def _derived_subject_column_committed(self, _name: str) -> None:
         self.services.configuration_service.publish_subjects_changed()
@@ -748,7 +779,11 @@ class QtMainWindow(QMainWindow):
 
     def _update_context_controls(self) -> None:
         busy = self.context_task_controller.busy
-        derive_busy = self.table_workspace.derive_busy
+        derive_busy = (
+            self.table_workspace.derive_busy
+            or self.results_workspace.derive_busy
+            or self.config_workspace.subjects_tab.derive_busy
+        )
         dirty = bool(self.active_workflow is not None and self.active_workflow.dirty)
         enabled = (
             not busy
@@ -760,6 +795,12 @@ class QtMainWindow(QMainWindow):
         self.reload_action.setEnabled(enabled and self.current_context.has_project)
         self.module_combo.setEnabled(enabled and bool(self.current_context.modules))
         self.table_workspace.set_derive_column_enabled(
+            enabled and self.current_context.has_project
+        )
+        self.results_workspace.set_derive_column_enabled(
+            enabled and self.current_context.has_project
+        )
+        self.config_workspace.subjects_tab.set_derive_column_enabled(
             enabled and self.current_context.has_project
         )
         self.config_workspace.setEnabled(enabled)

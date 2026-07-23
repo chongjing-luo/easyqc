@@ -75,8 +75,11 @@ class TableViewService:
         return len(self._source)
 
     def default_state(self, page_size: int = 200) -> TableViewState:
-        order = tuple(str(column) for column in self._source.columns)
-        pinned = ("ezqcid",) if "ezqcid" in order else ()
+        source_order = tuple(str(column) for column in self._source.columns)
+        pinned = ("ezqcid",) if "ezqcid" in source_order else ()
+        order = pinned + tuple(
+            column for column in source_order if column not in pinned
+        )
         return TableViewState(
             columns=ColumnViewState(order=order, pinned=pinned),
             page_size=page_size,
