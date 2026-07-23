@@ -26,7 +26,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QTabWidget,
-    QTableView,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
@@ -40,10 +39,9 @@ from core.configuration_service import (
     ConfigurationSnapshot,
     ProjectListEntry,
 )
-from gui_qt.table_model import QtTableModel
+from gui_qt.qc_list_import_page import QtQcListImportPage
 from gui_qt.task_runner import RevisionedTaskController
 from models.qcmodule import Score, Tag
-from models.table_view_state import RowWindow
 
 
 class QtProjectConfigWorkspace(QWidget):
@@ -226,15 +224,16 @@ class QtProjectConfigWorkspace(QWidget):
 
         self.tabs = QTabWidget(self)
         self.tabs.setObjectName("configTabs")
-        self.subjects_tab = QWidget(self.tabs)
+        self.subjects_tab = QtQcListImportPage(self.configuration, self.tabs)
         self.constants_tab = QWidget(self.tabs)
         self.modules_tab = QWidget(self.tabs)
-        self.tabs.addTab(self.subjects_tab, "Subjects")
-        self.tabs.addTab(self.constants_tab, "Constants")
-        self.tabs.addTab(self.modules_tab, "QC modules")
-        self._build_subjects_tab()
+        self.tabs.addTab(self.subjects_tab, "质控名单导入")
+        self.tabs.addTab(self.constants_tab, "常量设置")
+        self.tabs.addTab(self.modules_tab, "质控模块")
         self._build_constants_tab()
         self._build_modules_tab()
+        self.subject_model = self.subjects_tab.preview_model
+        self.subject_table = self.subjects_tab.preview_table
         layout.addWidget(self.tabs, 1)
 
         self.status_label = QLabel("", self)
@@ -270,71 +269,6 @@ class QtProjectConfigWorkspace(QWidget):
         button = toolbar.widgetForAction(action)
         button.setAccessibleName(text)
         return action, button
-
-    def _build_subjects_tab(self) -> None:
-        layout = QVBoxLayout(self.subjects_tab)
-        self.subject_summary = QLabel("", self.subjects_tab)
-        self.subject_summary.setObjectName("subjectSummary")
-        self.subject_mode_hint = QLabel(
-            "Import replaces or explicitly merges through Core validation.",
-            self.subjects_tab,
-        )
-        self.subject_mode_hint.setObjectName("panelHint")
-        self.subject_mode_hint.setWordWrap(True)
-        self.subject_mode_hint.setToolTip(self.subject_mode_hint.text())
-        self.subject_mode_hint.setSizePolicy(
-            QSizePolicy.Ignored,
-            QSizePolicy.Preferred,
-        )
-        layout.addWidget(self.subject_summary)
-        layout.addWidget(self.subject_mode_hint)
-        empty = RowWindow(
-            dataframe=pd.DataFrame(columns=["ezqcid"]),
-            source_positions=(),
-            offset=0,
-            limit=200,
-            matched_total=0,
-        )
-        self.subject_model = QtTableModel(empty, self)
-        self.subject_table = QTableView(self.subjects_tab)
-        self.subject_table.setObjectName("configSubjectTable")
-        self.subject_table.setAccessibleName("Configured subject table")
-        self.subject_table.setModel(self.subject_model)
-        self.subject_table.setAlternatingRowColors(True)
-        self.subject_table.setEditTriggers(QTableView.NoEditTriggers)
-        self.subject_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        self.subject_table.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(self.subject_table, 1)
-        self.subject_actions_toolbar = QToolBar("Subject actions", self.subjects_tab)
-        self.subject_actions_toolbar.setObjectName("configSubjectActions")
-        self.subject_actions_toolbar.setMovable(False)
-        self.subject_actions_toolbar.setFloatable(False)
-        self.subject_actions_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        (
-            self.replace_subjects_action,
-            self.replace_subjects_button,
-        ) = self._add_toolbar_action(
-            self.subject_actions_toolbar,
-            "Replace from CSV…",
-            QKeySequence("Ctrl+Shift+R"),
-            lambda: self._choose_subject_csv("replace"),
-        )
-        self.merge_rows_action, self.merge_rows_button = self._add_toolbar_action(
-            self.subject_actions_toolbar,
-            "Append rows…",
-            QKeySequence("Ctrl+Shift+A"),
-            lambda: self._choose_subject_csv("rows"),
-        )
-        (
-            self.merge_columns_action,
-            self.merge_columns_button,
-        ) = self._add_toolbar_action(
-            self.subject_actions_toolbar,
-            "Merge columns…",
-            QKeySequence("Ctrl+Shift+M"),
-            lambda: self._choose_subject_csv("columns"),
-        )
-        layout.addWidget(self.subject_actions_toolbar)
 
     def _build_constants_tab(self) -> None:
         layout = QVBoxLayout(self.constants_tab)
@@ -677,15 +611,7 @@ class QtProjectConfigWorkspace(QWidget):
                 if self.configuration.current_project
                 else pd.DataFrame(columns=["ezqcid"])
             )
-        window = RowWindow(
-            dataframe=frame.copy(deep=True),
-            source_positions=tuple(range(len(frame))),
-            offset=0,
-            limit=max(1, len(frame)),
-            matched_total=len(frame),
-        )
-        self.subject_model.set_window(window)
-        self.subject_summary.setText(f"{len(frame):,} subjects · {len(frame.columns)} columns")
+        self.subjects_tab.refresh_current(frame)
 
     def _refresh_constants(self, constants: dict | None = None) -> None:
         items = list(
@@ -829,42 +755,6 @@ class QtProjectConfigWorkspace(QWidget):
         )
         if answer == QMessageBox.Yes:
             self.remove_project(name)
-
-    def replace_subjects(self, frame: pd.DataFrame) -> bool:
-        try:
-            self.configuration.replace_subjects(frame)
-        except Exception as exc:
-            self._set_error(str(exc))
-            return False
-        self._set_error("")
-        self._refresh_subjects()
-        return True
-
-    def import_subjects(self, path: str, *, mode: str) -> bool:
-        try:
-            self.configuration.import_subject_csv(path, mode=mode)
-        except Exception as exc:
-            self._set_error(str(exc))
-            return False
-        self._set_error("")
-        self._refresh_subjects()
-        return True
-
-    def _choose_subject_csv(self, mode: str) -> None:
-        path, _filter = QFileDialog.getOpenFileName(
-            self,
-            "Choose subject CSV",
-            "",
-            "CSV files (*.csv)",
-        )
-        if path:
-            configuration = self.configuration
-
-            def import_subjects() -> pd.DataFrame:
-                configuration.import_subject_csv(path, mode=mode, notify=False)
-                return configuration.subjects()
-
-            self._submit_io("import_subjects", import_subjects)
 
     def _filter_constants(self, query: str) -> None:
         normalized = str(query).strip().casefold()
@@ -1152,7 +1042,6 @@ class QtProjectConfigWorkspace(QWidget):
             "refresh": "Loading configuration…",
             "load_project": "Loading project…",
             "import_project": "Importing project…",
-            "import_subjects": "Importing subjects…",
             "import_module": "Importing QC module…",
             "export_module": "Exporting QC module…",
         }
@@ -1178,11 +1067,6 @@ class QtProjectConfigWorkspace(QWidget):
                     self.configuration.publish_project_changed()
                 self._selected_module_name = None
                 self.refresh(result)
-            elif operation == "import_subjects":
-                if not isinstance(result, pd.DataFrame):
-                    raise TypeError("Subject import returned an invalid table")
-                self.configuration.publish_subjects_changed()
-                self._refresh_subjects(result)
             elif operation == "import_module":
                 if not isinstance(result, tuple):
                     raise TypeError("Module import returned an invalid module list")
@@ -1199,7 +1083,6 @@ class QtProjectConfigWorkspace(QWidget):
             "refresh": "Configuration loaded",
             "load_project": "Project loaded",
             "import_project": "Project import complete",
-            "import_subjects": "Subject import complete",
             "import_module": "QC module import complete",
             "export_module": "Export complete",
         }

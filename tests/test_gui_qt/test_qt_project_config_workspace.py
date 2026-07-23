@@ -6,6 +6,7 @@ import pandas as pd
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
     QFileDialog,
     QHeaderView,
@@ -42,8 +43,8 @@ def test_qt_project_config_renders_current_project_and_subject_summary(qtbot, tm
     assert workspace.project_combo.currentText() == "SAMPLE"
     assert workspace.project_list.currentItem().text() == "SAMPLE"
     assert workspace.project_name_preview.text() == "SAMPLE"
-    assert "2 subjects" in workspace.subject_summary.text()
-    assert workspace.subject_model.rowCount() == 2
+    assert workspace.subjects_tab.current_row_count == 2
+    assert workspace.subjects_tab.preview_model.rowCount() == 0
 
 
 def test_project_list_header_owns_right_side_create_import_actions_and_read_only_preview(
@@ -167,7 +168,8 @@ def test_initial_configuration_snapshot_loads_without_blocking_qt(
 
     release.set()
     qtbot.waitUntil(lambda: not workspace.io_task_controller.busy, timeout=2000)
-    assert workspace.subject_model.rowCount() == 2
+    assert workspace.subjects_tab.current_row_count == 2
+    assert workspace.subject_model.rowCount() == 0
 
 
 def test_qt_project_page_creates_and_unregisters_without_deleting_files(qtbot, tmp_path) -> None:
@@ -322,10 +324,10 @@ def test_qt_configuration_uses_responsive_toolbars_splitter_and_long_tooltips(
 
     workspace.module_label.setText("隐藏模块页不应响应保存快捷键")
     workspace.tabs.setCurrentWidget(workspace.subjects_tab)
-    workspace.subject_table.setFocus()
-    qtbot.waitUntil(workspace.subject_table.hasFocus)
+    workspace.subjects_tab.preview_table.setFocus()
+    qtbot.waitUntil(workspace.subjects_tab.preview_table.hasFocus)
     qtbot.keyClick(
-        workspace.subject_table,
+        workspace.subjects_tab.preview_table,
         Qt.Key.Key_S,
         Qt.KeyboardModifier.ControlModifier,
     )
@@ -382,52 +384,24 @@ def test_project_load_runs_in_background_and_keeps_qt_responsive(
     assert config.current_project.name == "SAMPLE"
     assert workspace.project_list.currentItem().text() == "SAMPLE"
     assert workspace.project_combo.currentText() == "SAMPLE"
-    assert workspace.subject_model.rowCount() == 2
+    assert workspace.subjects_tab.current_row_count == 2
+    assert workspace.subject_model.rowCount() == 0
     assert project_event_threads == [gui_thread]
 
 
-def test_subject_csv_import_runs_in_background_and_refreshes_snapshot(
+def test_qc_list_import_page_is_composed_without_old_immediate_write_buttons(
     qtbot,
     tmp_path,
-    monkeypatch,
 ) -> None:
     workspace, config = _workspace(qtbot, tmp_path)
-    source = tmp_path / "subjects.csv"
-    pd.DataFrame(
-        {"ezqcid": ["SUB010", "SUB011", "SUB012"], "site": ["A", "B", "C"]}
-    ).to_csv(source, index=False)
-    monkeypatch.setattr(
-        QFileDialog,
-        "getOpenFileName",
-        lambda *_args, **_kwargs: (str(source), "CSV files (*.csv)"),
+
+    assert workspace.subjects_tab.configuration is config
+    assert workspace.subjects_tab.preview_table.editTriggers() == (
+        QAbstractItemView.EditTrigger.NoEditTriggers
     )
-    real_import = config.import_subject_csv
-    started = Event()
-    release = Event()
-
-    def delayed_import(path, *, mode, notify=True):
-        started.set()
-        release.wait(2)
-        return real_import(path, mode=mode, notify=notify)
-
-    monkeypatch.setattr(config, "import_subject_csv", delayed_import)
-    subject_event_threads = []
-    config.project_service.event_bus.subscribe(
-        EventType.SUBJECTS_CHANGED,
-        lambda _event: subject_event_threads.append(get_ident()),
-    )
-    gui_thread = get_ident()
-
-    qtbot.mouseClick(workspace.replace_subjects_button, Qt.LeftButton)
-    qtbot.waitUntil(started.is_set, timeout=2000)
-    assert workspace.io_task_controller.busy
-    assert "Importing subjects" in workspace.status_label.text()
-
-    release.set()
-    qtbot.waitUntil(lambda: not workspace.io_task_controller.busy, timeout=2000)
-    assert workspace.subject_model.rowCount() == 3
-    assert "3 subjects" in workspace.subject_summary.text()
-    assert subject_event_threads == [gui_thread]
+    assert not hasattr(workspace, "replace_subjects_button")
+    assert not hasattr(workspace, "merge_rows_button")
+    assert not hasattr(workspace, "merge_columns_button")
 
 
 def test_module_export_runs_in_background_and_reports_completion(
