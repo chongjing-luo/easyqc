@@ -6,8 +6,8 @@ from copy import deepcopy
 from pathlib import Path
 
 import pandas as pd
-from PySide6.QtCore import Qt, Slot
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
+from PySide6.QtCore import QSize, Qt, Slot
+from PySide6.QtGui import QAction, QCloseEvent, QFont, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -140,7 +140,16 @@ class QtMainWindow(QMainWindow):
         self.navigation.setObjectName("primaryNavigation")
         self.navigation.setAccessibleName("EasyQC 功能导航")
         self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        navigation_font = QFont(self.navigation.font())
+        if navigation_font.pointSizeF() > 0:
+            navigation_font.setPointSizeF(navigation_font.pointSizeF() + 1)
+        elif navigation_font.pixelSize() > 0:
+            navigation_font.setPixelSize(navigation_font.pixelSize() + 1)
+        self.navigation.setFont(navigation_font)
+        self.navigation.setSpacing(4)
         self.navigation.addItems(self.NAVIGATION_LABELS)
+        for row in range(self.navigation.count()):
+            self._set_navigation_item_height(row, line_count=1)
         navigation_layout.addWidget(self.navigation, 1)
         minimum_navigation_width = max(
             self.navigation.fontMetrics().horizontalAdvance("质控名单导入") + 48,
@@ -234,7 +243,23 @@ class QtMainWindow(QMainWindow):
         self.shell_empty_label.setObjectName("shellEmptyState")
         self.shell_empty_label.setWordWrap(True)
         table_layout.addWidget(self.shell_empty_label)
-        self.table_workspace = QtTableWorkspace(source, parent=self.pre_qc_list_page)
+        self.table_workspace = QtTableWorkspace(
+            source,
+            derive_column_callback=(
+                None
+                if self._injected_preview
+                else self._persist_derived_subject_column
+            ),
+            on_derived_column_committed=(
+                None
+                if self._injected_preview
+                else self._derived_subject_column_committed
+            ),
+            parent=self.pre_qc_list_page,
+        )
+        self.table_workspace.deriveBusyChanged.connect(
+            lambda _busy: self._update_context_controls()
+        )
         table_layout.addWidget(self.table_workspace, 1)
         self.subjects_page = self.pre_qc_list_page
 
@@ -546,28 +571,59 @@ class QtMainWindow(QMainWindow):
             Qt.AccessibleTextRole,
             "项目选择" if not name else f"项目选择，当前项目 {name}",
         )
+        self._set_navigation_item_height(
+            self.project_page_index,
+            line_count=2 if name else 1,
+        )
+
+    def _set_navigation_item_height(self, row: int, *, line_count: int) -> None:
+        item = self.navigation.item(int(row))
+        if item is None:
+            return
+        height = self.navigation.fontMetrics().lineSpacing() * int(line_count) + 16
+        item.setSizeHint(QSize(0, height))
+
+    def _persist_derived_subject_column(
+        self,
+        name: str,
+        expression: str,
+    ) -> str:
+        """Worker-side Core call; event publication stays on the GUI thread."""
+
+        return self.services.configuration_service.derive_subject_column(
+            name,
+            expression,
+            notify=False,
+        )
+
+    @Slot(str)
+    def _derived_subject_column_committed(self, _name: str) -> None:
+        self.services.configuration_service.publish_subjects_changed()
+
+    def _reject_qc_launch(self, message: str) -> bool:
+        text = str(message).strip() or "未知错误"
+        self._set_error(text)
+        self.config_workspace.set_module_launch_feedback(
+            f"启动失败：{text}"
+        )
+        return False
 
     def start_qc_module(self, module_name: str) -> bool:
         """Install the exact requested module through the existing QC factory."""
 
         requested = str(module_name).strip()
         if self._injected_preview or self.context_task_controller.busy:
-            self._set_error("当前状态无法启动质控")
-            return False
+            return self._reject_qc_launch("当前状态无法启动质控")
         if not self.current_context.has_project:
-            self._set_error("请先打开项目")
-            return False
+            return self._reject_qc_launch("请先打开项目")
         if self.current_context.subjects.empty:
-            self._set_error("质控前名单为空")
-            return False
+            return self._reject_qc_launch("质控前名单为空")
         module_names = {module.name for module in self.current_context.modules}
         if requested not in module_names:
-            self._set_error(f"质控模块不存在: {requested}")
-            return False
+            return self._reject_qc_launch(f"质控模块不存在: {requested}")
         workflow = self.active_workflow
         if workflow is not None and workflow.dirty:
-            self._set_error("请先保存或放弃当前质控修改")
-            return False
+            return self._reject_qc_launch("请先保存或放弃当前质控修改")
         identities = tuple(self.current_context.subjects["ezqcid"].astype(str))
         initial = (
             workflow.current_ezqcid
@@ -582,8 +638,7 @@ class QtMainWindow(QMainWindow):
                 navigation_ids=identities,
             )
         except Exception as exc:
-            self._set_error(str(exc))
-            return False
+            return self._reject_qc_launch(str(exc))
         self._install_qc_workspace(replacement, requested)
         self._updating_controls = True
         try:
@@ -693,18 +748,27 @@ class QtMainWindow(QMainWindow):
 
     def _update_context_controls(self) -> None:
         busy = self.context_task_controller.busy
+        derive_busy = self.table_workspace.derive_busy
         dirty = bool(self.active_workflow is not None and self.active_workflow.dirty)
-        enabled = not busy and not dirty and not self._injected_preview
+        enabled = (
+            not busy
+            and not derive_busy
+            and not dirty
+            and not self._injected_preview
+        )
         self.project_combo.setEnabled(enabled and bool(self.current_context.project_names))
         self.reload_action.setEnabled(enabled and self.current_context.has_project)
         self.module_combo.setEnabled(enabled and bool(self.current_context.modules))
-        self.config_workspace.setEnabled(not busy and not dirty and not self._injected_preview)
+        self.table_workspace.set_derive_column_enabled(
+            enabled and self.current_context.has_project
+        )
+        self.config_workspace.setEnabled(enabled)
         for section in (
             self.config_workspace.constants_tab,
             self.config_workspace.subjects_tab,
             self.config_workspace.modules_tab,
         ):
-            section.setEnabled(not busy and not dirty and not self._injected_preview)
+            section.setEnabled(enabled)
 
     def _on_project_facts_changed(self, _event: Event) -> None:
         if self._closing or self._injected_preview:

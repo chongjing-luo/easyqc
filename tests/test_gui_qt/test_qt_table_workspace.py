@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QLabel,
     QScrollArea,
+    QScrollBar,
     QSplitter,
     QTabWidget,
     QToolBar,
@@ -74,6 +75,11 @@ def test_table_uses_standard_overflow_toolbars_without_fixed_chip_geometry(qtbot
     assert workspace.view_inspector.isHidden()
     assert len(workspace.critical_shortcuts) == len(workspace.critical_actions)
     assert all(shortcut.key().toString() for shortcut in workspace.critical_shortcuts)
+    assert all(
+        not workspace.action_toolbar.widgetForAction(action).autoRaise()
+        for action in workspace.critical_actions
+        if workspace.action_toolbar.widgetForAction(action) is not None
+    )
 
 
 def test_applied_filter_actions_use_toolbar_overflow_and_remain_removable(qtbot):
@@ -124,8 +130,6 @@ def test_multi_pinned_width_uses_all_sections_and_caps_at_45_percent(qtbot):
             pinned=("ezqcid", "age"),
         )
     )
-    qtbot.waitUntil(lambda: workspace.pinned_view.horizontalScrollBar().maximum() > 0)
-
     surface_width = workspace.table_surface.contentsRect().width()
     cap = int(surface_width * workspace.PINNED_SURFACE_FRACTION)
     expected_content = (
@@ -134,15 +138,64 @@ def test_multi_pinned_width_uses_all_sections_and_caps_at_45_percent(qtbot):
         + workspace.pinned_view.verticalHeader().width()
         + 2 * workspace.pinned_view.frameWidth()
     )
+    qtbot.waitUntil(
+        lambda: workspace.pinned_view.width() == min(expected_content, cap)
+    )
 
     assert workspace._pinned_content_width() == expected_content
     assert workspace.pinned_view.width() == min(expected_content, cap)
     assert workspace.pinned_view.width() <= cap
     assert (
         workspace.pinned_view.horizontalScrollBarPolicy()
-        == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     )
-    assert workspace.pinned_view.horizontalScrollBar().maximum() > 0
+    assert isinstance(workspace.horizontal_scrollbar, QScrollBar)
+    assert (
+        workspace.table_view.horizontalScrollBarPolicy()
+        == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    )
+
+
+def test_external_scrollbars_span_surface_and_keep_last_rows_aligned(qtbot):
+    rows = 120
+    source = pd.DataFrame(
+        {
+            "ezqcid": [f"SUB{index:03d}" for index in range(rows)],
+            **{
+                f"value_{column}": list(range(rows))
+                for column in range(8)
+            },
+        }
+    )
+    workspace = QtTableWorkspace(source, page_size=200)
+    qtbot.addWidget(workspace)
+    workspace.resize(1180, 760)
+    workspace.show()
+    qtbot.waitUntil(lambda: workspace.vertical_scrollbar.maximum() > 0)
+    qtbot.waitUntil(lambda: workspace.horizontal_scrollbar.maximum() > 0)
+    qtbot.waitUntil(
+        lambda: workspace.pinned_view.geometry().right()
+        < workspace.table_view.geometry().left()
+    )
+
+    surface_rect = workspace.table_surface.contentsRect()
+    horizontal_rect = workspace.horizontal_scrollbar.geometry()
+    assert horizontal_rect.left() <= workspace.pinned_view.geometry().left()
+    assert horizontal_rect.right() >= workspace.table_view.geometry().right() - 1
+    assert horizontal_rect.right() <= surface_rect.right()
+
+    workspace.vertical_scrollbar.setValue(workspace.vertical_scrollbar.maximum())
+
+    assert (
+        workspace.table_view.verticalScrollBar().value()
+        == workspace.pinned_view.verticalScrollBar().value()
+        == workspace.vertical_scrollbar.value()
+    )
+    last_row = workspace.table_model.rowCount() - 1
+    assert workspace.table_view.rowViewportPosition(last_row) == (
+        workspace.pinned_view.rowViewportPosition(last_row)
+    )
+    assert workspace.table_view.viewport().height() == workspace.pinned_view.viewport().height()
 
 
 def test_pinned_width_recomputes_after_resize_and_section_change(qtbot):

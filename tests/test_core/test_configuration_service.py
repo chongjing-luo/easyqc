@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from core.configuration_service import ConfigurationError, ConfigurationService
+from core.event_bus import EventType
 from core.project_service import ProjectService
 from core.table_service import TableService
 from utils.file_utils import FileUtils
@@ -34,6 +35,55 @@ def test_project_and_subject_configuration_use_temporary_atomic_files(tmp_path) 
     assert projects.current_project.name == "SAMPLE"
     assert projects.current_project.settings_path.exists()
     assert (projects.current_project.table_dir / "ezqc_all.csv").exists()
+
+
+def test_derive_subject_column_persists_values_once_and_publishes_change(tmp_path) -> None:
+    service, projects = _service(tmp_path)
+    service.replace_subjects(_subjects(), notify=False)
+    events = []
+    service.project_service.event_bus.subscribe(
+        EventType.SUBJECTS_CHANGED,
+        events.append,
+    )
+
+    result = service.derive_subject_column("age_next", "age + 1")
+
+    assert result == "age_next"
+    assert service.subjects()["age_next"].tolist() == [30, 32]
+    assert events and events[-1].source == "ConfigurationService"
+    csv_text = (
+        projects.current_project.table_dir / "ezqc_all.csv"
+    ).read_text(encoding="utf-8")
+    assert "age_next" in csv_text.splitlines()[0]
+    assert "age + 1" not in csv_text
+
+
+@pytest.mark.parametrize(
+    ("name", "expression", "match"),
+    [
+        ("age", "age + 1", "已存在"),
+        ("unsafe", "__import__('os')", "白名单"),
+        ("ezqcid", "age + 1", "已存在"),
+        ("class", "age + 1", "有效字段名"),
+        (None, "age + 1", "必须是文本"),
+    ],
+)
+def test_derive_subject_column_rejects_invalid_request_without_writing(
+    tmp_path,
+    name,
+    expression,
+    match,
+) -> None:
+    service, projects = _service(tmp_path)
+    service.replace_subjects(_subjects(), notify=False)
+    table_path = projects.current_project.table_dir / "ezqc_all.csv"
+    before = table_path.read_bytes()
+
+    with pytest.raises(ConfigurationError, match=match):
+        service.derive_subject_column(name, expression)
+
+    assert table_path.read_bytes() == before
+    pd.testing.assert_frame_equal(service.subjects(), _subjects())
 
 
 @pytest.mark.parametrize(

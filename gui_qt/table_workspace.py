@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -25,11 +26,13 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QScrollBar,
     QSizePolicy,
     QSplitter,
     QTableView,
     QTabWidget,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -44,6 +47,7 @@ from core.table_export_service import (
 from core.table_view_service import QcIdentityError, TableViewError, TableViewService
 from gui_qt.columns_dialog import ColumnsDialog
 from gui_qt.columns_panel import ColumnsPanel
+from gui_qt.derived_column_dialog import DerivedColumnDialog
 from gui_qt.filter_dialog import FilterDialog
 from gui_qt.filter_panel import FilterPanel, operator_label
 from gui_qt.sort_dialog import SortDialog
@@ -65,6 +69,7 @@ class QtTableWorkspace(QWidget):
     """Coordinate typed view state, bounded rendering and identity-safe actions."""
 
     exportProgress = Signal(int, int, int)
+    deriveBusyChanged = Signal(bool)
     PINNED_SURFACE_FRACTION = 0.45
 
     def __init__(
@@ -72,6 +77,8 @@ class QtTableWorkspace(QWidget):
         source: pd.DataFrame,
         *,
         on_open_qc: Callable[[str], None] | None = None,
+        derive_column_callback: Callable[[str, str], str] | None = None,
+        on_derived_column_committed: Callable[[str], None] | None = None,
         page_size: int = 200,
         background_row_threshold: int = 10_000,
         parent: QWidget | None = None,
@@ -82,6 +89,16 @@ class QtTableWorkspace(QWidget):
         self.setObjectName("qtTableWorkspace")
         self.setAccessibleName("EasyQC 表格工作区")
         self._pinned_width_update_pending = False
+        self._pinned_width_timer = QTimer(self)
+        self._pinned_width_timer.setSingleShot(True)
+        self._pinned_width_timer.timeout.connect(
+            self._apply_scheduled_pinned_width_update
+        )
+        self._scroll_refresh_timer = QTimer(self)
+        self._scroll_refresh_timer.setSingleShot(True)
+        self._scroll_refresh_timer.timeout.connect(
+            self._refresh_external_scrollbars
+        )
         self.service = TableViewService(source)
         self.export_service = TableExportService(self.service)
         if background_row_threshold <= 0:
@@ -102,12 +119,16 @@ class QtTableWorkspace(QWidget):
         self._export_revision: int | None = None
         self.last_export_receipt: ExportReceipt | None = None
         self.on_open_qc = on_open_qc
+        self.derive_column_callback = derive_column_callback
+        self.on_derived_column_committed = on_derived_column_committed
         self.initial_state = self.service.default_state(page_size=page_size)
         self.applied_state = self.initial_state
         self.draft_state: TableViewState | None = None
         self.filter_dialog: FilterDialog | None = None
         self.sort_dialog: SortDialog | None = None
         self.columns_dialog: ColumnsDialog | None = None
+        self.derived_column_dialog: DerivedColumnDialog | None = None
+        self._derive_busy = False
         self._inspector_origin_revision: int | None = None
         self.result = self.service.apply_state(self.applied_state)
         self.row_window = self.service.get_window(
@@ -153,13 +174,30 @@ class QtTableWorkspace(QWidget):
             QKeySequence("Ctrl+Shift+C"),
             self.open_columns_inspector,
         )
+        self.derive_action = (
+            self._add_toolbar_action(
+                self.action_toolbar,
+                "新增列",
+                QKeySequence("Ctrl+Shift+D"),
+                self.open_derived_column_dialog,
+            )
+            if self.derive_column_callback is not None
+            else None
+        )
         self.action_toolbar.addSeparator()
         self.filter_button = self.action_toolbar.widgetForAction(self.filter_action)
         self.sort_button = self.action_toolbar.widgetForAction(self.sort_action)
         self.columns_button = self.action_toolbar.widgetForAction(self.columns_action)
+        self.derive_button = (
+            self.action_toolbar.widgetForAction(self.derive_action)
+            if self.derive_action is not None
+            else None
+        )
         self.filter_button.setObjectName("filterButton")
         self.sort_button.setObjectName("sortButton")
         self.columns_button.setObjectName("columnsButton")
+        if self.derive_button is not None:
+            self.derive_button.setObjectName("deriveColumnButton")
         self.find_edit = QLineEdit(self.action_toolbar)
         self.find_edit.setObjectName("findIdentity")
         self.find_edit.setAccessibleName("查找精确 ezqcid")
@@ -186,13 +224,18 @@ class QtTableWorkspace(QWidget):
         )
         self.cancel_export_action.setVisible(False)
         self.find_button = self.action_toolbar.widgetForAction(self.find_action)
-        self.critical_actions = (
+        self.critical_actions = tuple(
+            action
+            for action in (
             self.filter_action,
             self.sort_action,
             self.columns_action,
+            self.derive_action,
             self.find_action,
             self.export_action,
             self.cancel_export_action,
+            )
+            if action is not None
         )
         self.critical_shortcuts = tuple(self._toolbar_shortcuts)
         self.open_qc_action = QAction(self)
@@ -233,9 +276,12 @@ class QtTableWorkspace(QWidget):
         self.table_surface = QFrame(self.table_panel)
         self.table_surface.setObjectName("tableSurface")
         self.table_surface.setMinimumWidth(0)
-        table_layout = QHBoxLayout(self.table_surface)
+        self.table_surface.installEventFilter(self)
+        table_layout = QGridLayout(self.table_surface)
         table_layout.setContentsMargins(0, 0, 0, 0)
         table_layout.setSpacing(0)
+        table_layout.setColumnStretch(1, 1)
+        table_layout.setRowStretch(0, 1)
 
         self.table_model = QtTableModel(self.row_window, self)
         self.table_view = QTableView(self.table_surface)
@@ -252,9 +298,12 @@ class QtTableWorkspace(QWidget):
         self.table_view.setModel(self.table_model)
         self.pinned_view.setModel(self.table_model)
         self.pinned_view.setSelectionModel(self.table_view.selectionModel())
-        self.pinned_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.pinned_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.pinned_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.pinned_view.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.table_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.table_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.table_view.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.pinned_view.verticalHeader().setVisible(True)
         self.table_view.verticalHeader().setVisible(False)
         self.pinned_view.horizontalHeader().setStretchLastSection(False)
@@ -264,8 +313,22 @@ class QtTableWorkspace(QWidget):
         self.pinned_view.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         self.pinned_view.setMinimumWidth(0)
         self.table_view.setMinimumWidth(0)
-        table_layout.addWidget(self.pinned_view)
-        table_layout.addWidget(self.table_view, 1)
+        table_layout.addWidget(self.pinned_view, 0, 0)
+        table_layout.addWidget(self.table_view, 0, 1)
+        self.vertical_scrollbar = QScrollBar(Qt.Vertical, self.table_surface)
+        self.vertical_scrollbar.setObjectName("sharedTableVerticalScrollBar")
+        self.vertical_scrollbar.setAccessibleName("表格纵向滚动")
+        table_layout.addWidget(self.vertical_scrollbar, 0, 2)
+        self.horizontal_scrollbar = QScrollBar(Qt.Horizontal, self.table_surface)
+        self.horizontal_scrollbar.setObjectName("sharedTableHorizontalScrollBar")
+        self.horizontal_scrollbar.setAccessibleName("表格横向滚动")
+        table_layout.addWidget(self.horizontal_scrollbar, 1, 0, 1, 2)
+        self.scrollbar_corner = QWidget(self.table_surface)
+        self.scrollbar_corner.setFixedSize(
+            self.vertical_scrollbar.sizeHint().width(),
+            self.horizontal_scrollbar.sizeHint().height(),
+        )
+        table_layout.addWidget(self.scrollbar_corner, 1, 2)
 
         table_panel_layout.addWidget(self.table_surface, 1)
 
@@ -281,6 +344,8 @@ class QtTableWorkspace(QWidget):
         self.sort_status_label = QLabel("", footer)
         self.export_status_label = QLabel("", footer)
         self.export_status_label.setAccessibleName("表格导出状态")
+        self.derive_status_label = QLabel("", footer)
+        self.derive_status_label.setAccessibleName("新增列状态")
         self.selection_status_label = QLabel("未选择记录", footer)
         for status_label in (
             self.count_label,
@@ -288,6 +353,7 @@ class QtTableWorkspace(QWidget):
             self.columns_status_label,
             self.sort_status_label,
             self.export_status_label,
+            self.derive_status_label,
             self.selection_status_label,
         ):
             status_label.setMinimumWidth(0)
@@ -297,6 +363,7 @@ class QtTableWorkspace(QWidget):
         footer_layout.addWidget(self.columns_status_label)
         footer_layout.addWidget(self.sort_status_label)
         footer_layout.addWidget(self.export_status_label)
+        footer_layout.addWidget(self.derive_status_label)
         footer_layout.addStretch(1)
         footer_layout.addWidget(self.selection_status_label)
         footer_layout.addWidget(QLabel("每页", footer))
@@ -337,8 +404,27 @@ class QtTableWorkspace(QWidget):
         self.pinned_view.horizontalHeader().sectionClicked.connect(self._header_clicked)
         self.pinned_view.horizontalHeader().sectionResized.connect(self._pinned_section_resized)
         self.table_view.selectionModel().selectionChanged.connect(self._selection_changed)
-        self.table_view.verticalScrollBar().valueChanged.connect(self.pinned_view.verticalScrollBar().setValue)
-        self.pinned_view.verticalScrollBar().valueChanged.connect(self.table_view.verticalScrollBar().setValue)
+        self.table_view.horizontalScrollBar().rangeChanged.connect(
+            self._sync_horizontal_scroll_range
+        )
+        self.table_view.horizontalScrollBar().valueChanged.connect(
+            self._sync_horizontal_scroll_value_from_view
+        )
+        self.horizontal_scrollbar.valueChanged.connect(
+            self._set_main_horizontal_scroll
+        )
+        self.table_view.verticalScrollBar().rangeChanged.connect(
+            self._sync_vertical_scroll_range
+        )
+        self.table_view.verticalScrollBar().valueChanged.connect(
+            self._sync_vertical_scroll_value_from_view
+        )
+        self.pinned_view.verticalScrollBar().valueChanged.connect(
+            self._sync_vertical_scroll_value_from_view
+        )
+        self.vertical_scrollbar.valueChanged.connect(
+            self._set_shared_vertical_scroll
+        )
 
     def _build_view_inspector(self) -> None:
         """Compose one draft-only Filter/Sort/Columns inspector."""
@@ -536,6 +622,9 @@ class QtTableWorkspace(QWidget):
         action.setToolTip(f"{text} ({shortcut.toString(QKeySequence.NativeText)})")
         action.triggered.connect(callback)
         toolbar.addAction(action)
+        button = toolbar.widgetForAction(action)
+        if isinstance(button, QToolButton):
+            button.setAutoRaise(False)
         shortcut_binding = QShortcut(shortcut, self)
         shortcut_binding.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         shortcut_binding.activated.connect(action.trigger)
@@ -551,6 +640,73 @@ class QtTableWorkspace(QWidget):
         table.setSortingEnabled(False)
         table.setWordWrap(False)
         table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+
+    @staticmethod
+    def _set_scroll_value(scrollbar: QScrollBar, value: int) -> None:
+        previous = scrollbar.blockSignals(True)
+        try:
+            scrollbar.setValue(int(value))
+        finally:
+            scrollbar.blockSignals(previous)
+
+    def _sync_horizontal_scroll_range(self, minimum: int, maximum: int) -> None:
+        source = self.table_view.horizontalScrollBar()
+        previous = self.horizontal_scrollbar.blockSignals(True)
+        try:
+            self.horizontal_scrollbar.setRange(int(minimum), int(maximum))
+            self.horizontal_scrollbar.setSingleStep(source.singleStep())
+            self.horizontal_scrollbar.setPageStep(source.pageStep())
+            self.horizontal_scrollbar.setValue(source.value())
+        finally:
+            self.horizontal_scrollbar.blockSignals(previous)
+
+    def _sync_horizontal_scroll_value_from_view(self, value: int) -> None:
+        self._set_scroll_value(self.horizontal_scrollbar, value)
+
+    def _set_main_horizontal_scroll(self, value: int) -> None:
+        self._set_scroll_value(self.table_view.horizontalScrollBar(), value)
+
+    def _sync_vertical_scroll_range(self, minimum: int, maximum: int) -> None:
+        source = self.table_view.verticalScrollBar()
+        previous = self.vertical_scrollbar.blockSignals(True)
+        try:
+            self.vertical_scrollbar.setRange(int(minimum), int(maximum))
+            self.vertical_scrollbar.setSingleStep(source.singleStep())
+            self.vertical_scrollbar.setPageStep(source.pageStep())
+            self.vertical_scrollbar.setValue(source.value())
+        finally:
+            self.vertical_scrollbar.blockSignals(previous)
+        self._set_scroll_value(
+            self.pinned_view.verticalScrollBar(),
+            source.value(),
+        )
+
+    def _sync_vertical_scroll_value_from_view(self, value: int) -> None:
+        self._set_scroll_value(self.vertical_scrollbar, value)
+        self._set_scroll_value(self.table_view.verticalScrollBar(), value)
+        self._set_scroll_value(self.pinned_view.verticalScrollBar(), value)
+
+    def _set_shared_vertical_scroll(self, value: int) -> None:
+        self._set_scroll_value(self.table_view.verticalScrollBar(), value)
+        self._set_scroll_value(self.pinned_view.verticalScrollBar(), value)
+
+    def _refresh_external_scrollbars(self) -> None:
+        self._update_pinned_view_width()
+        horizontal = self.table_view.horizontalScrollBar()
+        vertical = self.table_view.verticalScrollBar()
+        self._sync_horizontal_scroll_range(
+            horizontal.minimum(),
+            horizontal.maximum(),
+        )
+        self._sync_vertical_scroll_range(
+            vertical.minimum(),
+            vertical.maximum(),
+        )
+        self.scrollbar_corner.setFixedSize(
+            self.vertical_scrollbar.sizeHint().width(),
+            self.horizontal_scrollbar.sizeHint().height(),
+        )
 
     def event(self, event: QEvent) -> bool:
         handled = super().event(event)
@@ -560,18 +716,39 @@ class QtTableWorkspace(QWidget):
             QEvent.Type.ScreenChangeInternal,
         ) and hasattr(self, "table_surface"):
             self._schedule_pinned_width_update()
+            self._schedule_external_scrollbar_refresh()
         return handled
+
+    def eventFilter(self, watched: object, event: QEvent) -> bool:
+        if (
+            watched is getattr(self, "table_surface", None)
+            and event.type() == QEvent.Type.Resize
+        ):
+            self._schedule_pinned_width_update()
+            self._schedule_external_scrollbar_refresh()
+        return super().eventFilter(watched, event)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         if hasattr(self, "table_surface"):
             self._schedule_pinned_width_update()
+            self._schedule_external_scrollbar_refresh()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if hasattr(self, "table_surface"):
+            self._schedule_pinned_width_update()
+            self._schedule_external_scrollbar_refresh()
 
     def _schedule_pinned_width_update(self) -> None:
         if self._pinned_width_update_pending:
             return
         self._pinned_width_update_pending = True
-        QTimer.singleShot(0, self._apply_scheduled_pinned_width_update)
+        self._pinned_width_timer.start(0)
+
+    def _schedule_external_scrollbar_refresh(self) -> None:
+        if not self._scroll_refresh_timer.isActive():
+            self._scroll_refresh_timer.start(0)
 
     def _apply_scheduled_pinned_width_update(self) -> None:
         self._pinned_width_update_pending = False
@@ -599,7 +776,13 @@ class QtTableWorkspace(QWidget):
             return
         available_width = max(0, self.table_surface.contentsRect().width())
         cap = int(available_width * self.PINNED_SURFACE_FRACTION)
-        self.pinned_view.setFixedWidth(min(self._pinned_content_width(), cap))
+        target = min(self._pinned_content_width(), cap)
+        if self.pinned_view.width() != target:
+            self.pinned_view.setFixedWidth(target)
+            layout = self.table_surface.layout()
+            layout.invalidate()
+            layout.activate()
+            self._schedule_external_scrollbar_refresh()
 
     @property
     def error_text(self) -> str:
@@ -623,7 +806,12 @@ class QtTableWorkspace(QWidget):
         )
 
     def _close_open_dialogs(self) -> None:
-        for attribute in ("filter_dialog", "sort_dialog", "columns_dialog"):
+        for attribute in (
+            "filter_dialog",
+            "sort_dialog",
+            "columns_dialog",
+            "derived_column_dialog",
+        ):
             dialog = getattr(self, attribute)
             if dialog is not None:
                 dialog.reject()
@@ -885,6 +1073,78 @@ class QtTableWorkspace(QWidget):
             dialog.set_error(self.error_text)
             return
         dialog.complete_apply()
+
+    @property
+    def derive_busy(self) -> bool:
+        return self._derive_busy
+
+    def set_derive_column_enabled(self, enabled: bool) -> None:
+        if self.derive_action is not None:
+            self.derive_action.setEnabled(bool(enabled) and not self._derive_busy)
+
+    def open_derived_column_dialog(self) -> DerivedColumnDialog | None:
+        """Open one modal one-time calculation over a bounded source preview."""
+
+        if self.derive_column_callback is None:
+            self._set_error("当前表格不能写入新增列")
+            return None
+        if (
+            self.derived_column_dialog is not None
+            and self.derived_column_dialog.isVisible()
+        ):
+            self.derived_column_dialog.raise_()
+            self.derived_column_dialog.activateWindow()
+            return self.derived_column_dialog
+        preview_state = self.service.default_state(page_size=10)
+        preview_result = self.service.apply_state(preview_state)
+        preview_source = self.service.get_window(
+            preview_result,
+            0,
+            10,
+        ).dataframe
+        dialog = DerivedColumnDialog(
+            preview_source,
+            self.derive_column_callback,
+            self,
+        )
+        dialog.busyChanged.connect(self._set_derive_busy)
+        dialog.columnCommitted.connect(self._derived_column_committed)
+        dialog.finished.connect(
+            lambda _result, current=dialog: self._derived_column_dialog_finished(
+                current
+            )
+        )
+        self.derived_column_dialog = dialog
+        dialog.open()
+        return dialog
+
+    @Slot(bool)
+    def _set_derive_busy(self, busy: bool) -> None:
+        next_busy = bool(busy)
+        if self._derive_busy == next_busy:
+            return
+        self._derive_busy = next_busy
+        if self.derive_action is not None:
+            self.derive_action.setEnabled(not next_busy)
+        self.deriveBusyChanged.emit(next_busy)
+
+    @Slot(str)
+    def _derived_column_committed(self, name: str) -> None:
+        self.derive_status_label.setText(f"已生成列：{name}")
+        self._set_error("")
+        if self.on_derived_column_committed is None:
+            return
+        try:
+            self.on_derived_column_committed(name)
+        except Exception as exc:
+            self._set_error(str(exc).strip() or type(exc).__name__)
+
+    def _derived_column_dialog_finished(
+        self,
+        dialog: DerivedColumnDialog,
+    ) -> None:
+        if self.derived_column_dialog is dialog:
+            self.derived_column_dialog = None
 
     def _apply_filter_from_dialog(
         self,
@@ -1344,6 +1604,9 @@ class QtTableWorkspace(QWidget):
     def closeEvent(self, event: QCloseEvent) -> None:
         self._pending_state = None
         self._pending_reset_page = False
+        self._pinned_width_timer.stop()
+        self._scroll_refresh_timer.stop()
+        self._pinned_width_update_pending = False
         self._close_open_dialogs()
         self.close_view_inspector()
         self.task_controller.cancel()
@@ -1386,6 +1649,7 @@ class QtTableWorkspace(QWidget):
             self._update_status()
         finally:
             self._rendering = False
+        self._schedule_external_scrollbar_refresh()
 
     def _configure_columns(self) -> None:
         visible = tuple(self.table_model.snapshot().columns)
@@ -1399,6 +1663,7 @@ class QtTableWorkspace(QWidget):
         has_pinned = any(str(column) in pinned for column in visible)
         self.pinned_view.setVisible(has_pinned)
         if has_pinned:
+            self._update_pinned_view_width()
             self._schedule_pinned_width_update()
 
         header = self.table_view.horizontalHeader()
@@ -1461,6 +1726,8 @@ class QtTableWorkspace(QWidget):
             if chip is not None:
                 chip.setObjectName("filterChip")
                 chip.setAccessibleName(f"移除筛选 {summary}")
+                if isinstance(chip, QToolButton):
+                    chip.setAutoRaise(False)
         self.applied_toolbar.setVisible(bool(self.applied_state.conditions))
 
     @staticmethod

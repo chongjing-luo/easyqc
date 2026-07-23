@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+import keyword
 from pathlib import Path
 import re
 from typing import Any
@@ -13,6 +14,7 @@ import pandas as pd
 from core.event_bus import Event, EventType
 from core.project_service import MODULE_NAME_PATTERN, ProjectService
 from core.table_service import TABLE_ALL, TableService
+from core.table_transform import TableTransformEngine
 from models.project import Project
 from models.qcmodule import QCModule, Score, Tag
 from utils.file_utils import FileUtils
@@ -237,6 +239,48 @@ class ConfigurationService:
         self.table_service.save_table(self._require_project(), TABLE_ALL, validated)
         if notify:
             self.publish_subjects_changed()
+
+    def derive_subject_column(
+        self,
+        name: str,
+        expression: str,
+        *,
+        notify: bool = True,
+    ) -> str:
+        """Calculate and atomically persist one ordinary subject-table column."""
+
+        if not isinstance(name, str):
+            raise ConfigurationError("新增列名必须是文本")
+        if not isinstance(expression, str):
+            raise ConfigurationError("新增列表达式必须是文本")
+        column_name = name.strip()
+        formula = expression.strip()
+        if not column_name:
+            raise ConfigurationError("新增列名不能为空")
+        if not column_name.isidentifier() or keyword.iskeyword(column_name):
+            raise ConfigurationError("新增列名必须是不含空格或标点的有效字段名")
+        if not formula:
+            raise ConfigurationError("新增列表达式不能为空")
+        frame = self.subjects()
+        if column_name in frame.columns:
+            raise ConfigurationError(f"列已存在: {column_name}")
+        try:
+            frame = TableTransformEngine().derive_column(
+                frame,
+                column_name,
+                formula,
+            )
+            frame = self._validated_subjects(frame)
+        except (ArithmeticError, TypeError, ValueError) as exc:
+            raise ConfigurationError(str(exc)) from exc
+        self.table_service.save_table(
+            self._require_project(),
+            TABLE_ALL,
+            frame,
+        )
+        if notify:
+            self.publish_subjects_changed()
+        return column_name
 
     def import_subject_csv(
         self,

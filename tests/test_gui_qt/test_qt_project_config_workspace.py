@@ -314,6 +314,34 @@ def test_module_list_header_owns_right_side_new_import_and_each_row_launches_exa
     assert launched == ["AnatQC"]
     assert workspace._selected_module_name == "AnatQC"
     assert workspace.module_list.currentItem().data(Qt.UserRole) == "AnatQC"
+    assert workspace.module_launch_status_label.text() == "已启动质控：Anatomical QC"
+
+    row_labels = [
+        label.text()
+        for label in row_widget.findChildren(QLabel)
+        if label.text().strip()
+    ]
+    assert row_labels == ["Anatomical QC", "AnatQC · 只读"]
+
+
+def test_module_launch_failure_is_visible_on_module_page(qtbot, tmp_path) -> None:
+    workspace, _config = _workspace(
+        qtbot,
+        tmp_path,
+        module_launcher=lambda _name: False,
+    )
+    workspace.resize(640, 560)
+    workspace.show()
+    workspace.tabs.setCurrentWidget(workspace.modules_tab)
+
+    qtbot.mouseClick(
+        workspace.module_start_buttons["example"],
+        Qt.LeftButton,
+    )
+
+    assert workspace.module_launch_status_label.isVisibleTo(workspace.modules_tab)
+    assert "启动失败" in workspace.module_launch_status_label.text()
+    assert "未被接受" in workspace.module_launch_status_label.text()
 
 
 def test_module_footer_order_and_final_viewer_editor_support_long_commands(
@@ -404,7 +432,8 @@ def test_qt_configuration_uses_responsive_toolbars_splitter_and_long_tooltips(
     assert workspace.tag_table.horizontalHeader().stretchLastSection()
     assert workspace.constants_table.item(0, 1).toolTip() == long_path
     selected_item = workspace.module_list.currentItem()
-    assert selected_item.toolTip() == selected_item.text()
+    assert selected_item.text() == ""
+    assert selected_item.data(workspace.MODULE_LABEL_ROLE) == long_label
     assert long_label in selected_item.toolTip()
     assert workspace.project_list.horizontalScrollBarPolicy() == Qt.ScrollBarAsNeeded
     assert workspace.project_path_preview.toolTip() == str(config.current_project.path)
@@ -418,6 +447,18 @@ def test_qt_configuration_uses_responsive_toolbars_splitter_and_long_tooltips(
         workspace.export_module_action,
     )
     assert all(action.shortcut().toString() for action in actions)
+    assert all(
+        not button.autoRaise()
+        for button in (
+            workspace.new_project_button,
+            workspace.import_project_button,
+            workspace.load_project_button,
+            workspace.new_module_button,
+            workspace.import_module_button,
+            workspace.save_module_button,
+            workspace.export_module_button,
+        )
+    )
     workspace.module_label.setText("键盘保存后的模块标签")
     workspace.module_label.setFocus()
     qtbot.waitUntil(workspace.module_label.hasFocus)

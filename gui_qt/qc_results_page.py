@@ -7,7 +7,7 @@ from collections.abc import Callable
 import pandas as pd
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
-from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from core.table_view_service import TableViewService
 from gui_qt.table_workspace import QtTableWorkspace
@@ -133,6 +133,8 @@ class QtQcResultsPage(QWidget):
             self.refresh_action
         )
         self.refresh_button.setObjectName("refreshQcResultsButton")
+        if isinstance(self.refresh_button, QToolButton):
+            self.refresh_button.setAutoRaise(False)
         layout.addWidget(self.table_workspace, 1)
 
         self.error_label = QLabel("", self)

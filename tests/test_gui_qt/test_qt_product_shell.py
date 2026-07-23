@@ -5,6 +5,7 @@ from threading import Event
 import pandas as pd
 from shiboken6 import isValid
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractButton,
     QComboBox,
@@ -175,6 +176,13 @@ def test_qt_main_window_uses_six_direct_navigation_pages(qtbot, tmp_path) -> Non
     assert window.findChild(QListWidget, "primaryNavigation").isVisible()
     assert window.findChild(QStackedWidget, "workspaceStack").isVisible()
     assert window.findChild(QToolBar, "shellContextToolbar") is None
+    host_font = QFont(window.font())
+    assert window.navigation.spacing() == 4
+    if host_font.pointSizeF() > 0:
+        assert window.navigation.font().pointSizeF() == host_font.pointSizeF() + 1
+    line_height = window.navigation.fontMetrics().lineSpacing()
+    assert window.navigation.item(1).sizeHint().height() >= line_height + 16
+    assert window.navigation.item(0).sizeHint().height() >= 2 * line_height + 16
 
 
 def test_qt_main_window_navigation_switches_exact_page(qtbot, tmp_path) -> None:
@@ -204,6 +212,60 @@ def test_results_navigation_owns_direct_shared_results_page(qtbot, tmp_path) -> 
     assert window.results_workspace.service is window.current_context.table_view_service
     assert window.workspace_stack.currentWidget() is window.results_page
     assert window.findChild(QLabel, "qcResultsTitle") is None
+
+
+def test_pre_qc_derived_column_action_persists_and_refreshes_both_tables(
+    qtbot,
+    tmp_path,
+) -> None:
+    window, services = _window(qtbot, tmp_path)
+    window.resize(1180, 760)
+    window.navigation.setCurrentRow(window.pre_qc_list_page_index)
+    qtbot.waitUntil(
+        lambda: window.table_workspace.pinned_view.width()
+        == min(
+            window.table_workspace._pinned_content_width(),
+            int(
+                window.table_workspace.table_surface.contentsRect().width()
+                * window.table_workspace.PINNED_SURFACE_FRACTION
+            ),
+        )
+    )
+    assert (
+        window.table_workspace.pinned_view.geometry().right()
+        < window.table_workspace.table_view.geometry().left()
+    )
+
+    assert window.table_workspace.derive_action.text() == "新增列"
+    assert window.results_workspace.derive_action is None
+    qtbot.mouseClick(window.table_workspace.derive_button, Qt.LeftButton)
+    dialog = window.table_workspace.derived_column_dialog
+    assert dialog is not None and dialog.isVisible()
+    dialog.name_edit.setText("site_copy")
+    dialog.expression_edit.setPlainText("site")
+    qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
+
+    qtbot.waitUntil(
+        lambda: "site_copy" in window.current_context.subjects.columns,
+        timeout=5000,
+    )
+    qtbot.waitUntil(
+        lambda: not window.context_task_controller.busy,
+        timeout=5000,
+    )
+
+    assert services.configuration_service.subjects()["site_copy"].tolist() == [
+        "A",
+        "B",
+        "C",
+    ]
+    assert "site_copy" in {
+        profile.name for profile in window.table_workspace.service.profiles
+    }
+    assert "site_copy" in {
+        profile.name for profile in window.results_workspace.service.profiles
+    }
+    assert window.table_workspace.derive_status_label.text() == "已生成列：site_copy"
 
 
 def test_results_refresh_preserves_clean_qc_controller_and_view_state(
@@ -570,6 +632,37 @@ def test_module_rows_are_the_sole_visible_qc_launch_and_use_exact_module_name(
     assert window.qc_controller.isVisible()
     assert window.module_combo.currentData() == "FuncQC"
     assert window.config_workspace._selected_module_name == "FuncQC"
+
+
+def test_module_launch_core_error_remains_visible_on_module_page(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    window, _services = _window(qtbot, tmp_path)
+    window.navigation.setCurrentRow(window.modules_page_index)
+
+    def fail_launch(*_args, **_kwargs):
+        raise ProjectContextError("查看器配置缺少 image 列")
+
+    monkeypatch.setattr(
+        window.context_service,
+        "create_qc_workflow",
+        fail_launch,
+    )
+    qtbot.mouseClick(
+        window.config_workspace.module_start_buttons["AnatQC"],
+        Qt.LeftButton,
+    )
+
+    assert window.qc_controller is None
+    assert window.config_workspace.module_launch_status_label.isVisibleTo(
+        window.modules_page
+    )
+    assert (
+        window.config_workspace.module_launch_status_label.text()
+        == "启动失败：查看器配置缺少 image 列"
+    )
 
 
 def test_module_launch_replaces_exactly_one_top_level_controller(qtbot, tmp_path) -> None:

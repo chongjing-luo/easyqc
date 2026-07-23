@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -53,6 +54,8 @@ from models.qcmodule import Score, Tag
 
 class QtProjectConfigWorkspace(QWidget):
     """Render typed configuration forms; Core owns every read/write action."""
+
+    MODULE_LABEL_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 
     def __init__(
         self,
@@ -278,6 +281,8 @@ class QtProjectConfigWorkspace(QWidget):
         toolbar.addAction(action)
         button = toolbar.widgetForAction(action)
         button.setAccessibleName(text)
+        if isinstance(button, QToolButton):
+            button.setAutoRaise(False)
         return action, button
 
     def _build_constants_tab(self) -> None:
@@ -548,6 +553,12 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_splitter.setStretchFactor(1, 3)
         self.module_splitter.setSizes([320, 640])
         layout.addWidget(self.module_splitter, 1)
+        self.module_launch_status_label = QLabel("", self.modules_tab)
+        self.module_launch_status_label.setObjectName("moduleLaunchStatus")
+        self.module_launch_status_label.setAccessibleName("质控启动状态")
+        self.module_launch_status_label.setWordWrap(True)
+        self.module_launch_status_label.hide()
+        layout.addWidget(self.module_launch_status_label)
 
         self.module_list.currentRowChanged.connect(self._module_row_changed)
         self.module_up_button.clicked.connect(lambda: self._move_selected_module(-1))
@@ -722,11 +733,18 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_list.blockSignals(True)
         self.module_list.clear()
         self.module_start_buttons = {}
-        for position, module in enumerate(modules, start=1):
-            item_text = f"{position:>2}  {module.name} · {module.label}"
-            item = QListWidgetItem(item_text, self.module_list)
+        for module in modules:
+            item_text = module.label
+            detail_text = f"{module.name} · {module.rater or '只读'}"
+            tooltip = f"{module.label}\n{detail_text}"
+            item = QListWidgetItem("", self.module_list)
             item.setData(Qt.UserRole, module.name)
-            item.setToolTip(item_text)
+            item.setData(self.MODULE_LABEL_ROLE, item_text)
+            item.setData(
+                Qt.AccessibleTextRole,
+                f"{module.label}，{detail_text}",
+            )
+            item.setToolTip(tooltip)
             row_widget = QWidget(self.module_list)
             row_layout = QHBoxLayout(row_widget)
             row_layout.setContentsMargins(6, 5, 6, 5)
@@ -735,14 +753,10 @@ class QtProjectConfigWorkspace(QWidget):
             text_column.setContentsMargins(0, 0, 0, 0)
             text_column.setSpacing(2)
             title = QLabel(module.label, row_widget)
-            title.setToolTip(item_text)
+            title.setToolTip(tooltip)
             title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-            detail = QLabel(
-                f"{position} · {module.name} · 评分 {len(module.scores)} · "
-                f"标签 {len(module.tags)} · {module.rater or '只读'}",
-                row_widget,
-            )
-            detail.setToolTip(item_text)
+            detail = QLabel(detail_text, row_widget)
+            detail.setToolTip(tooltip)
             detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             text_column.addWidget(title)
             text_column.addWidget(detail)
@@ -769,24 +783,42 @@ class QtProjectConfigWorkspace(QWidget):
             self._load_module_form(modules[target])
 
     def _start_module_from_row(self, module_name: str) -> bool:
+        selected_label = module_name
         for row in range(self.module_list.count()):
             item = self.module_list.item(row)
             if item.data(Qt.UserRole) == module_name:
                 self.module_list.setCurrentItem(item)
+                selected_label = (
+                    item.data(self.MODULE_LABEL_ROLE) or module_name
+                )
                 break
+        self.set_module_launch_feedback("")
         if self.module_launcher is None:
-            self._set_error("当前界面无法启动质控")
+            self.set_module_launch_feedback("启动失败：当前界面无法启动质控")
             return False
         try:
             accepted = bool(self.module_launcher(module_name))
         except Exception as exc:
-            self._set_error(str(exc))
+            self.set_module_launch_feedback(f"启动失败：{exc}")
             return False
         if not accepted:
-            self._set_error("质控启动请求未被接受")
+            if not self.module_launch_status_label.text():
+                self.set_module_launch_feedback(
+                    "启动失败：质控启动请求未被接受"
+                )
             return False
+        self.set_module_launch_feedback(f"已启动质控：{selected_label}")
         self._set_error("")
         return True
+
+    def set_module_launch_feedback(self, message: str) -> None:
+        """Show one launch outcome on the page that owns the launch button."""
+
+        text = str(message).strip()
+        self.module_launch_status_label.setText(text)
+        self.module_launch_status_label.setVisible(bool(text))
+        if text.startswith("启动失败"):
+            self._set_error(text.removeprefix("启动失败："))
 
     def _load_selected_project(self) -> None:
         entry = self._selected_project_entry()
