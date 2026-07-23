@@ -648,11 +648,7 @@ class QtTableWorkspace(QWidget):
 
     @staticmethod
     def _set_scroll_value(scrollbar: QScrollBar, value: int) -> None:
-        previous = scrollbar.blockSignals(True)
-        try:
-            scrollbar.setValue(int(value))
-        finally:
-            scrollbar.blockSignals(previous)
+        scrollbar.setValue(int(value))
 
     def _sync_horizontal_scroll_range(self, minimum: int, maximum: int) -> None:
         source = self.table_view.horizontalScrollBar()

@@ -33,6 +33,49 @@ def test_project_service_loads_existing_project_without_recursion(tmp_path) -> N
     assert loaded_service.settings["qcmodule"]["1"]["name"] == "example"
 
 
+def test_loading_durable_last_project_does_not_rewrite_registry(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    registry = tmp_path / "projects.json"
+    creator = ProjectService(registry)
+    creator.create("SAMPLE", tmp_path)
+    loaded_service = ProjectService(registry)
+
+    def fail_redundant_write() -> None:
+        raise AssertionError("durable last_project must not be rewritten")
+
+    monkeypatch.setattr(loaded_service, "_save_registry", fail_redundant_write)
+
+    project = loaded_service.load("SAMPLE")
+
+    assert project.name == "SAMPLE"
+    assert loaded_service.current_project == project
+
+
+def test_switch_load_rolls_back_when_last_project_cannot_be_persisted(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    service = ProjectService(tmp_path / "projects.json")
+    service.create("ALPHA", tmp_path)
+    service.create("BETA", tmp_path)
+    beta = service.current_project
+    beta_settings = dict(service.settings)
+
+    def fail_registry_write() -> None:
+        raise OSError("registry is read-only")
+
+    monkeypatch.setattr(service, "_save_registry", fail_registry_write)
+
+    with pytest.raises(OSError, match="registry is read-only"):
+        service.load("ALPHA")
+
+    assert service.current_project == beta
+    assert service.registry.last_project == "BETA"
+    assert dict(service.settings) == beta_settings
+
+
 def test_project_service_reloads_registry_without_recreating_service(tmp_path) -> None:
     registry_path = tmp_path / "projects.json"
     stale_service = ProjectService(registry_path)

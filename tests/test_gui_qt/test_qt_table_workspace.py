@@ -220,6 +220,51 @@ def test_external_scrollbars_span_surface_and_keep_last_rows_aligned(qtbot):
     assert workspace.table_view.viewport().height() == workspace.pinned_view.viewport().height()
 
 
+def test_vertical_scrolling_from_either_view_keeps_rendered_rows_synchronized(qtbot):
+    rows = 120
+    source = pd.DataFrame(
+        {
+            "ezqcid": [f"SUB{index:03d}" for index in range(rows)],
+            "value": list(range(rows)),
+        }
+    )
+    workspace = QtTableWorkspace(source, page_size=200)
+    qtbot.addWidget(workspace)
+    workspace.resize(900, 520)
+    workspace.show()
+    qtbot.waitUntil(lambda: workspace.vertical_scrollbar.maximum() > 0)
+
+    workspace.table_view.verticalScrollBar().setValue(60)
+    qtbot.waitUntil(
+        lambda: workspace.table_view.indexAt(QPoint(1, 1)).row() >= 0
+        and workspace.pinned_view.indexAt(QPoint(1, 1)).row() >= 0
+    )
+
+    assert workspace.table_view.indexAt(QPoint(1, 1)).row() == (
+        workspace.pinned_view.indexAt(QPoint(1, 1)).row()
+    )
+    assert (
+        workspace.table_view.verticalScrollBar().value()
+        == workspace.pinned_view.verticalScrollBar().value()
+        == workspace.vertical_scrollbar.value()
+    )
+
+    workspace.pinned_view.verticalScrollBar().setValue(15)
+    qtbot.waitUntil(
+        lambda: workspace.table_view.indexAt(QPoint(1, 1)).row() >= 0
+        and workspace.pinned_view.indexAt(QPoint(1, 1)).row() >= 0
+    )
+
+    assert workspace.table_view.indexAt(QPoint(1, 1)).row() == (
+        workspace.pinned_view.indexAt(QPoint(1, 1)).row()
+    )
+    assert (
+        workspace.table_view.verticalScrollBar().value()
+        == workspace.pinned_view.verticalScrollBar().value()
+        == workspace.vertical_scrollbar.value()
+    )
+
+
 def test_pinned_width_recomputes_after_resize_and_section_change(qtbot):
     workspace = QtTableWorkspace(_source())
     qtbot.addWidget(workspace)

@@ -103,9 +103,20 @@ class ProjectService:
         if registered is None or registered.path != prepared.project.path:
             raise ValueError("Prepared project is no longer registered")
         project = prepared.project
+        previous_current = self.current
+        previous_last_project = self.registry.last_project
+        previous_settings = self._settings
         self.current = project
         self.registry.last_project = project.name
         self._settings = deepcopy(prepared.settings)
+        try:
+            if previous_last_project != project.name:
+                self._save_registry()
+        except Exception:
+            self.current = previous_current
+            self.registry.last_project = previous_last_project
+            self._settings = previous_settings
+            raise
         if notify:
             self._notify("project_changed")
         return project

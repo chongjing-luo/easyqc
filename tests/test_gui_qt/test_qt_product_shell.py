@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from threading import Event
 
 import pandas as pd
@@ -831,6 +832,39 @@ def test_stale_table_callback_is_rejected_after_same_id_project_switch(qtbot, tm
     assert window.current_context.project_name == "BETA"
     assert window.qc_workspace is current_workflow
     assert "已失效" in window.shell_error_label.text()
+
+
+def test_product_restart_restores_last_opened_project_and_its_table(qtbot, tmp_path) -> None:
+    registry = tmp_path / "projects.json"
+    services = build_app_services(registry)
+    _add_project(services, tmp_path, "ALPHA", prefix="alpha/")
+    _add_project(services, tmp_path, "BETA", prefix="beta/")
+    window = build_product_window(services)
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
+    assert window.current_context.project_name == "BETA"
+
+    assert window.load_project("ALPHA")
+    qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
+
+    assert window.current_context.project_name == "ALPHA"
+    assert json.loads(registry.read_text(encoding="utf-8"))["last_project"] == "ALPHA"
+    window.close()
+
+    restarted_services = build_app_services(registry)
+    restarted = build_product_window(restarted_services)
+    qtbot.addWidget(restarted)
+    restarted.show()
+    qtbot.waitUntil(lambda: not restarted.context_task_controller.busy, timeout=3000)
+
+    assert restarted.current_context.project_name == "ALPHA"
+    assert restarted.current_context.subjects["image"].tolist() == [
+        "/alpha/one.nii",
+        "/alpha/two.nii",
+        "/alpha/three.nii",
+    ]
+    assert restarted.table_workspace.result.matched_total == 3
 
 
 def test_failed_qc_replacement_keeps_old_workflow_then_success_closes_it(
