@@ -77,6 +77,14 @@ def _workspace(qtbot, tmp_path, *, module_launcher=None):
     return workspace, config
 
 
+def _constant_row(workspace, name: str) -> int:
+    for row in range(workspace.constants_table.rowCount()):
+        item = workspace.constants_table.item(row, 0)
+        if item is not None and item.text() == name:
+            return row
+    raise AssertionError(f"constant row is missing: {name}")
+
+
 def test_qt_project_config_renders_current_project_and_subject_summary(qtbot, tmp_path) -> None:
     workspace, _ = _workspace(qtbot, tmp_path)
 
@@ -286,6 +294,92 @@ def test_qt_constant_search_filters_visible_rows_without_mutating_values(
         not workspace.constants_table.isRowHidden(row)
         for row in range(workspace.constants_table.rowCount())
     )
+
+
+def test_constants_table_stretches_values_and_right_aligns_compact_actions(
+    qtbot,
+    tmp_path,
+) -> None:
+    workspace, config = _workspace(qtbot, tmp_path)
+    long_path = "/含 空格/中文项目路径/" + "深层目录/" * 20 + "subjects.csv"
+    config.set_constant("DATA_ROOT", long_path)
+    workspace._refresh_constants()
+    workspace.tabs.setCurrentWidget(workspace.constants_tab)
+    workspace.resize(480, 520)
+    workspace.show()
+
+    table = workspace.constants_table
+    header = table.horizontalHeader()
+    row = _constant_row(workspace, "DATA_ROOT")
+    actions = table.cellWidget(row, 2)
+    action_layout = actions.layout()
+    edit_button = action_layout.itemAt(1).widget()
+    delete_button = action_layout.itemAt(2).widget()
+
+    assert header.sectionResizeMode(0) == QHeaderView.ResizeMode.ResizeToContents
+    assert header.sectionResizeMode(1) == QHeaderView.ResizeMode.Stretch
+    assert header.sectionResizeMode(2) == QHeaderView.ResizeMode.ResizeToContents
+    assert not header.stretchLastSection()
+    assert action_layout.getContentsMargins() == (0, 0, 0, 0)
+    assert action_layout.spacing() == 4
+    assert action_layout.count() == 3
+    assert action_layout.itemAt(0).spacerItem() is not None
+    assert edit_button.text() == "编辑"
+    assert delete_button.text() == "删除"
+    assert edit_button.isVisibleTo(actions)
+    assert delete_button.isVisibleTo(actions)
+    assert table.item(row, 1).toolTip() == long_path
+    assert table.columnWidth(1) > table.columnWidth(0)
+    assert table.columnWidth(1) > table.columnWidth(2)
+    assert (
+        table.columnViewportPosition(2) + table.columnWidth(2)
+        <= table.viewport().width()
+    )
+
+
+def test_constant_row_actions_survive_refresh_search_and_reduced_width(
+    qtbot,
+    tmp_path,
+) -> None:
+    workspace, config = _workspace(qtbot, tmp_path)
+    config.set_constant("DATA_ROOT", "/data")
+    config.set_constant("OUTPUT_ROOT", "/results")
+    workspace._refresh_constants()
+    workspace.tabs.setCurrentWidget(workspace.constants_tab)
+    workspace.resize(480, 520)
+    workspace.show()
+
+    workspace.constant_search.setText("output")
+    assert workspace.constants_table.isRowHidden(
+        _constant_row(workspace, "DATA_ROOT")
+    )
+    assert not workspace.constants_table.isRowHidden(
+        _constant_row(workspace, "OUTPUT_ROOT")
+    )
+    workspace.constant_search.clear()
+    workspace._refresh_constants()
+
+    data_row = _constant_row(workspace, "DATA_ROOT")
+    data_actions = workspace.constants_table.cellWidget(data_row, 2)
+    data_layout = data_actions.layout()
+    edit_button = data_layout.itemAt(1).widget()
+    delete_button = data_layout.itemAt(2).widget()
+    assert edit_button.isVisibleTo(data_actions)
+    assert delete_button.isVisibleTo(data_actions)
+
+    qtbot.mouseClick(edit_button, Qt.LeftButton)
+    assert workspace.constant_name.text() == "DATA_ROOT"
+    assert workspace.constant_value.text() == "/data"
+    qtbot.mouseClick(workspace.cancel_constant_button, Qt.LeftButton)
+
+    output_row = _constant_row(workspace, "OUTPUT_ROOT")
+    output_actions = workspace.constants_table.cellWidget(output_row, 2)
+    output_delete = output_actions.layout().itemAt(2).widget()
+    qtbot.mouseClick(output_delete, Qt.LeftButton)
+
+    assert config.constants() == {"DATA_ROOT": "/data"}
+    assert workspace.constants_table.rowCount() == 1
+    assert _constant_row(workspace, "DATA_ROOT") == 0
 
 
 def test_qt_module_form_adds_and_reorders_without_json_editor(qtbot, tmp_path) -> None:

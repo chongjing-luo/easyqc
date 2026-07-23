@@ -355,7 +355,11 @@ class QtProjectConfigWorkspace(QWidget):
         self.constants_table.setObjectName("constantsTable")
         self.constants_table.setAccessibleName("项目常量")
         self.constants_table.setHorizontalHeaderLabels(["常量名", "值", "操作"])
-        self.constants_table.horizontalHeader().setStretchLastSection(True)
+        constants_header = self.constants_table.horizontalHeader()
+        constants_header.setStretchLastSection(False)
+        constants_header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        constants_header.setSectionResizeMode(1, QHeaderView.Stretch)
+        constants_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.constants_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.constants_table.setEditTriggers(QTableWidget.NoEditTriggers)
         layout.addWidget(self.constants_table, 1)
@@ -791,9 +795,9 @@ class QtProjectConfigWorkspace(QWidget):
                     constant_name
                 )
             )
+            action_layout.addStretch(1)
             action_layout.addWidget(edit_button)
             action_layout.addWidget(delete_button)
-            action_layout.addStretch(1)
             self.constants_table.setCellWidget(row, 2, actions)
         self._filter_constants(self.constant_search.text())
 
