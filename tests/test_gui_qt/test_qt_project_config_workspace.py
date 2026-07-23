@@ -4,9 +4,12 @@ from threading import Event, get_ident
 
 import pandas as pd
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QHeaderView,
+    QLabel,
     QScrollArea,
     QSplitter,
     QToolBar,
@@ -37,8 +40,97 @@ def test_qt_project_config_renders_current_project_and_subject_summary(qtbot, tm
     workspace, _ = _workspace(qtbot, tmp_path)
 
     assert workspace.project_combo.currentText() == "SAMPLE"
+    assert workspace.project_list.currentItem().text() == "SAMPLE"
+    assert workspace.project_name_preview.text() == "SAMPLE"
     assert "2 subjects" in workspace.subject_summary.text()
     assert workspace.subject_model.rowCount() == 2
+
+
+def test_project_list_header_owns_right_side_create_import_actions_and_read_only_preview(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workspace, config = _workspace(qtbot, tmp_path)
+    workspace.resize(640, 520)
+    workspace.show()
+
+    header_layout = workspace.project_list_header.layout()
+    assert header_layout.indexOf(workspace.project_list_title) >= 0
+    assert header_layout.indexOf(workspace.project_toolbar) > header_layout.indexOf(
+        workspace.project_list_title
+    )
+    assert workspace.project_list_title.text() == "项目列表"
+    assert workspace.new_project_action.text() == "新建项目"
+    assert workspace.import_project_action.text() == "导入项目"
+    assert workspace.reload_projects_action.text() == "刷新"
+    assert workspace.open_project_directory_action.text() == "打开目录"
+    assert workspace.remove_project_action.text() == "取消登记"
+    assert workspace.load_project_action.text() == "打开项目"
+    assert workspace.new_project_button.isVisible()
+    assert workspace.import_project_button.isVisible()
+    assert workspace.load_project_button.isVisible()
+    assert workspace.project_name_preview.isReadOnly()
+    assert workspace.project_path_preview.isReadOnly()
+    assert workspace.project_state_preview.isReadOnly()
+    assert workspace.project_path_preview.text() == str(config.current_project.path)
+    opened_directories = []
+    monkeypatch.setattr(
+        QDesktopServices,
+        "openUrl",
+        lambda url: opened_directories.append(url.toLocalFile()) or True,
+    )
+    qtbot.mouseClick(workspace.open_project_directory_button, Qt.LeftButton)
+    assert opened_directories == [str(config.current_project.path)]
+
+
+def test_project_list_click_previews_but_only_open_project_activates(
+    qtbot,
+    tmp_path,
+) -> None:
+    workspace, config = _workspace(qtbot, tmp_path)
+    second = config.create_project("SECOND", tmp_path)
+    config.load_project("SAMPLE")
+    workspace.refresh()
+    workspace.show()
+    second_items = workspace.project_list.findItems("SECOND", Qt.MatchExactly)
+    assert len(second_items) == 1
+
+    item = second_items[0]
+    qtbot.mouseClick(
+        workspace.project_list.viewport(),
+        Qt.LeftButton,
+        pos=workspace.project_list.visualItemRect(item).center(),
+    )
+
+    assert config.current_project.name == "SAMPLE"
+    assert workspace.project_name_preview.text() == "SECOND"
+    assert workspace.project_path_preview.text() == str(second.path)
+    assert workspace.project_state_preview.text() == "已登记"
+
+    qtbot.mouseClick(workspace.load_project_button, Qt.LeftButton)
+    qtbot.waitUntil(lambda: not workspace.io_task_controller.busy, timeout=2000)
+    assert config.current_project.name == "SECOND"
+    assert workspace.project_state_preview.text() == "当前打开"
+
+
+def test_project_and_constants_pages_remove_repeated_titles_counts_and_visible_combo(
+    qtbot,
+    tmp_path,
+) -> None:
+    workspace, _config = _workspace(qtbot, tmp_path)
+
+    assert workspace.findChild(QLabel, "configTitle") is None
+    assert workspace.findChild(QComboBox, "projectSelector") is None
+    assert workspace.project_combo.isHidden()
+    assert workspace.findChild(QLabel, "constantsTitle") is None
+    assert workspace.findChild(QLabel, "constantsCount") is None
+    first_row = workspace.constants_tab.layout().itemAt(0).layout()
+    assert first_row is not None
+    assert first_row.indexOf(workspace.constant_name) >= 0
+    assert first_row.indexOf(workspace.constant_value) >= 0
+    assert first_row.indexOf(workspace.save_constant_button) >= 0
+    assert workspace.save_constant_button.text() == "添加常量"
 
 
 def test_initial_configuration_snapshot_loads_without_blocking_qt(
@@ -205,8 +297,8 @@ def test_qt_configuration_uses_responsive_toolbars_splitter_and_long_tooltips(
     selected_item = workspace.module_list.currentItem()
     assert selected_item.toolTip() == selected_item.text()
     assert long_label in selected_item.toolTip()
-    assert workspace.project_combo.width() >= workspace.project_combo.minimumSizeHint().width()
-    assert workspace.project_combo.toolTip() == workspace.project_combo.currentText()
+    assert workspace.project_list.horizontalScrollBarPolicy() == Qt.ScrollBarAsNeeded
+    assert workspace.project_path_preview.toolTip() == str(config.current_project.path)
 
     actions = (
         workspace.load_project_action,
@@ -255,7 +347,9 @@ def test_project_load_runs_in_background_and_keeps_qt_responsive(
     workspace, config = _workspace(qtbot, tmp_path)
     config.create_project("SECOND", tmp_path)
     workspace.refresh()
-    workspace.project_combo.setCurrentText("SAMPLE")
+    workspace.project_list.setCurrentItem(
+        workspace.project_list.findItems("SAMPLE", Qt.MatchExactly)[0]
+    )
     real_load = config.load_project
     started = Event()
     release = Event()
@@ -286,6 +380,7 @@ def test_project_load_runs_in_background_and_keeps_qt_responsive(
     release.set()
     qtbot.waitUntil(lambda: not workspace.io_task_controller.busy, timeout=2000)
     assert config.current_project.name == "SAMPLE"
+    assert workspace.project_list.currentItem().text() == "SAMPLE"
     assert workspace.project_combo.currentText() == "SAMPLE"
     assert workspace.subject_model.rowCount() == 2
     assert project_event_threads == [gui_thread]

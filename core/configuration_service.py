@@ -32,6 +32,16 @@ class ConfigurationSnapshot:
     modules: tuple[QCModule, ...]
 
 
+@dataclass(frozen=True)
+class ProjectListEntry:
+    """Detached registered-project metadata for non-mutating GUI previews."""
+
+    name: str
+    path: Path
+    is_current: bool
+    is_most_recent: bool
+
+
 class ConfigurationService:
     """Provide typed, atomic operations for project configuration pages."""
 
@@ -41,6 +51,23 @@ class ConfigurationService:
 
     def projects(self) -> tuple[str, ...]:
         return tuple(self.project_service.list_all())
+
+    def project_entries(self) -> tuple[ProjectListEntry, ...]:
+        """Return registered paths and open state without exposing the registry."""
+
+        current_name = (
+            self.current_project.name if self.current_project is not None else None
+        )
+        recent_name = self.project_service.registry.last_project
+        return tuple(
+            ProjectListEntry(
+                name=name,
+                path=Path(project.path),
+                is_current=name == current_name,
+                is_most_recent=name == recent_name,
+            )
+            for name, project in self.project_service.registry.projects.items()
+        )
 
     @property
     def current_project(self) -> Project | None:
@@ -329,4 +356,9 @@ class ConfigurationService:
         self.project_service.publish_change("modules_changed")
 
 
-__all__ = ["ConfigurationError", "ConfigurationService", "ConfigurationSnapshot"]
+__all__ = [
+    "ConfigurationError",
+    "ConfigurationService",
+    "ConfigurationSnapshot",
+    "ProjectListEntry",
+]

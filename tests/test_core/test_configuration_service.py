@@ -140,6 +140,23 @@ def test_remove_project_only_unregisters_it(tmp_path) -> None:
     assert project_path.exists()
 
 
+def test_project_entries_are_detached_and_include_path_and_open_state(tmp_path) -> None:
+    service, projects = _service(tmp_path)
+    service.create_project("SECOND", tmp_path)
+    service.load_project("SAMPLE")
+
+    entries = service.project_entries()
+
+    assert tuple(entry.name for entry in entries) == ("SAMPLE", "SECOND")
+    assert entries[0].path == projects.registry.projects["SAMPLE"].path
+    assert entries[0].is_current
+    assert entries[0].is_most_recent
+    assert not entries[1].is_current
+    assert not entries[1].is_most_recent
+    assert service.current_project.name == "SAMPLE"
+    assert service.projects() == ("SAMPLE", "SECOND")
+
+
 def test_configuration_snapshot_is_detached_from_authoritative_subjects(tmp_path) -> None:
     service, _ = _service(tmp_path)
     service.replace_subjects(_subjects())

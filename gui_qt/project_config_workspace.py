@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from copy import deepcopy
+from pathlib import Path
 
 import pandas as pd
-from PySide6.QtCore import Qt, Slot
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
+from PySide6.QtCore import Qt, QUrl, Slot
+from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -33,7 +35,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.configuration_service import ConfigurationService, ConfigurationSnapshot
+from core.configuration_service import (
+    ConfigurationService,
+    ConfigurationSnapshot,
+    ProjectListEntry,
+)
 from gui_qt.table_model import QtTableModel
 from gui_qt.task_runner import RevisionedTaskController
 from models.qcmodule import Score, Tag
@@ -85,41 +91,30 @@ class QtProjectConfigWorkspace(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        project_bar = QFrame(self)
-        project_bar.setObjectName("configHeader")
-        project_layout = QVBoxLayout(project_bar)
-        project_layout.setContentsMargins(12, 9, 12, 9)
-        title = QLabel("项目选择", project_bar)
-        title.setObjectName("configTitle")
-        title.setWordWrap(True)
-        project_layout.addWidget(title)
-        self.project_toolbar = QToolBar("Project actions", project_bar)
+        self.project_splitter = QSplitter(Qt.Horizontal, self)
+        self.project_splitter.setObjectName("projectSelectionSplitter")
+
+        project_list_panel = QWidget(self.project_splitter)
+        project_list_layout = QVBoxLayout(project_list_panel)
+        project_list_layout.setContentsMargins(0, 0, 6, 0)
+        project_list_layout.setSpacing(8)
+        self.project_list_header = QWidget(project_list_panel)
+        project_header_layout = QHBoxLayout(self.project_list_header)
+        project_header_layout.setContentsMargins(0, 0, 0, 0)
+        project_header_layout.setSpacing(6)
+        self.project_list_title = QLabel("项目列表", self.project_list_header)
+        self.project_list_title.setObjectName("projectListTitle")
+        project_header_layout.addWidget(self.project_list_title)
+        project_header_layout.addStretch(1)
+        self.project_toolbar = QToolBar("项目列表操作", self.project_list_header)
         self.project_toolbar.setObjectName("configProjectToolbar")
-        self.project_toolbar.setAccessibleName("Project configuration actions")
+        self.project_toolbar.setAccessibleName("项目列表操作")
         self.project_toolbar.setMovable(False)
         self.project_toolbar.setFloatable(False)
         self.project_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        self.project_toolbar.addWidget(QLabel("项目", self.project_toolbar))
-        self.project_combo = QComboBox(self.project_toolbar)
-        self.project_combo.setObjectName("projectSelector")
-        self.project_combo.setMinimumContentsLength(10)
-        self.project_combo.setSizeAdjustPolicy(
-            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
-        )
-        self.project_combo.setSizePolicy(
-            QSizePolicy.MinimumExpanding,
-            QSizePolicy.Preferred,
-        )
-        self.project_toolbar.addWidget(self.project_combo)
-        self.load_project_action, self.load_project_button = self._add_toolbar_action(
-            self.project_toolbar,
-            "打开",
-            QKeySequence("Ctrl+L"),
-            self._load_selected_project,
-        )
         self.new_project_action, self.new_project_button = self._add_toolbar_action(
             self.project_toolbar,
-            "新建…",
+            "新建项目",
             QKeySequence("Ctrl+N"),
             self._prompt_create_project,
         )
@@ -128,21 +123,106 @@ class QtProjectConfigWorkspace(QWidget):
             self.import_project_button,
         ) = self._add_toolbar_action(
             self.project_toolbar,
-            "导入…",
+            "导入项目",
             QKeySequence("Ctrl+I"),
             self._prompt_import_project,
+        )
+        project_header_layout.addWidget(self.project_toolbar)
+        project_list_layout.addWidget(self.project_list_header)
+
+        self.project_list = QListWidget(project_list_panel)
+        self.project_list.setObjectName("projectList")
+        self.project_list.setAccessibleName("已登记项目")
+        self.project_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        project_list_layout.addWidget(self.project_list, 1)
+
+        project_info_panel = QWidget(self.project_splitter)
+        project_info_layout = QVBoxLayout(project_info_panel)
+        project_info_layout.setContentsMargins(10, 0, 0, 0)
+        project_info_layout.setSpacing(8)
+        project_info_title = QLabel("项目信息", project_info_panel)
+        project_info_title.setObjectName("projectInfoTitle")
+        project_info_layout.addWidget(project_info_title)
+        project_form = QFormLayout()
+        project_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        self.project_name_preview = QLineEdit(project_info_panel)
+        self.project_name_preview.setObjectName("projectNamePreview")
+        self.project_name_preview.setAccessibleName("项目名称")
+        self.project_path_preview = QLineEdit(project_info_panel)
+        self.project_path_preview.setObjectName("projectPathPreview")
+        self.project_path_preview.setAccessibleName("项目目录")
+        self.project_path_preview.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.project_state_preview = QLineEdit(project_info_panel)
+        self.project_state_preview.setObjectName("projectStatePreview")
+        self.project_state_preview.setAccessibleName("项目状态")
+        for field in (
+            self.project_name_preview,
+            self.project_path_preview,
+            self.project_state_preview,
+        ):
+            field.setReadOnly(True)
+        project_form.addRow("名称", self.project_name_preview)
+        project_form.addRow("目录", self.project_path_preview)
+        project_form.addRow("状态", self.project_state_preview)
+        project_info_layout.addLayout(project_form)
+        project_info_layout.addStretch(1)
+
+        self.project_detail_toolbar = QToolBar("项目信息操作", project_info_panel)
+        self.project_detail_toolbar.setObjectName("projectDetailToolbar")
+        self.project_detail_toolbar.setAccessibleName("项目信息操作")
+        self.project_detail_toolbar.setMovable(False)
+        self.project_detail_toolbar.setFloatable(False)
+        self.project_detail_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.reload_projects_action, self.reload_projects_button = self._add_toolbar_action(
+            self.project_detail_toolbar,
+            "刷新",
+            QKeySequence(),
+            self._reload_projects,
+        )
+        (
+            self.open_project_directory_action,
+            self.open_project_directory_button,
+        ) = self._add_toolbar_action(
+            self.project_detail_toolbar,
+            "打开目录",
+            QKeySequence(),
+            self._open_selected_project_directory,
         )
         (
             self.remove_project_action,
             self.remove_project_button,
         ) = self._add_toolbar_action(
-            self.project_toolbar,
-            "移除登记",
+            self.project_detail_toolbar,
+            "取消登记",
             QKeySequence("Ctrl+Shift+Delete"),
             self._confirm_remove_project,
         )
-        project_layout.addWidget(self.project_toolbar)
-        layout.addWidget(project_bar)
+        toolbar_spacer = QWidget(self.project_detail_toolbar)
+        toolbar_spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.project_detail_toolbar.addWidget(toolbar_spacer)
+        self.load_project_action, self.load_project_button = self._add_toolbar_action(
+            self.project_detail_toolbar,
+            "打开项目",
+            QKeySequence("Ctrl+L"),
+            self._load_selected_project,
+        )
+        self.load_project_button.setObjectName("primaryAction")
+        project_info_layout.addWidget(self.project_detail_toolbar)
+
+        self.project_splitter.addWidget(project_list_panel)
+        self.project_splitter.addWidget(project_info_panel)
+        self.project_splitter.setCollapsible(0, False)
+        self.project_splitter.setCollapsible(1, False)
+        self.project_splitter.setStretchFactor(0, 2)
+        self.project_splitter.setStretchFactor(1, 3)
+        self.project_splitter.setSizes([300, 500])
+        layout.addWidget(self.project_splitter, 1)
+
+        # Compatibility-only selector for the existing product shell. It is
+        # deliberately not part of the visible project-selection interface.
+        self.project_combo = QComboBox(self)
+        self.project_combo.setObjectName("internalProjectSelector")
+        self.project_combo.hide()
 
         self.tabs = QTabWidget(self)
         self.tabs.setObjectName("configTabs")
@@ -169,6 +249,7 @@ class QtProjectConfigWorkspace(QWidget):
         self.error_label.setAccessibleName("Configuration error")
         layout.addWidget(self.error_label)
 
+        self.project_list.currentItemChanged.connect(self._preview_project_item)
         self.project_combo.currentTextChanged.connect(self.project_combo.setToolTip)
 
     def _add_toolbar_action(
@@ -259,16 +340,6 @@ class QtProjectConfigWorkspace(QWidget):
         layout = QVBoxLayout(self.constants_tab)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
-        title_row = QHBoxLayout()
-        constant_title = QLabel("常量设置", self.constants_tab)
-        constant_title.setObjectName("constantsTitle")
-        self.constant_count_label = QLabel("0 个常量", self.constants_tab)
-        self.constant_count_label.setObjectName("constantsCount")
-        title_row.addWidget(constant_title)
-        title_row.addWidget(self.constant_count_label)
-        title_row.addStretch(1)
-        layout.addLayout(title_row)
-
         form = QHBoxLayout()
         self.constant_name = QLineEdit(self.constants_tab)
         self.constant_name.setPlaceholderText("常量名")
@@ -490,8 +561,34 @@ class QtProjectConfigWorkspace(QWidget):
         snapshot = self.configuration.snapshot() if snapshot is None else snapshot
         self._loading = True
         try:
+            previous_item = self.project_list.currentItem()
+            previous_preview = previous_item.text() if previous_item is not None else ""
+            previous_entry = (
+                previous_item.data(Qt.UserRole) if previous_item is not None else None
+            )
+            previous_was_current = bool(
+                isinstance(previous_entry, ProjectListEntry)
+                and previous_entry.is_current
+            )
+            entries_by_name = {
+                entry.name: entry for entry in self.configuration.project_entries()
+            }
+            missing_entries = set(snapshot.projects) - set(entries_by_name)
+            if missing_entries:
+                raise ValueError(
+                    f"Project preview metadata is unavailable: {sorted(missing_entries)}"
+                )
+            self.project_list.blockSignals(True)
+            self.project_list.clear()
             self.project_combo.clear()
             for project_name in snapshot.projects:
+                entry = entries_by_name[project_name]
+                self.project_list.addItem(project_name)
+                list_item = self.project_list.item(self.project_list.count() - 1)
+                list_item.setData(Qt.UserRole, entry)
+                list_item.setToolTip(
+                    f"{entry.name}\n{entry.path}" if str(entry.path) not in {"", "."} else entry.name
+                )
                 self.project_combo.addItem(project_name)
                 self.project_combo.setItemData(
                     self.project_combo.count() - 1,
@@ -500,11 +597,78 @@ class QtProjectConfigWorkspace(QWidget):
                 )
             if snapshot.current_project_name:
                 self.project_combo.setCurrentText(snapshot.current_project_name)
+            selected_name = snapshot.current_project_name if previous_was_current else previous_preview
+            if selected_name not in snapshot.projects:
+                selected_name = snapshot.current_project_name
+            selected_items = self.project_list.findItems(selected_name, Qt.MatchExactly)
+            if selected_items:
+                self.project_list.setCurrentItem(selected_items[0])
+            elif self.project_list.count():
+                self.project_list.setCurrentRow(0)
+            self.project_list.blockSignals(False)
+            self._preview_project_item(self.project_list.currentItem())
             self._refresh_subjects(snapshot.subjects)
             self._refresh_constants(snapshot.constants)
             self._refresh_modules(self._selected_module_name, snapshot.modules)
         finally:
             self._loading = False
+
+    def _preview_project_item(self, current, _previous=None) -> None:
+        """Render one registered project without changing the active project."""
+
+        entry = current.data(Qt.UserRole) if current is not None else None
+        if not isinstance(entry, ProjectListEntry):
+            self.project_name_preview.clear()
+            self.project_path_preview.clear()
+            self.project_path_preview.setToolTip("")
+            self.project_state_preview.clear()
+            self.project_combo.setCurrentIndex(-1)
+            self._update_project_action_state()
+            return
+        path_text = "" if str(entry.path) == "." else str(entry.path)
+        self.project_name_preview.setText(entry.name)
+        self.project_name_preview.setToolTip(entry.name)
+        self.project_path_preview.setText(path_text)
+        self.project_path_preview.setToolTip(path_text)
+        state = (
+            "当前打开"
+            if entry.is_current
+            else "最近打开"
+            if entry.is_most_recent
+            else "已登记"
+        )
+        self.project_state_preview.setText(state)
+        self.project_state_preview.setToolTip(state)
+        self.project_combo.setCurrentText(entry.name)
+        self._update_project_action_state()
+
+    def _selected_project_entry(self) -> ProjectListEntry | None:
+        item = self.project_list.currentItem()
+        entry = item.data(Qt.UserRole) if item is not None else None
+        return entry if isinstance(entry, ProjectListEntry) else None
+
+    def _update_project_action_state(self) -> None:
+        selected = self._selected_project_entry() is not None
+        enabled = selected and not self.io_task_controller.busy
+        self.load_project_action.setEnabled(enabled)
+        self.open_project_directory_action.setEnabled(enabled)
+        self.remove_project_action.setEnabled(enabled)
+
+    def _reload_projects(self) -> None:
+        self._submit_io("refresh", self.configuration.snapshot)
+
+    def _open_selected_project_directory(self) -> None:
+        entry = self._selected_project_entry()
+        if entry is None:
+            return
+        path = Path(entry.path)
+        if not path.is_dir():
+            self._set_error(f"项目目录不存在: {path}")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            self._set_error(f"无法打开项目目录: {path}")
+            return
+        self._set_error("")
 
     def _refresh_subjects(self, frame: pd.DataFrame | None = None) -> None:
         if frame is None:
@@ -555,7 +719,6 @@ class QtProjectConfigWorkspace(QWidget):
             action_layout.addWidget(delete_button)
             action_layout.addStretch(1)
             self.constants_table.setCellWidget(row, 2, actions)
-        self.constant_count_label.setText(f"{len(items)} 个常量")
         self._filter_constants(self.constant_search.text())
 
     def _refresh_modules(
@@ -581,9 +744,10 @@ class QtProjectConfigWorkspace(QWidget):
             self._load_module_form(modules[target])
 
     def _load_selected_project(self) -> None:
-        name = self.project_combo.currentText()
-        if not name:
+        entry = self._selected_project_entry()
+        if entry is None:
             return
+        name = entry.name
         if self.project_loader is not None:
             if not self.project_loader(name):
                 self._set_error("Project load request was not accepted")
@@ -654,9 +818,10 @@ class QtProjectConfigWorkspace(QWidget):
             self._submit_io("import_project", import_project)
 
     def _confirm_remove_project(self) -> None:
-        name = self.project_combo.currentText()
-        if not name:
+        entry = self._selected_project_entry()
+        if entry is None:
             return
+        name = entry.name
         answer = QMessageBox.question(
             self,
             "Unregister project",
@@ -1054,10 +1219,11 @@ class QtProjectConfigWorkspace(QWidget):
     def _set_io_busy(self, busy: bool) -> None:
         enabled = not busy
         self.project_combo.setEnabled(enabled)
-        self.load_project_action.setEnabled(enabled)
+        self.project_list.setEnabled(enabled)
+        self.reload_projects_action.setEnabled(enabled)
         self.new_project_action.setEnabled(enabled)
         self.import_project_action.setEnabled(enabled)
-        self.remove_project_action.setEnabled(enabled)
+        self._update_project_action_state()
         self.tabs.setEnabled(enabled)
         self.subjects_tab.setEnabled(enabled)
         self.constants_tab.setEnabled(enabled)
