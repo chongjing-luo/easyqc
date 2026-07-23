@@ -33,9 +33,11 @@ from core.table_view_service import TableViewError, TableViewService
 from gui_qt.columns_dialog import ColumnsDialog
 from gui_qt.derived_column_dialog import DerivedColumnDialog
 from gui_qt.filter_dialog import FilterDialog
+from gui_qt.i18n import translate_ui_text
 from gui_qt.sort_dialog import SortDialog
 from gui_qt.table_model import QtTableModel
 from gui_qt.task_runner import RevisionedTaskController
+from gui_qt.theme import set_button_role
 from models.table_view_state import (
     ColumnViewState,
     FilterExpression,
@@ -186,6 +188,7 @@ class QtQcListImportPage(QWidget):
         single_column_row.addWidget(single_column_hint)
         self.read_preview_button = QPushButton("读取并预览", self)
         self.read_preview_button.setObjectName("primaryAction")
+        set_button_role(self.read_preview_button, "primary")
         self.read_preview_button.clicked.connect(self.read_preview)
         single_column_row.addWidget(self.read_preview_button)
         layout.addLayout(single_column_row)
@@ -248,6 +251,7 @@ class QtQcListImportPage(QWidget):
 
         apply_panel = QFrame(self)
         apply_panel.setObjectName("qcListImportApplyPanel")
+        apply_panel.setProperty("surface", "subtle")
         apply_layout = QVBoxLayout(apply_panel)
         apply_layout.setContentsMargins(8, 8, 8, 8)
         apply_mode_row = QHBoxLayout()
@@ -269,6 +273,7 @@ class QtQcListImportPage(QWidget):
         self.clear_button = QPushButton("清空导入数据", apply_panel)
         self.apply_button = QPushButton("写入质控前名单", apply_panel)
         self.apply_button.setObjectName("primaryAction")
+        set_button_role(self.apply_button, "primary")
         self.clear_button.clicked.connect(self.clear_draft)
         self.apply_button.clicked.connect(self.apply_draft)
         apply_action_row.addWidget(self.clear_button)
@@ -281,14 +286,17 @@ class QtQcListImportPage(QWidget):
             self,
         )
         hint.setObjectName("qcListImportHint")
+        hint.setProperty("role", "secondary")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self.status_label = QLabel("", self)
         self.status_label.setObjectName("qcListImportStatus")
+        self.status_label.setProperty("role", "secondary")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
         self.error_label = QLabel("", self)
         self.error_label.setObjectName("qcListImportError")
+        self.error_label.setProperty("role", "error")
         self.error_label.setAccessibleName("质控名单导入错误")
         self.error_label.setWordWrap(True)
         self.error_label.hide()
@@ -315,13 +323,16 @@ class QtQcListImportPage(QWidget):
 
     def _browse_source(self) -> None:
         if self._source_mode == "folder":
-            selected = QFileDialog.getExistingDirectory(self, "选择导入文件夹")
+            selected = QFileDialog.getExistingDirectory(
+                self,
+                translate_ui_text("选择导入文件夹"),
+            )
         else:
             selected, _selected_filter = QFileDialog.getOpenFileName(
                 self,
-                "选择导入文件",
+                translate_ui_text("选择导入文件"),
                 "",
-                "名单文件 (*.csv *.xlsx *.xls *.txt *.list)",
+                translate_ui_text("名单文件 (*.csv *.xlsx *.xls *.txt *.list)"),
             )
         if selected:
             self.source_path_edit.setText(selected)

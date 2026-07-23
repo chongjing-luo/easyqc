@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pandas as pd
-from PySide6.QtCore import QSize, Qt, Slot
+from PySide6.QtCore import QSize, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QCloseEvent, QFont, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
@@ -39,11 +39,23 @@ from core.project_context_service import (
 from core.qc_workflow_service import QcWorkflowService
 from core.table_view_service import TableViewService
 from gui_qt.filter_dialog import FilterDialog
+from gui_qt.i18n import (
+    LanguageController,
+    get_or_create_language_controller,
+    protect_user_text,
+    translate_ui_text,
+)
 from gui_qt.project_config_workspace import QtProjectConfigWorkspace
 from gui_qt.qc_results_page import QtQcResultsPage
 from gui_qt.qc_workspace import QtQcControllerWindow, QtQcWorkspace
 from gui_qt.table_workspace import QtTableWorkspace
 from gui_qt.task_runner import RevisionedTaskController
+from gui_qt.theme import (
+    CONTENT_MARGIN,
+    CONTROL_SPACING,
+    NAVIGATION_ROW_HEIGHT,
+    SECTION_SPACING,
+)
 from models.qcmodule import QCModule
 from models.table_view_state import (
     FilterExpression,
@@ -69,6 +81,15 @@ class _QcFilterTransaction:
 class QtMainWindow(QMainWindow):
     """Own one accepted project context and at most one live QC workflow."""
 
+    initializationFinished = Signal(bool)
+    NAVIGATION_KEYS = (
+        "nav.projects",
+        "nav.import",
+        "nav.pre_qc",
+        "nav.constants",
+        "nav.modules",
+        "nav.results",
+    )
     NAVIGATION_LABELS = (
         "项目选择",
         "质控名单导入",
@@ -82,6 +103,7 @@ class QtMainWindow(QMainWindow):
         self,
         services: AppServices,
         source: pd.DataFrame | None = None,
+        language: LanguageController | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -90,8 +112,11 @@ class QtMainWindow(QMainWindow):
         if source is not None and not isinstance(source, pd.DataFrame):
             raise TypeError("QtMainWindow table source must be a pandas DataFrame or None")
         self.services = services
+        self.language = language or get_or_create_language_controller()
         self.context_service = services.project_context_service
         self._injected_preview = source is not None
+        self.initialization_complete = False
+        self.initialization_succeeded = False
         self._closing = False
         self._updating_controls = False
         self._active_module_name = ""
@@ -140,6 +165,9 @@ class QtMainWindow(QMainWindow):
         self.setWindowTitle("EasyQC")
         self.resize(1360, 840)
         self._build_content(initial_source)
+        self.language.languageChanged.connect(self.retranslate_ui)
+        self.language.register_root(self)
+        self.retranslate_ui()
         self._subscribe_events()
 
         if self._injected_preview:
@@ -153,6 +181,7 @@ class QtMainWindow(QMainWindow):
             )
             self._sync_preview_aliases()
             self._update_context_controls()
+            self._finish_initialization(True)
         else:
             self._submit_context(
                 "initial",
@@ -170,16 +199,20 @@ class QtMainWindow(QMainWindow):
         navigation_panel = QWidget(central)
         navigation_panel.setObjectName("primaryNavigationPanel")
         navigation_layout = QVBoxLayout(navigation_panel)
-        navigation_layout.setContentsMargins(12, 16, 12, 12)
-        navigation_layout.setSpacing(10)
-        product_name = QLabel("EasyQC", navigation_panel)
-        product_name.setObjectName("productName")
-        product_name.setAccessibleName("EasyQC")
-        navigation_layout.addWidget(product_name)
+        navigation_layout.setContentsMargins(16, 20, 16, 16)
+        navigation_layout.setSpacing(12)
+        self.product_name_label = QLabel("EasyQC", navigation_panel)
+        self.product_name_label.setObjectName("productName")
+        self.product_name_label.setAccessibleName("EasyQC")
+        navigation_layout.addWidget(self.product_name_label)
+        self.product_tagline_label = QLabel("质控工作台", navigation_panel)
+        self.product_tagline_label.setObjectName("productTagline")
+        navigation_layout.addWidget(self.product_tagline_label)
         self.navigation = QListWidget(navigation_panel)
         self.navigation.setObjectName("primaryNavigation")
         self.navigation.setAccessibleName("EasyQC 功能导航")
         self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.navigation.setWordWrap(True)
         navigation_font = QFont(self.navigation.font())
         if navigation_font.pointSizeF() > 0:
             navigation_font.setPointSizeF(navigation_font.pointSizeF() + 1)
@@ -187,16 +220,56 @@ class QtMainWindow(QMainWindow):
             navigation_font.setPixelSize(navigation_font.pixelSize() + 1)
         self.navigation.setFont(navigation_font)
         self.navigation.setSpacing(4)
-        self.navigation.addItems(self.NAVIGATION_LABELS)
+        self.navigation.addItems(self._navigation_labels())
+        project_item = self.navigation.item(self.NAVIGATION_KEYS.index("nav.projects"))
+        self.project_navigation_content = QWidget(self.navigation)
+        self.project_navigation_content.setObjectName("projectNavigationContent")
+        self.project_navigation_content.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+            True,
+        )
+        project_navigation_layout = QVBoxLayout(self.project_navigation_content)
+        project_navigation_layout.setContentsMargins(3, 4, 8, 4)
+        project_navigation_layout.setSpacing(1)
+        self.project_navigation_label = QLabel("", self.project_navigation_content)
+        self.project_navigation_label.setObjectName("projectNavigationLabel")
+        self.project_navigation_context = QLabel("", self.project_navigation_content)
+        self.project_navigation_context.setObjectName("projectNavigationContext")
+        protect_user_text(self.project_navigation_context, "text")
+        project_navigation_layout.addWidget(self.project_navigation_label)
+        project_navigation_layout.addWidget(self.project_navigation_context)
+        if project_item is not None:
+            self.navigation.setItemWidget(
+                project_item,
+                self.project_navigation_content,
+            )
         for row in range(self.navigation.count()):
             self._set_navigation_item_height(row, line_count=1)
         navigation_layout.addWidget(self.navigation, 1)
-        minimum_navigation_width = max(
-            self.navigation.fontMetrics().horizontalAdvance("质控名单导入") + 48,
-            132,
+        self.language_bar = QWidget(navigation_panel)
+        self.language_bar.setObjectName("languageBar")
+        language_layout = QHBoxLayout(self.language_bar)
+        language_layout.setContentsMargins(0, 12, 0, 0)
+        language_layout.setSpacing(8)
+        self.language_label = QLabel("", self.language_bar)
+        self.language_label.setObjectName("languageLabel")
+        self.language_selector = QComboBox(self.language_bar)
+        self.language_selector.setObjectName("languageSelector")
+        self.language_selector.setAccessibleName("界面语言")
+        for language in self.language.supported_languages:
+            self.language_selector.addItem(
+                self.language.language_display_name(language),
+                language,
+            )
+        self.language_selector.currentIndexChanged.connect(
+            self._language_selected
         )
+        language_layout.addWidget(self.language_label)
+        language_layout.addWidget(self.language_selector, 1)
+        navigation_layout.addWidget(self.language_bar)
+        minimum_navigation_width = 202
         navigation_panel.setMinimumWidth(minimum_navigation_width)
-        navigation_panel.setMaximumWidth(max(220, minimum_navigation_width))
+        navigation_panel.setMaximumWidth(248)
         layout.addWidget(navigation_panel)
 
         self.workspace_stack = QStackedWidget(central)
@@ -206,10 +279,16 @@ class QtMainWindow(QMainWindow):
         self.project_page = QWidget(self.workspace_stack)
         self.project_page.setObjectName("projectSelectionPage")
         project_layout = QVBoxLayout(self.project_page)
-        project_layout.setContentsMargins(18, 16, 18, 16)
-        project_layout.setSpacing(8)
+        project_layout.setContentsMargins(
+            CONTENT_MARGIN,
+            CONTENT_MARGIN,
+            CONTENT_MARGIN,
+            CONTENT_MARGIN,
+        )
+        project_layout.setSpacing(CONTROL_SPACING)
         self.shell_status_label = QLabel("", self.project_page)
         self.shell_status_label.setObjectName("shellStatus")
+        self.shell_status_label.setProperty("role", "secondary")
         self.shell_status_label.setAccessibleName("项目状态")
         self.shell_status_label.setWordWrap(True)
         self.shell_status_label.setSizePolicy(
@@ -219,6 +298,7 @@ class QtMainWindow(QMainWindow):
         project_layout.addWidget(self.shell_status_label)
         self.shell_error_label = QLabel("", self.project_page)
         self.shell_error_label.setObjectName("shellError")
+        self.shell_error_label.setProperty("role", "error")
         self.shell_error_label.setAccessibleName("项目操作错误")
         self.shell_error_label.setWordWrap(True)
         self.shell_error_label.setSizePolicy(
@@ -255,14 +335,24 @@ class QtMainWindow(QMainWindow):
         self.constants_page = QWidget(self.workspace_stack)
         self.constants_page.setObjectName("constantsSettingsPage")
         constants_layout = QVBoxLayout(self.constants_page)
-        constants_layout.setContentsMargins(18, 16, 18, 16)
+        constants_layout.setContentsMargins(
+            CONTENT_MARGIN,
+            CONTENT_MARGIN,
+            CONTENT_MARGIN,
+            CONTENT_MARGIN,
+        )
         constants_layout.addWidget(self.config_workspace.constants_tab)
         self.config_workspace.constants_tab.show()
 
         self.qc_list_import_page = QWidget(self.workspace_stack)
         self.qc_list_import_page.setObjectName("qcListImportPage")
         variables_layout = QVBoxLayout(self.qc_list_import_page)
-        variables_layout.setContentsMargins(18, 16, 18, 16)
+        variables_layout.setContentsMargins(
+            CONTENT_MARGIN,
+            CONTENT_MARGIN,
+            CONTENT_MARGIN,
+            CONTENT_MARGIN,
+        )
         self.qc_list_import_scroll = QScrollArea(self.qc_list_import_page)
         self.qc_list_import_scroll.setObjectName("qcListImportScroll")
         self.qc_list_import_scroll.setAccessibleName("可滚动质控名单导入页")
@@ -278,7 +368,7 @@ class QtMainWindow(QMainWindow):
         self.pre_qc_list_page = QWidget(self.workspace_stack)
         self.pre_qc_list_page.setObjectName("preQcListPage")
         table_layout = QVBoxLayout(self.pre_qc_list_page)
-        table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.setContentsMargins(12, 12, 12, 12)
         self.shell_empty_label = QLabel(
             "尚未打开项目，请在“项目选择”中创建或导入项目。",
             self.pre_qc_list_page,
@@ -303,6 +393,7 @@ class QtMainWindow(QMainWindow):
                 if self._injected_preview
                 else self._derived_subject_column_committed
             ),
+            language=self.language,
             parent=self.pre_qc_list_page,
         )
         self.table_workspace.deriveBusyChanged.connect(
@@ -317,12 +408,18 @@ class QtMainWindow(QMainWindow):
         self.modules_page = QWidget(self.workspace_stack)
         self.modules_page.setObjectName("qcModulesPage")
         modules_layout = QVBoxLayout(self.modules_page)
-        modules_layout.setContentsMargins(18, 16, 18, 16)
+        modules_layout.setContentsMargins(
+            CONTENT_MARGIN,
+            CONTENT_MARGIN,
+            CONTENT_MARGIN,
+            CONTENT_MARGIN,
+        )
         modules_layout.addWidget(self.config_workspace.modules_tab)
         self.config_workspace.modules_tab.show()
         self.module_combo = QComboBox(self.modules_page)
         self.module_combo.setObjectName("internalModuleSelector")
         self.module_combo.setAccessibleName("当前质控模块")
+        protect_user_text(self.module_combo, "items")
         self.module_combo.hide()
 
         self.results_page = QtQcResultsPage(
@@ -343,6 +440,7 @@ class QtMainWindow(QMainWindow):
                 if self._injected_preview
                 else self._derived_subject_column_committed
             ),
+            language=self.language,
             parent=self.workspace_stack,
         )
         self.results_workspace = self.results_page.table_workspace
@@ -393,6 +491,64 @@ class QtMainWindow(QMainWindow):
             self.pre_qc_list_page_index if self._injected_preview else self.project_page_index
         )
         self._sync_preview_aliases()
+
+    def _navigation_labels(self) -> tuple[str, ...]:
+        return tuple(self.language.tr(key) for key in self.NAVIGATION_KEYS)
+
+    @Slot(int)
+    def _language_selected(self, index: int) -> None:
+        language = self.language_selector.itemData(index)
+        if language in self.language.supported_languages:
+            self.language.set_language(language)
+
+    @Slot()
+    def retranslate_ui(self, _language: str | None = None) -> None:
+        """Refresh presentation strings without reconstructing active state."""
+
+        self.language_label.setText(self.language.tr("language.label"))
+        self.product_tagline_label.setText(
+            "质控工作台"
+            if self.language.language == "zh_CN"
+            else "Quality control workspace"
+        )
+        self.setAccessibleName(
+            "EasyQC 表格预览"
+            if self._injected_preview and self.language.language == "zh_CN"
+            else (
+                "EasyQC table preview"
+                if self._injected_preview
+                else self.language.tr("app.workspace")
+            )
+        )
+        labels = self._navigation_labels()
+        for row, label in enumerate(labels):
+            if row == self.project_page_index:
+                continue
+            item = self.navigation.item(row)
+            if item is not None:
+                item.setText(label)
+        project_name = (
+            self.current_context.project_name
+            if self.current_context.has_project
+            else ""
+        )
+        self._set_project_navigation_context(project_name)
+        selector_index = self.language_selector.findData(self.language.language)
+        if selector_index >= 0 and selector_index != self.language_selector.currentIndex():
+            self.language_selector.blockSignals(True)
+            self.language_selector.setCurrentIndex(selector_index)
+            self.language_selector.blockSignals(False)
+        self.table_workspace.retranslate_ui()
+        self.results_workspace.retranslate_ui()
+        self.config_workspace.retranslate_ui()
+        self.language.localize_widget_tree(self)
+
+    def _finish_initialization(self, succeeded: bool) -> None:
+        if self.initialization_complete:
+            return
+        self.initialization_complete = True
+        self.initialization_succeeded = bool(succeeded)
+        self.initializationFinished.emit(self.initialization_succeeded)
 
     def _subscribe_events(self) -> None:
         for event_type, callback in (
@@ -492,6 +648,7 @@ class QtMainWindow(QMainWindow):
         if pending is None or pending[0] != revision:
             return
         operation, preserve_qc = pending[1], pending[2]
+        initial_operation = operation == "initial"
         try:
             if isinstance(result, PreparedProjectContext):
                 snapshot = self.context_service.activate(result)
@@ -506,6 +663,8 @@ class QtMainWindow(QMainWindow):
             message = str(exc).strip() or type(exc).__name__
             self._set_error(message)
             self.results_page.show_error(message)
+            if initial_operation:
+                self._finish_initialization(False)
             return
         self._pending_context = None
         self.shell_status_label.setText(
@@ -518,16 +677,23 @@ class QtMainWindow(QMainWindow):
             )
         )
         self._set_error("")
+        if initial_operation:
+            self._finish_initialization(True)
+        self.language.localize_widget_tree(self)
 
     @Slot(int, object)
     def _handle_context_error(self, revision: int, error: object) -> None:
         if self._pending_context is None or self._pending_context[0] != revision:
             return
+        initial_operation = self._pending_context[1] == "initial"
         self._pending_context = None
         self.shell_status_label.setText("项目加载失败")
         message = str(error).strip() or type(error).__name__
         self._set_error(message)
         self.results_page.show_error(message)
+        if initial_operation:
+            self._finish_initialization(False)
+        self.language.localize_widget_tree(self)
 
     @Slot(bool)
     def _set_context_busy(self, _busy: bool) -> None:
@@ -633,15 +799,23 @@ class QtMainWindow(QMainWindow):
         if item is None:
             return
         name = str(project_name).strip()
-        item.setText(
-            self.NAVIGATION_LABELS[self.project_page_index]
-            if not name
-            else f"{self.NAVIGATION_LABELS[self.project_page_index]}\n{name}"
-        )
+        project_label = self.language.tr("nav.projects")
+        self.project_navigation_label.setText(project_label)
+        self.project_navigation_context.setText(name)
+        self.project_navigation_context.setVisible(bool(name))
+        # The first row is rendered by standard child labels so its secondary
+        # project line is not elided by QListView's one-line item delegate.
+        item.setText("")
         item.setToolTip(name)
         item.setData(
             Qt.AccessibleTextRole,
-            "项目选择" if not name else f"项目选择，当前项目 {name}",
+            project_label
+            if not name
+            else (
+                f"项目选择，当前项目 {name}"
+                if self.language.language == "zh_CN"
+                else f"Project selection, current project {name}"
+            ),
         )
         self._set_navigation_item_height(
             self.project_page_index,
@@ -652,7 +826,10 @@ class QtMainWindow(QMainWindow):
         item = self.navigation.item(int(row))
         if item is None:
             return
-        height = self.navigation.fontMetrics().lineSpacing() * int(line_count) + 16
+        height = max(
+            NAVIGATION_ROW_HEIGHT,
+            self.navigation.fontMetrics().lineSpacing() * int(line_count) + 16,
+        )
         item.setSizeHint(QSize(0, height))
 
     def _persist_derived_subject_column(
@@ -1182,7 +1359,7 @@ class QtMainWindow(QMainWindow):
     ) -> QtQcControllerWindow:
         """Create and wire one hidden controller without replacing the live one."""
 
-        replacement = QtQcControllerWindow(workflow)
+        replacement = QtQcControllerWindow(workflow, language=self.language)
         replacement.workspace.draftStateChanged.connect(self._on_qc_draft_changed)
         replacement.workspace.filterRequested.connect(
             self._open_qc_filter_dialog
@@ -1223,6 +1400,7 @@ class QtMainWindow(QMainWindow):
     def _qc_controller_closed(self, controller: QtQcControllerWindow) -> None:
         if self.qc_controller is not controller:
             return
+        self.language.unregister_root(controller)
         self.qc_controller = None
         self.qc_workspace = None
         self._active_module_name = ""
@@ -1330,8 +1508,8 @@ class QtMainWindow(QMainWindow):
         if workflow is not None and workflow.dirty:
             answer = QMessageBox.question(
                 self,
-                "尚未保存",
-                "放弃当前未保存的质控修改并关闭 EasyQC？",
+                translate_ui_text("尚未保存"),
+                translate_ui_text("放弃当前未保存的质控修改并关闭 EasyQC？"),
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
@@ -1347,6 +1525,7 @@ class QtMainWindow(QMainWindow):
         self.results_page.close()
         self.config_workspace.close()
         self._clear_qc_workspace(discard_draft=True)
+        self.language.unregister_root(self)
         super().closeEvent(event)
 
 

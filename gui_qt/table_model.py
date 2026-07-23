@@ -9,6 +9,7 @@ import pandas as pd
 from pandas.api import types as ptypes
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 
+from gui_qt.i18n import LanguageController
 from models.table_view_state import RowWindow, SortRule
 
 
@@ -24,8 +25,15 @@ class QtTableRowReference:
 class QtTableModel(QAbstractTableModel):
     """Expose one immutable Core row window through Qt's model/view roles."""
 
-    def __init__(self, window: RowWindow, parent=None) -> None:
+    def __init__(
+        self,
+        window: RowWindow,
+        parent=None,
+        *,
+        language: LanguageController | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._language = language
         self._frame = pd.DataFrame()
         self._source_positions: tuple[int, ...] = ()
         self._offset = 0
@@ -73,8 +81,19 @@ class QtTableModel(QAbstractTableModel):
             if role == Qt.ToolTipRole:
                 for priority, rule in enumerate(self._sort_rules, start=1):
                     if rule.column == column:
-                        direction = "升序" if rule.ascending else "降序"
-                        return f"排序优先级 {priority} · {direction}"
+                        if self._language is None:
+                            direction = "升序" if rule.ascending else "降序"
+                            return f"排序优先级 {priority} · {direction}"
+                        direction = self._language.tr(
+                            "table.sort.ascending"
+                            if rule.ascending
+                            else "table.sort.descending"
+                        )
+                        return self._language.tr(
+                            "table.sort.tooltip",
+                            priority=priority,
+                            direction=direction,
+                        )
         if orientation == Qt.Vertical and 0 <= section < self.rowCount() and role == Qt.DisplayRole:
             return str(self._offset + section + 1)
         return None
@@ -102,6 +121,10 @@ class QtTableModel(QAbstractTableModel):
 
     def set_sort_rules(self, rules: tuple[SortRule, ...]) -> None:
         self._sort_rules = tuple(rules)
+        if self.columnCount():
+            self.headerDataChanged.emit(Qt.Horizontal, 0, self.columnCount() - 1)
+
+    def retranslate_ui(self) -> None:
         if self.columnCount():
             self.headerDataChanged.emit(Qt.Horizontal, 0, self.columnCount() - 1)
 

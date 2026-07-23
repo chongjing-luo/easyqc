@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gui_qt.i18n import LanguageController, translate_ui_text
 from models.table_view_state import ColumnViewState
 
 
@@ -24,9 +25,16 @@ PINNED_ROLE = COLUMN_ROLE + 1
 class ColumnsPanel(QWidget):
     """Own one complete column-layout draft without applying it."""
 
-    def __init__(self, initial: ColumnViewState, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        initial: ColumnViewState,
+        parent: QWidget | None = None,
+        *,
+        language: LanguageController | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("columnsPanel")
+        self.language = language
         self._widths = initial.widths
         self._build_ui()
         self.set_state(initial)
@@ -165,8 +173,8 @@ class ColumnsPanel(QWidget):
             pinned=tuple(pinned),
         )
 
-    @staticmethod
     def _configure_item(
+        self,
         item: QListWidgetItem,
         column: str,
         *,
@@ -174,7 +182,11 @@ class ColumnsPanel(QWidget):
     ) -> None:
         item.setData(COLUMN_ROLE, column)
         item.setData(PINNED_ROLE, pinned)
-        item.setText(f"{column}   · 已固定" if pinned else column)
+        item.setText(
+            self._ui_text(f"{column}   · 已固定")
+            if pinned
+            else column
+        )
         item.setData(Qt.ItemDataRole.AccessibleTextRole, item.text())
         flags = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
         if not pinned:
@@ -182,6 +194,11 @@ class ColumnsPanel(QWidget):
         item.setFlags(flags)
         if pinned:
             item.setCheckState(Qt.CheckState.Checked)
+
+    def _ui_text(self, source: str) -> str:
+        if self.language is not None:
+            return self.language.translate_source(source)
+        return translate_ui_text(source)
 
     def _pinned_count(self) -> int:
         return sum(

@@ -50,10 +50,12 @@ from gui_qt.columns_panel import ColumnsPanel
 from gui_qt.derived_column_dialog import DerivedColumnDialog
 from gui_qt.filter_dialog import FilterDialog
 from gui_qt.filter_panel import FilterPanel, operator_label
+from gui_qt.i18n import LanguageController, translate_ui_text
 from gui_qt.sort_dialog import SortDialog
 from gui_qt.sort_panel import SortPanel
 from gui_qt.table_model import QtTableModel, QtTableRowReference
 from gui_qt.task_runner import RevisionedTaskController
+from gui_qt.theme import set_button_role
 from models.table_view_state import (
     ColumnViewState,
     FilterCondition,
@@ -82,6 +84,7 @@ class QtTableWorkspace(QWidget):
         on_derived_column_committed: Callable[[str], None] | None = None,
         page_size: int = 200,
         background_row_threshold: int = 10_000,
+        language: LanguageController | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -91,6 +94,7 @@ class QtTableWorkspace(QWidget):
             raise TypeError("derive_preview_source must be callable")
         self.setObjectName("qtTableWorkspace")
         self.setAccessibleName("EasyQC 表格工作区")
+        self.language = language
         self._pinned_width_update_pending = False
         self._pinned_width_timer = QTimer(self)
         self._pinned_width_timer.setSingleShot(True)
@@ -273,12 +277,14 @@ class QtTableWorkspace(QWidget):
             self.table_panel,
         )
         self.empty_state_label.setObjectName("previewEmptyState")
+        self.empty_state_label.setProperty("role", "secondary")
         self.empty_state_label.setWordWrap(True)
         self.empty_state_label.setAlignment(Qt.AlignCenter)
         table_panel_layout.addWidget(self.empty_state_label)
 
         self.table_surface = QFrame(self.table_panel)
         self.table_surface.setObjectName("tableSurface")
+        self.table_surface.setProperty("surface", "true")
         self.table_surface.setMinimumWidth(0)
         self.table_surface.installEventFilter(self)
         table_layout = QGridLayout(self.table_surface)
@@ -287,7 +293,11 @@ class QtTableWorkspace(QWidget):
         table_layout.setColumnStretch(1, 1)
         table_layout.setRowStretch(0, 1)
 
-        self.table_model = QtTableModel(self.row_window, self)
+        self.table_model = QtTableModel(
+            self.row_window,
+            self,
+            language=self.language,
+        )
         self.table_view = QTableView(self.table_surface)
         self.table_view.setObjectName("previewTable")
         self.table_view.setAccessibleName("EasyQC 质控前名单")
@@ -311,7 +321,7 @@ class QtTableWorkspace(QWidget):
         self.pinned_view.verticalHeader().setVisible(True)
         self.table_view.verticalHeader().setVisible(False)
         self.pinned_view.horizontalHeader().setStretchLastSection(False)
-        self.table_view.horizontalHeader().setStretchLastSection(False)
+        self.table_view.horizontalHeader().setStretchLastSection(True)
         self.table_view.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.pinned_view.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.pinned_view.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
@@ -362,6 +372,7 @@ class QtTableWorkspace(QWidget):
         ):
             status_label.setMinimumWidth(0)
             status_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            status_label.setProperty("role", "secondary")
         footer_layout.addWidget(self.count_label)
         footer_layout.addWidget(self.range_label)
         footer_layout.addWidget(self.columns_status_label)
@@ -385,6 +396,7 @@ class QtTableWorkspace(QWidget):
 
         self.error_label = QLabel("", self.table_panel)
         self.error_label.setObjectName("tableError")
+        self.error_label.setProperty("role", "error")
         self.error_label.setWordWrap(True)
         self.error_label.setAccessibleName("表格操作错误")
         table_panel_layout.addWidget(self.error_label)
@@ -435,6 +447,7 @@ class QtTableWorkspace(QWidget):
 
         self.view_inspector = QFrame(self.workspace_splitter)
         self.view_inspector.setObjectName("viewInspector")
+        self.view_inspector.setProperty("surface", "true")
         self.view_inspector.setAccessibleName("表格视图设置")
         self.view_inspector.setMinimumWidth(0)
         self.view_inspector.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
@@ -443,7 +456,9 @@ class QtTableWorkspace(QWidget):
         inspector_layout.setSpacing(8)
 
         header = QHBoxLayout()
-        header.addWidget(QLabel("视图设置", self.view_inspector))
+        self.inspector_title = QLabel("视图设置", self.view_inspector)
+        self.inspector_title.setProperty("role", "sectionTitle")
+        header.addWidget(self.inspector_title)
         header.addStretch(1)
         self.inspector_close_button = QPushButton("关闭", self.view_inspector)
         self.inspector_close_button.setObjectName("inspectorCloseButton")
@@ -467,6 +482,7 @@ class QtTableWorkspace(QWidget):
 
         self.inspector_error_label = QLabel("", self.view_inspector)
         self.inspector_error_label.setObjectName("tableInspectorError")
+        self.inspector_error_label.setProperty("role", "error")
         self.inspector_error_label.setAccessibleName("表格视图设置错误")
         self.inspector_error_label.setWordWrap(True)
         self.inspector_error_label.setVisible(False)
@@ -479,6 +495,7 @@ class QtTableWorkspace(QWidget):
         self.inspector_reset_button.setAccessibleName("重置全部视图草稿")
         self.inspector_cancel_button.setAccessibleName("取消表格视图编辑")
         self.inspector_apply_button.setAccessibleName("应用表格视图草稿")
+        set_button_role(self.inspector_apply_button, "primary")
         action_row.addWidget(self.inspector_reset_button)
         action_row.addStretch(1)
         action_row.addWidget(self.inspector_cancel_button)
@@ -508,6 +525,7 @@ class QtTableWorkspace(QWidget):
         self.inspector_columns_panel = ColumnsPanel(
             self._columns_with_current_widths(self.applied_state.columns),
             self.inspector_tabs,
+            language=self.language,
         )
         self.inspector_tabs.addTab(self.inspector_filter_panel, "筛选")
         self.inspector_tabs.addTab(self.inspector_sort_panel, "排序")
@@ -1043,6 +1061,7 @@ class QtTableWorkspace(QWidget):
             self._columns_with_current_widths(self.applied_state.columns),
             self.initial_state.columns,
             self,
+            language=self.language,
         )
         dialog.applyRequested.connect(
             lambda columns, current=dialog: self._apply_columns_from_dialog(
@@ -1300,9 +1319,9 @@ class QtTableWorkspace(QWidget):
     def _choose_export_destination(self) -> None:
         destination, _selected_filter = QFileDialog.getSaveFileName(
             self,
-            "导出当前表格视图",
+            translate_ui_text("导出当前表格视图"),
             "",
-            "CSV 文件 (*.csv)",
+            translate_ui_text("CSV 文件 (*.csv)"),
         )
         if destination:
             self.start_export(destination)
@@ -1729,7 +1748,12 @@ class QtTableWorkspace(QWidget):
             summary = self._condition_summary(condition)
             action = QAction(f"{summary}  ×", self.applied_toolbar)
             action.setData(condition.condition_id)
-            action.setToolTip(f"移除筛选 {summary}")
+            remove_text = (
+                self.language.tr("table.filter.remove", summary=summary)
+                if self.language is not None
+                else f"移除筛选 {summary}"
+            )
+            action.setToolTip(remove_text)
             action.triggered.connect(
                 lambda _checked=False, condition_id=condition.condition_id: self.remove_applied_condition(condition_id)
             )
@@ -1737,34 +1761,62 @@ class QtTableWorkspace(QWidget):
             chip = self.applied_toolbar.widgetForAction(action)
             if chip is not None:
                 chip.setObjectName("filterChip")
-                chip.setAccessibleName(f"移除筛选 {summary}")
+                chip.setAccessibleName(remove_text)
                 if isinstance(chip, QToolButton):
                     chip.setAutoRaise(False)
         self.applied_toolbar.setVisible(bool(self.applied_state.conditions))
 
-    @staticmethod
-    def _condition_summary(condition: FilterCondition) -> str:
+    def _condition_summary(self, condition: FilterCondition) -> str:
         if condition.value is None:
             value = ""
         elif isinstance(condition.value, (tuple, list)):
             value = ", ".join(str(item) for item in condition.value)
         else:
             value = str(condition.value)
-        return f"{condition.column} {operator_label(condition.operator)}{(' ' + value) if value else ''}"
+        operator = operator_label(condition.operator)
+        if self.language is not None:
+            operator = self.language.translate_source(operator)
+        return f"{condition.column} {operator}{(' ' + value) if value else ''}"
+
+    def _ui_text(self, source: str) -> str:
+        if self.language is not None:
+            return self.language.translate_source(source)
+        return translate_ui_text(source)
+
+    def retranslate_ui(self) -> None:
+        """Refresh dynamic table presentation without touching view state."""
+
+        self.table_model.retranslate_ui()
+        self._render_chips()
+        self._update_status()
 
     def _update_status(self) -> None:
         matched = self.result.matched_total
         total = self.result.source_total
-        self.count_label.setText(f"{matched:,} / {total:,} 行")
+        self.count_label.setText(
+            self._ui_text(f"{matched:,} / {total:,} 行")
+        )
         self.empty_state_label.setVisible(matched == 0)
         start, end = self.visible_range
-        self.range_label.setText(f"第 {start:,}–{end:,} 行")
+        self.range_label.setText(
+            self._ui_text(f"第 {start:,}–{end:,} 行")
+        )
         visible = len(self.applied_state.columns.visible_columns)
         column_total = len(self.applied_state.columns.order)
-        self.columns_status_label.setText(f"列 {visible}/{column_total}")
-        self.filter_action.setText(f"筛选 ({len(self.applied_state.conditions)})")
-        self.sort_action.setText(f"排序 ({len(self.applied_state.sort_rules)})")
-        self.columns_action.setText(f"列显示 ({visible}/{column_total})")
+        self.columns_status_label.setText(
+            self._ui_text(f"列 {visible}/{column_total}")
+        )
+        self.filter_action.setText(
+            self._ui_text(
+                f"筛选 ({len(self.applied_state.conditions)})"
+            )
+        )
+        self.sort_action.setText(
+            self._ui_text(f"排序 ({len(self.applied_state.sort_rules)})")
+        )
+        self.columns_action.setText(
+            self._ui_text(f"列显示 ({visible}/{column_total})")
+        )
         self.sort_status_label.setText(
             " · ".join(
                 f"{priority} {rule.column} {'↑' if rule.ascending else '↓'}"
@@ -1772,13 +1824,19 @@ class QtTableWorkspace(QWidget):
             )
         )
         if self.selection_outside_view:
-            self.selection_status_label.setText("所选记录不在当前视图中")
+            self.selection_status_label.setText(
+                self._ui_text("所选记录不在当前视图中")
+            )
         elif self.selected_source_position is not None:
             self.selection_status_label.setText(
-                f"已选原始第 {self.selected_source_position + 1:,} 行"
+                self._ui_text(
+                    f"已选原始第 {self.selected_source_position + 1:,} 行"
+                )
             )
         else:
-            self.selection_status_label.setText("未选择记录")
+            self.selection_status_label.setText(
+                self._ui_text("未选择记录")
+            )
         page_index = self.page_size_combo.findData(self.applied_state.page_size)
         if page_index >= 0:
             self.page_size_combo.blockSignals(True)

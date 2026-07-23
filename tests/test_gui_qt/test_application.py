@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 from pandas.testing import assert_frame_equal
+from PySide6.QtCore import QObject, QSettings
 from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication, QLabel, QTableView
 
@@ -19,6 +20,8 @@ from gui_qt.application import (
     build_preview_window,
     get_or_create_qapplication,
 )
+from gui_qt.i18n import LanguageController
+from gui_qt.startup_screen import QtStartupScreen
 
 
 def test_get_or_create_qapplication_reuses_instance_without_overriding_host_theme(qapp):
@@ -200,7 +203,10 @@ def test_qt_event_loop_consumes_current_logging_status_once(monkeypatch):
             pass
 
     class FakeWindow:
-        def __init__(self, services, source=None):
+        initialization_complete = True
+        initialization_succeeded = True
+
+        def __init__(self, services, source=None, language=None):
             self.services = services
             self.source = source
 
@@ -214,12 +220,28 @@ def test_qt_event_loop_consumes_current_logging_status_once(monkeypatch):
             pass
 
     fake_app = FakeApplication()
+    fake_language = object()
     monkeypatch.setattr(
         application_module,
         "get_or_create_qapplication",
         lambda _argv=None: fake_app,
     )
     monkeypatch.setattr(application_module, "QtMainWindow", FakeWindow)
+    monkeypatch.setattr(
+        application_module,
+        "get_or_create_language_controller",
+        lambda _app=None: fake_language,
+    )
+    monkeypatch.setattr(
+        application_module,
+        "QtStartupScreen",
+        lambda _language: SimpleNamespace(
+            set_status=lambda _key: None,
+            show=lambda: None,
+            close=lambda: None,
+            deleteLater=lambda: None,
+        ),
+    )
     monkeypatch.setattr(
         application_module,
         "get_logging_status",
@@ -231,6 +253,396 @@ def test_qt_event_loop_consumes_current_logging_status_once(monkeypatch):
         lambda window, message: scheduled.append((window, message)),
     )
 
-    assert application_module.run_qt_preview(["easyqc-test"], object()) == 0
+    assert (
+        application_module.run_qt_preview(
+            ["easyqc-test"],
+            object(),
+            startup_minimum_ms=0,
+        )
+        == 0
+    )
     assert len(scheduled) == 1
     assert scheduled[0][1] == "degraded"
+
+
+def test_qt_event_loop_shows_startup_before_constructing_and_showing_main(
+    monkeypatch,
+):
+    events = []
+
+    class FakeApplication:
+        def processEvents(self):
+            events.append("process")
+
+        def exec(self):
+            return 0
+
+        def quit(self):
+            events.append("quit")
+
+    class FakeStartup:
+        def __init__(self, language):
+            events.append("startup.init")
+            self.language = language
+
+        def set_status(self, key):
+            events.append(f"startup.status:{key}")
+
+        def show(self):
+            events.append("startup.show")
+
+        def close(self):
+            events.append("startup.close")
+
+        def deleteLater(self):
+            events.append("startup.delete")
+
+    class FakeWindow:
+        initialization_complete = True
+
+        def __init__(self, services, source=None, language=None):
+            events.append("window.init")
+
+        def show(self):
+            events.append("window.show")
+
+        def close(self):
+            events.append("window.close")
+
+        def deleteLater(self):
+            events.append("window.delete")
+
+    fake_app = FakeApplication()
+    fake_language = object()
+    monkeypatch.setattr(
+        application_module,
+        "get_or_create_qapplication",
+        lambda _argv=None: fake_app,
+    )
+    monkeypatch.setattr(
+        application_module,
+        "get_or_create_language_controller",
+        lambda _app=None: fake_language,
+    )
+    monkeypatch.setattr(application_module, "apply_easyqc_theme", lambda _app: None)
+    monkeypatch.setattr(application_module, "QtStartupScreen", FakeStartup)
+    monkeypatch.setattr(application_module, "QtMainWindow", FakeWindow)
+    monkeypatch.setattr(
+        application_module,
+        "get_logging_status",
+        lambda: SimpleNamespace(warning_message=None),
+    )
+    monkeypatch.setattr(
+        application_module,
+        "schedule_qt_startup_warning",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        application_module.QTimer,
+        "singleShot",
+        lambda _delay, callback: callback(),
+    )
+
+    assert (
+        application_module.run_qt_preview(
+            ["easyqc-test"],
+            object(),
+            pd.DataFrame({"ezqcid": ["A"]}),
+            startup_minimum_ms=0,
+        )
+        == 0
+    )
+    assert events.index("startup.show") < events.index("window.init")
+    assert events.index("window.init") < events.index("window.show")
+    assert events.index("window.show") < events.index("startup.close")
+
+
+def test_qt_event_loop_closes_startup_and_shows_main_error_after_initialization_failure(
+    monkeypatch,
+):
+    events = []
+    windows = []
+
+    class FakeSignal:
+        def __init__(self):
+            self.callback = None
+
+        def connect(self, callback):
+            self.callback = callback
+
+        def emit(self, succeeded):
+            assert self.callback is not None
+            self.callback(succeeded)
+
+    class FakeApplication:
+        def processEvents(self):
+            events.append("process")
+
+        def exec(self):
+            windows[0].initializationFinished.emit(False)
+            return 0
+
+        def quit(self):
+            events.append("quit")
+
+    class FakeStartup:
+        def __init__(self, _language):
+            events.append("startup.init")
+
+        def set_status(self, key):
+            events.append(f"startup.status:{key}")
+
+        def show(self):
+            events.append("startup.show")
+
+        def close(self):
+            events.append("startup.close")
+
+        def deleteLater(self):
+            events.append("startup.delete")
+
+    class FakeWindow:
+        initialization_complete = False
+        initialization_succeeded = False
+
+        def __init__(self, services, source=None, language=None):
+            self.initializationFinished = FakeSignal()
+            self.error_visible = True
+            self.error_text = "项目目录不存在: /missing"
+            windows.append(self)
+            events.append("window.init")
+
+        def show(self):
+            assert self.error_visible
+            assert self.error_text
+            events.append("window.show.error")
+
+        def close(self):
+            events.append("window.close")
+
+        def deleteLater(self):
+            events.append("window.delete")
+
+    fake_app = FakeApplication()
+    monkeypatch.setattr(
+        application_module,
+        "get_or_create_qapplication",
+        lambda _argv=None: fake_app,
+    )
+    monkeypatch.setattr(
+        application_module,
+        "get_or_create_language_controller",
+        lambda _app=None: object(),
+    )
+    monkeypatch.setattr(application_module, "apply_easyqc_theme", lambda _app: None)
+    monkeypatch.setattr(application_module, "QtStartupScreen", FakeStartup)
+    monkeypatch.setattr(application_module, "QtMainWindow", FakeWindow)
+    monkeypatch.setattr(
+        application_module,
+        "get_logging_status",
+        lambda: SimpleNamespace(warning_message=None),
+    )
+    monkeypatch.setattr(
+        application_module,
+        "schedule_qt_startup_warning",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        application_module.QTimer,
+        "singleShot",
+        lambda _delay, callback: callback(),
+    )
+
+    assert (
+        application_module.run_qt_preview(
+            ["easyqc-test"],
+            object(),
+            startup_minimum_ms=0,
+        )
+        == 0
+    )
+    assert events.index("startup.show") < events.index("window.init")
+    assert events.index("window.show.error") < events.index("startup.close")
+
+
+def test_synchronous_main_window_construction_failure_closes_startup_and_is_visible(
+    monkeypatch,
+    tmp_path,
+):
+    events = []
+    shown = []
+
+    class FakeApplication:
+        def processEvents(self):
+            events.append("process")
+
+        def exec(self):
+            raise AssertionError("event loop must not start after construction failure")
+
+    class FakeStartup(QObject):
+        def __init__(self, _language):
+            super().__init__()
+            events.append("startup.init")
+
+        def set_status(self, key):
+            events.append(f"startup.status:{key}")
+
+        def show(self):
+            events.append("startup.show")
+
+        def close(self):
+            events.append("startup.close")
+
+        def deleteLater(self):
+            events.append("startup.delete")
+
+    language = LanguageController(
+        settings=QSettings(
+            str(tmp_path / "language.ini"),
+            QSettings.IniFormat,
+        ),
+        language="en",
+    )
+    fake_app = FakeApplication()
+    monkeypatch.setattr(
+        application_module,
+        "get_or_create_qapplication",
+        lambda _argv=None: fake_app,
+    )
+    monkeypatch.setattr(
+        application_module,
+        "get_or_create_language_controller",
+        lambda _app=None: language,
+    )
+    monkeypatch.setattr(application_module, "QtStartupScreen", FakeStartup)
+    monkeypatch.setattr(
+        application_module,
+        "QtMainWindow",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("synthetic synchronous startup failure")
+        ),
+    )
+    monkeypatch.setattr(
+        application_module,
+        "QMessageBox",
+        SimpleNamespace(
+            critical=lambda parent, title, message: shown.append(
+                (parent, title, message)
+            )
+        ),
+    )
+
+    assert (
+        application_module.run_qt_preview(
+            ["easyqc-test"],
+            object(),
+            startup_minimum_ms=0,
+        )
+        == 1
+    )
+    assert events.index("startup.show") < events.index("startup.close")
+    assert events.index("startup.close") < events.index("startup.delete")
+    assert shown == [
+        (
+            None,
+            "Start failed",
+            "synthetic synchronous startup failure",
+        )
+    ]
+
+
+def test_synchronous_construction_failure_delivers_startup_deferred_delete(
+    qapp,
+    monkeypatch,
+    tmp_path,
+):
+    startups = []
+    destroyed = []
+    shown = []
+    language = LanguageController(
+        settings=QSettings(
+            str(tmp_path / "language.ini"),
+            QSettings.IniFormat,
+        ),
+        language="en",
+    )
+
+    def build_startup(controller):
+        startup = QtStartupScreen(controller)
+        startup.destroyed.connect(lambda: destroyed.append(True))
+        startups.append(startup)
+        return startup
+
+    monkeypatch.setattr(
+        application_module,
+        "get_or_create_qapplication",
+        lambda _argv=None: qapp,
+    )
+    monkeypatch.setattr(
+        application_module,
+        "get_or_create_language_controller",
+        lambda _app=None: language,
+    )
+    monkeypatch.setattr(application_module, "QtStartupScreen", build_startup)
+    monkeypatch.setattr(
+        application_module,
+        "QtMainWindow",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("synthetic real-widget startup failure")
+        ),
+    )
+    monkeypatch.setattr(
+        application_module.QMessageBox,
+        "critical",
+        lambda parent, title, message: shown.append(
+            (parent, title, message)
+        ),
+    )
+
+    assert (
+        application_module.run_qt_preview(
+            ["easyqc-test"],
+            object(),
+            startup_minimum_ms=0,
+        )
+        == 1
+    )
+    assert len(startups) == 1
+    assert destroyed == [True]
+    assert shown == [
+        (
+            None,
+            "Start failed",
+            "synthetic real-widget startup failure",
+        )
+    ]
+
+
+def test_initial_project_load_failure_finishes_with_visible_main_window_error(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+):
+    services = build_app_services(tmp_path / "projects.json")
+
+    def fail_initial_load():
+        raise RuntimeError("synthetic initial project load failure")
+
+    monkeypatch.setattr(
+        services.project_context_service,
+        "prepare_initial",
+        fail_initial_load,
+    )
+    window = application_module.build_product_window(services)
+    qtbot.addWidget(window)
+    window.show()
+
+    qtbot.waitUntil(lambda: window.initialization_complete, timeout=3000)
+
+    assert window.initialization_succeeded is False
+    assert window.shell_status_label.text() in {
+        "项目加载失败",
+        "Project load failed",
+    }
+    assert window.shell_error_label.text() == "synthetic initial project load failure"
+    assert window.shell_error_label.isVisibleTo(window)

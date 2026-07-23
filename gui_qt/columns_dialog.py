@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QVBoxLayout, QWidget
 
 from gui_qt.columns_panel import ColumnsPanel
+from gui_qt.i18n import LanguageController
 from models.table_view_state import ColumnViewState
 
 
@@ -19,6 +20,8 @@ class ColumnsDialog(QDialog):
         applied_state: ColumnViewState,
         default_state: ColumnViewState,
         parent: QWidget | None = None,
+        *,
+        language: LanguageController | None = None,
     ) -> None:
         super().__init__(parent)
         if not isinstance(applied_state, ColumnViewState) or not isinstance(
@@ -36,7 +39,11 @@ class ColumnsDialog(QDialog):
         self._apply_pending = False
 
         layout = QVBoxLayout(self)
-        self.editor = ColumnsPanel(applied_state, self)
+        self.editor = ColumnsPanel(
+            applied_state,
+            self,
+            language=language,
+        )
         layout.addWidget(self.editor, 1)
         buttons = (
             QDialogButtonBox.StandardButton.Apply

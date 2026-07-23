@@ -53,8 +53,10 @@ from core.module_filter import (
 )
 from core.table_view_service import TableViewService
 from gui_qt.filter_dialog import FilterDialog
+from gui_qt.i18n import protect_user_text, translate_ui_text
 from gui_qt.qc_list_import_page import QtQcListImportPage
 from gui_qt.task_runner import RevisionedTaskController
+from gui_qt.theme import set_button_role
 from models.qcmodule import Score, Tag
 from models.table_view_state import FilterExpression
 
@@ -136,19 +138,23 @@ class QtProjectConfigWorkspace(QWidget):
         self.project_splitter.setObjectName("projectSelectionSplitter")
 
         project_list_panel = QWidget(self.project_splitter)
+        project_list_panel.setObjectName("projectListPanel")
+        project_list_panel.setProperty("surface", "true")
         project_list_layout = QVBoxLayout(project_list_panel)
-        project_list_layout.setContentsMargins(0, 0, 6, 0)
-        project_list_layout.setSpacing(8)
+        project_list_layout.setContentsMargins(14, 14, 14, 14)
+        project_list_layout.setSpacing(10)
         self.project_list_header = QWidget(project_list_panel)
         project_header_layout = QHBoxLayout(self.project_list_header)
         project_header_layout.setContentsMargins(0, 0, 0, 0)
         project_header_layout.setSpacing(6)
         self.project_list_title = QLabel("项目列表", self.project_list_header)
         self.project_list_title.setObjectName("projectListTitle")
+        self.project_list_title.setProperty("role", "sectionTitle")
         project_header_layout.addWidget(self.project_list_title)
         project_header_layout.addStretch(1)
         self.project_toolbar = QToolBar("项目列表操作", self.project_list_header)
         self.project_toolbar.setObjectName("configProjectToolbar")
+        self.project_toolbar.setProperty("compact", "true")
         self.project_toolbar.setAccessibleName("项目列表操作")
         self.project_toolbar.setMovable(False)
         self.project_toolbar.setFloatable(False)
@@ -174,24 +180,30 @@ class QtProjectConfigWorkspace(QWidget):
         self.project_list = QListWidget(project_list_panel)
         self.project_list.setObjectName("projectList")
         self.project_list.setAccessibleName("已登记项目")
+        protect_user_text(self.project_list, "items")
         self.project_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         project_list_layout.addWidget(self.project_list, 1)
 
         project_info_panel = QWidget(self.project_splitter)
+        project_info_panel.setObjectName("projectInfoPanel")
+        project_info_panel.setProperty("surface", "true")
         project_info_layout = QVBoxLayout(project_info_panel)
-        project_info_layout.setContentsMargins(10, 0, 0, 0)
-        project_info_layout.setSpacing(8)
+        project_info_layout.setContentsMargins(16, 14, 16, 14)
+        project_info_layout.setSpacing(10)
         project_info_title = QLabel("项目信息", project_info_panel)
         project_info_title.setObjectName("projectInfoTitle")
+        project_info_title.setProperty("role", "sectionTitle")
         project_info_layout.addWidget(project_info_title)
         project_form = QFormLayout()
         project_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         self.project_name_preview = QLineEdit(project_info_panel)
         self.project_name_preview.setObjectName("projectNamePreview")
         self.project_name_preview.setAccessibleName("项目名称")
+        protect_user_text(self.project_name_preview, "toolTip")
         self.project_path_preview = QLineEdit(project_info_panel)
         self.project_path_preview.setObjectName("projectPathPreview")
         self.project_path_preview.setAccessibleName("项目目录")
+        protect_user_text(self.project_path_preview, "toolTip")
         self.project_path_preview.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self.project_state_preview = QLineEdit(project_info_panel)
         self.project_state_preview.setObjectName("projectStatePreview")
@@ -248,6 +260,8 @@ class QtProjectConfigWorkspace(QWidget):
             self._load_selected_project,
         )
         self.load_project_button.setObjectName("primaryAction")
+        set_button_role(self.load_project_button, "primary")
+        set_button_role(self.remove_project_button, "danger")
         project_info_layout.addWidget(self.project_detail_toolbar)
 
         self.project_splitter.addWidget(project_list_panel)
@@ -263,6 +277,7 @@ class QtProjectConfigWorkspace(QWidget):
         # deliberately not part of the visible project-selection interface.
         self.project_combo = QComboBox(self)
         self.project_combo.setObjectName("internalProjectSelector")
+        protect_user_text(self.project_combo, "items")
         self.project_combo.hide()
 
         self.tabs = QTabWidget(self)
@@ -281,12 +296,14 @@ class QtProjectConfigWorkspace(QWidget):
 
         self.status_label = QLabel("", self)
         self.status_label.setObjectName("configStatus")
+        self.status_label.setProperty("role", "secondary")
         self.status_label.setAccessibleName("配置任务状态")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
         self.error_label = QLabel("", self)
         self.error_label.setObjectName("configError")
+        self.error_label.setProperty("role", "error")
         self.error_label.setWordWrap(True)
         self.error_label.setAccessibleName("配置错误")
         layout.addWidget(self.error_label)
@@ -313,6 +330,7 @@ class QtProjectConfigWorkspace(QWidget):
         button.setAccessibleName(text)
         if isinstance(button, QToolButton):
             button.setAutoRaise(False)
+            set_button_role(button, "secondary")
         return action, button
 
     def _build_constants_tab(self) -> None:
@@ -330,6 +348,7 @@ class QtProjectConfigWorkspace(QWidget):
         self.constant_value.textChanged.connect(self.constant_value.setToolTip)
         self.save_constant_button = QPushButton("添加常量", self.constants_tab)
         self.save_constant_button.setObjectName("primaryAction")
+        set_button_role(self.save_constant_button, "primary")
         self.cancel_constant_button = QPushButton("取消编辑", self.constants_tab)
         self.cancel_constant_button.hide()
         form.addWidget(QLabel("常量名", self.constants_tab))
@@ -364,9 +383,11 @@ class QtProjectConfigWorkspace(QWidget):
         self.constants_table.setEditTriggers(QTableWidget.NoEditTriggers)
         layout.addWidget(self.constants_table, 1)
         self.delete_constant_button = QPushButton("删除选中常量", self.constants_tab)
+        set_button_role(self.delete_constant_button, "danger")
         layout.addWidget(self.delete_constant_button, 0, Qt.AlignRight)
         self.constant_error_label = QLabel("", self.constants_tab)
         self.constant_error_label.setObjectName("constantError")
+        self.constant_error_label.setProperty("role", "error")
         self.constant_error_label.setAccessibleName("常量操作错误")
         self.constant_error_label.setWordWrap(True)
         self.constant_error_label.hide()
@@ -383,19 +404,23 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_splitter = QSplitter(Qt.Horizontal, self.modules_tab)
         self.module_splitter.setObjectName("configModuleSplitter")
         left_panel = QWidget(self.module_splitter)
+        left_panel.setObjectName("moduleListPanel")
+        left_panel.setProperty("surface", "true")
         left = QVBoxLayout(left_panel)
-        left.setContentsMargins(0, 0, 0, 0)
-        left.setSpacing(8)
+        left.setContentsMargins(14, 14, 14, 14)
+        left.setSpacing(10)
         self.module_list_header = QWidget(left_panel)
         module_header_layout = QHBoxLayout(self.module_list_header)
         module_header_layout.setContentsMargins(0, 0, 0, 0)
         module_header_layout.setSpacing(6)
         self.module_list_title = QLabel("模块列表", self.module_list_header)
         self.module_list_title.setObjectName("moduleListTitle")
+        self.module_list_title.setProperty("role", "sectionTitle")
         module_header_layout.addWidget(self.module_list_title)
         module_header_layout.addStretch(1)
         self.module_list_toolbar = QToolBar("模块列表操作", self.module_list_header)
         self.module_list_toolbar.setObjectName("configModuleListToolbar")
+        self.module_list_toolbar.setProperty("compact", "true")
         self.module_list_toolbar.setAccessibleName("模块列表操作")
         self.module_list_toolbar.setMovable(False)
         self.module_list_toolbar.setFloatable(False)
@@ -417,6 +442,7 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_list = QListWidget(left_panel)
         self.module_list.setObjectName("moduleList")
         self.module_list.setAccessibleName("质控模块列表")
+        protect_user_text(self.module_list, "items")
         self.module_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         left.addWidget(self.module_list, 1)
         move_row = QHBoxLayout()
@@ -431,23 +457,30 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_editor_scroll.setFrameShape(QFrame.NoFrame)
         editor_widget = QWidget(self.module_editor_scroll)
         editor_widget.setObjectName("configModuleEditor")
+        editor_widget.setProperty("surface", "true")
         editor = QVBoxLayout(editor_widget)
-        editor.setContentsMargins(8, 0, 8, 8)
-        editor.setSpacing(8)
+        editor.setContentsMargins(12, 14, 12, 16)
+        editor.setSpacing(10)
         self.module_editor_title = QLabel("模块编辑", editor_widget)
         self.module_editor_title.setObjectName("moduleEditorTitle")
+        self.module_editor_title.setProperty("role", "sectionTitle")
         editor.addWidget(self.module_editor_title)
-        editor.addWidget(QLabel("基本信息", editor_widget))
+        self.module_basic_title = QLabel("基本信息", editor_widget)
+        self.module_basic_title.setProperty("role", "sectionTitle")
+        editor.addWidget(self.module_basic_title)
         identity_row = QHBoxLayout()
         self.module_name = QLineEdit(editor_widget)
         self.module_name.setPlaceholderText("模块名称（内部 ID）")
         self.module_name.setAccessibleName("质控模块名称")
+        protect_user_text(self.module_name, "toolTip")
         self.module_label = QLineEdit(editor_widget)
         self.module_label.setPlaceholderText("显示标签")
         self.module_label.setAccessibleName("质控模块显示标签")
+        protect_user_text(self.module_label, "toolTip")
         self.module_rater = QLineEdit(editor_widget)
         self.module_rater.setPlaceholderText("质控员（留空为只读）")
         self.module_rater.setAccessibleName("质控模块质控员")
+        protect_user_text(self.module_rater, "toolTip")
         identity_row.addWidget(self.module_name)
         identity_row.addWidget(self.module_label)
         identity_row.addWidget(self.module_rater)
@@ -455,11 +488,13 @@ class QtProjectConfigWorkspace(QWidget):
 
         self.module_filter_section = QFrame(editor_widget)
         self.module_filter_section.setObjectName("moduleFilterSection")
+        self.module_filter_section.setProperty("surface", "subtle")
         filter_layout = QVBoxLayout(self.module_filter_section)
-        filter_layout.setContentsMargins(0, 4, 0, 4)
+        filter_layout.setContentsMargins(12, 10, 12, 10)
         filter_layout.setSpacing(6)
         self.module_filter_title = QLabel("质控名单", self.module_filter_section)
         self.module_filter_title.setObjectName("moduleFilterTitle")
+        self.module_filter_title.setProperty("role", "sectionTitle")
         filter_layout.addWidget(self.module_filter_title)
         filter_row = QHBoxLayout()
         self.module_filter_summary = QLabel("未选择模块", self.module_filter_section)
@@ -482,6 +517,7 @@ class QtProjectConfigWorkspace(QWidget):
         filter_layout.addLayout(filter_row)
         self.module_filter_error_label = QLabel("", self.module_filter_section)
         self.module_filter_error_label.setObjectName("moduleFilterError")
+        self.module_filter_error_label.setProperty("role", "error")
         self.module_filter_error_label.setAccessibleName("质控名单筛选错误")
         self.module_filter_error_label.setWordWrap(True)
         self.module_filter_error_label.hide()
@@ -546,11 +582,13 @@ class QtProjectConfigWorkspace(QWidget):
 
         self.module_viewer_section = QFrame(editor_widget)
         self.module_viewer_section.setObjectName("moduleViewerSection")
+        self.module_viewer_section.setProperty("surface", "subtle")
         viewer_layout = QVBoxLayout(self.module_viewer_section)
-        viewer_layout.setContentsMargins(0, 4, 0, 4)
+        viewer_layout.setContentsMargins(12, 10, 12, 10)
         viewer_layout.setSpacing(6)
         self.module_viewer_title = QLabel("外部图像查看器", self.module_viewer_section)
         self.module_viewer_title.setObjectName("moduleViewerTitle")
+        self.module_viewer_title.setProperty("role", "sectionTitle")
         viewer_layout.addWidget(self.module_viewer_title)
         self.module_code = QPlainTextEdit(self.module_viewer_section)
         self.module_code.setObjectName("moduleViewerCommand")
@@ -612,6 +650,8 @@ class QtProjectConfigWorkspace(QWidget):
             self._save_module_form,
         )
         self.save_module_button.setObjectName("primaryAction")
+        set_button_role(self.save_module_button, "primary")
+        set_button_role(self.delete_module_button, "danger")
         editor.addWidget(self.module_actions_toolbar)
         self.module_editor_scroll.setWidget(editor_widget)
         self.module_splitter.addWidget(left_panel)
@@ -620,10 +660,11 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_splitter.setCollapsible(1, False)
         self.module_splitter.setStretchFactor(0, 2)
         self.module_splitter.setStretchFactor(1, 3)
-        self.module_splitter.setSizes([320, 640])
+        self.module_splitter.setSizes([360, 640])
         layout.addWidget(self.module_splitter, 1)
         self.module_launch_status_label = QLabel("", self.modules_tab)
         self.module_launch_status_label.setObjectName("moduleLaunchStatus")
+        self.module_launch_status_label.setProperty("role", "secondary")
         self.module_launch_status_label.setAccessibleName("质控启动状态")
         self.module_launch_status_label.setWordWrap(True)
         self.module_launch_status_label.hide()
@@ -718,17 +759,51 @@ class QtProjectConfigWorkspace(QWidget):
         self.project_name_preview.setToolTip(entry.name)
         self.project_path_preview.setText(path_text)
         self.project_path_preview.setToolTip(path_text)
-        state = (
+        state_source = (
             "当前打开"
             if entry.is_current
             else "最近打开"
             if entry.is_most_recent
             else "已登记"
         )
+        state = translate_ui_text(state_source)
         self.project_state_preview.setText(state)
         self.project_state_preview.setToolTip(state)
         self.project_combo.setCurrentText(entry.name)
         self._update_project_action_state()
+
+    def retranslate_ui(self) -> None:
+        """Refresh presentation-only project status without changing selection."""
+
+        self._preview_project_item(self.project_list.currentItem())
+        self._retranslate_module_rows()
+
+    def _retranslate_module_rows(self) -> None:
+        """Refresh module-row chrome while retaining project-owned labels."""
+
+        for row in range(self.module_list.count()):
+            item = self.module_list.item(row)
+            row_widget = self.module_list.itemWidget(item)
+            if row_widget is None:
+                continue
+            label = str(row_widget.property("_easyqc_module_label") or "")
+            name = str(row_widget.property("_easyqc_module_name") or "")
+            rater = str(row_widget.property("_easyqc_module_rater") or "")
+            detail_text = f"{name} · {rater or translate_ui_text('只读')}"
+            tooltip = f"{label}\n{detail_text}"
+            title = row_widget.findChild(QLabel, "moduleRowTitle")
+            detail = row_widget.findChild(QLabel, "moduleRowDetail")
+            start_button = row_widget.findChild(QPushButton, "moduleRowStart")
+            if title is not None:
+                title.setText(label)
+                title.setToolTip(tooltip)
+            if detail is not None:
+                detail.setText(detail_text)
+                detail.setToolTip(tooltip)
+            if start_button is not None:
+                start_button.setAccessibleName(
+                    f"{translate_ui_text('启动质控')} {label}"
+                )
 
     def _selected_project_entry(self) -> ProjectListEntry | None:
         item = self.project_list.currentItem()
@@ -789,6 +864,8 @@ class QtProjectConfigWorkspace(QWidget):
             action_layout.setSpacing(4)
             edit_button = QPushButton("编辑", actions)
             delete_button = QPushButton("删除", actions)
+            set_button_role(edit_button, "quiet")
+            set_button_role(delete_button, "danger")
             edit_button.clicked.connect(
                 lambda _checked=False, constant_name=str(name): self._edit_constant_name(
                     constant_name
@@ -816,7 +893,9 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_start_buttons = {}
         for module in modules:
             item_text = module.label
-            detail_text = f"{module.name} · {module.rater or '只读'}"
+            detail_text = (
+                f"{module.name} · {module.rater or translate_ui_text('只读')}"
+            )
             tooltip = f"{module.label}\n{detail_text}"
             item = QListWidgetItem("", self.module_list)
             item.setData(Qt.UserRole, module.name)
@@ -827,6 +906,9 @@ class QtProjectConfigWorkspace(QWidget):
             )
             item.setToolTip(tooltip)
             row_widget = QWidget(self.module_list)
+            row_widget.setProperty("_easyqc_module_label", module.label)
+            row_widget.setProperty("_easyqc_module_name", module.name)
+            row_widget.setProperty("_easyqc_module_rater", module.rater or "")
             row_layout = QHBoxLayout(row_widget)
             row_layout.setContentsMargins(6, 5, 6, 5)
             row_layout.setSpacing(8)
@@ -834,16 +916,25 @@ class QtProjectConfigWorkspace(QWidget):
             text_column.setContentsMargins(0, 0, 0, 0)
             text_column.setSpacing(2)
             title = QLabel(module.label, row_widget)
+            title.setObjectName("moduleRowTitle")
+            protect_user_text(title, "text", "toolTip")
             title.setToolTip(tooltip)
             title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             detail = QLabel(detail_text, row_widget)
+            detail.setObjectName("moduleRowDetail")
+            protect_user_text(detail, "text", "toolTip")
             detail.setToolTip(tooltip)
             detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             text_column.addWidget(title)
             text_column.addWidget(detail)
             row_layout.addLayout(text_column, 1)
             start_button = QPushButton("启动质控", row_widget)
-            start_button.setAccessibleName(f"启动质控 {module.label}")
+            start_button.setObjectName("moduleRowStart")
+            protect_user_text(start_button, "accessibleName")
+            set_button_role(start_button, "primary")
+            start_button.setAccessibleName(
+                f"{translate_ui_text('启动质控')} {module.label}"
+            )
             start_button.setEnabled(self.module_launcher is not None)
             start_button.clicked.connect(
                 lambda _checked=False, module_name=module.name: self._start_module_from_row(
@@ -1351,15 +1442,25 @@ class QtProjectConfigWorkspace(QWidget):
     def _prompt_create_project(self) -> None:
         from PySide6.QtWidgets import QInputDialog
 
-        name, accepted = QInputDialog.getText(self, "新建 EasyQC 项目", "项目名称")
+        name, accepted = QInputDialog.getText(
+            self,
+            translate_ui_text("新建 EasyQC 项目"),
+            translate_ui_text("项目名称"),
+        )
         if not accepted or not name.strip():
             return
-        directory = QFileDialog.getExistingDirectory(self, "选择项目上级目录")
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            translate_ui_text("选择项目上级目录"),
+        )
         if directory:
             self.create_project(name, directory)
 
     def _prompt_import_project(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "选择 EasyQC 项目目录")
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            translate_ui_text("选择 EasyQC 项目目录"),
+        )
         if directory:
             configuration = self.configuration
 
@@ -1376,8 +1477,8 @@ class QtProjectConfigWorkspace(QWidget):
         name = entry.name
         answer = QMessageBox.question(
             self,
-            "取消项目登记",
-            f"取消登记 {name}？项目文件不会被删除。",
+            translate_ui_text("取消项目登记"),
+            translate_ui_text(f"取消登记 {name}？项目文件不会被删除。"),
         )
         if answer == QMessageBox.Yes:
             self.remove_project(name)
@@ -1663,9 +1764,9 @@ class QtProjectConfigWorkspace(QWidget):
     def _choose_module_import(self) -> None:
         path, _filter = QFileDialog.getOpenFileName(
             self,
-            "导入质控模块",
+            translate_ui_text("导入质控模块"),
             "",
-            "JSON 文件 (*.json)",
+            translate_ui_text("JSON 文件 (*.json)"),
         )
         if path:
             configuration = self.configuration
@@ -1681,9 +1782,9 @@ class QtProjectConfigWorkspace(QWidget):
             return
         path, _filter = QFileDialog.getSaveFileName(
             self,
-            "导出质控模块",
+            translate_ui_text("导出质控模块"),
             f"qcmodule_{self._selected_module_name}.json",
-            "JSON 文件 (*.json)",
+            translate_ui_text("JSON 文件 (*.json)"),
         )
         if path:
             configuration = self.configuration

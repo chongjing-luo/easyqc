@@ -25,6 +25,13 @@ from PySide6.QtWidgets import (
 )
 
 from core.qc_workflow_service import QcWorkflowService
+from gui_qt.i18n import (
+    LanguageController,
+    get_or_create_language_controller,
+    protect_user_text,
+    translate_ui_text,
+)
+from gui_qt.theme import CONTROL_HEIGHT, set_button_role
 
 
 class QtQcQueueModel(QAbstractTableModel):
@@ -32,9 +39,16 @@ class QtQcQueueModel(QAbstractTableModel):
 
     HEADERS = ("序号", "ezqcid", "评分", "标签")
 
-    def __init__(self, workflow: QcWorkflowService, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        workflow: QcWorkflowService,
+        language: LanguageController | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.workflow = workflow
+        self.language = language or get_or_create_language_controller()
+        self.language.languageChanged.connect(self._retranslate_headers)
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
         return 0 if parent.isValid() else len(self.workflow.subject_ids)
@@ -69,7 +83,7 @@ class QtQcQueueModel(QAbstractTableModel):
             and role == Qt.DisplayRole
             and 0 <= section < len(self.HEADERS)
         ):
-            return self.HEADERS[section]
+            return self.language.translate_source(self.HEADERS[section])
         return None
 
     def flags(self, index: QModelIndex):
@@ -124,6 +138,13 @@ class QtQcQueueModel(QAbstractTableModel):
                 [Qt.DisplayRole, Qt.ToolTipRole],
             )
 
+    def _retranslate_headers(self, _language: str) -> None:
+        self.headerDataChanged.emit(
+            Qt.Horizontal,
+            0,
+            len(self.HEADERS) - 1,
+        )
+
 
 class QtQcWorkspace(QWidget):
     """Render one compact QC draft; Core owns viewer and rating side effects."""
@@ -131,11 +152,18 @@ class QtQcWorkspace(QWidget):
     draftStateChanged = Signal(bool)
     filterRequested = Signal()
 
-    def __init__(self, workflow: QcWorkflowService, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        workflow: QcWorkflowService,
+        parent: QWidget | None = None,
+        *,
+        language: LanguageController | None = None,
+    ) -> None:
         super().__init__(parent)
         if not isinstance(workflow, QcWorkflowService):
             raise TypeError("QtQcWorkspace requires QcWorkflowService")
         self.workflow = workflow
+        self.language = language or get_or_create_language_controller()
         self._loading = False
         self._manual_read_only = False
         self._filter_busy = False
@@ -147,11 +175,14 @@ class QtQcWorkspace(QWidget):
         self.setAccessibleName("EasyQC 质控控制器")
         self._build_ui()
         self._refresh()
+        self.language.languageChanged.connect(self.retranslate_ui)
+        self.language.register_root(self)
+        self.retranslate_ui()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         top = QWidget(self)
         top.setObjectName("qcQueueAndActions")
@@ -159,7 +190,11 @@ class QtQcWorkspace(QWidget):
         top_layout.setContentsMargins(0, 0, 0, 0)
         top_layout.setSpacing(10)
 
-        self.queue_model = QtQcQueueModel(self.workflow, self)
+        self.queue_model = QtQcQueueModel(
+            self.workflow,
+            self.language,
+            self,
+        )
         self.queue_table = QTableView(top)
         self.queue_table.setObjectName("qcQueueTable")
         self.queue_table.setAccessibleName("质控名单")
@@ -213,6 +248,7 @@ class QtQcWorkspace(QWidget):
             self._save_next,
         )
         self.save_next_button.setObjectName("primaryAction")
+        set_button_role(self.save_next_button, "primary")
         self.action_controls = (
             self.read_only_box,
             self.filter_button,
@@ -245,6 +281,7 @@ class QtQcWorkspace(QWidget):
             group_box = QGroupBox(score.label, editor)
             group_box.setObjectName("scoreGroup")
             group_box.setToolTip(score.label)
+            protect_user_text(group_box, "title", "toolTip")
             group_layout = QHBoxLayout(group_box)
             button_group = QButtonGroup(group_box)
             button_group.setExclusive(True)
@@ -253,7 +290,16 @@ class QtQcWorkspace(QWidget):
             choices = [(None, "未评"), *((value, value) for value in score.allowed_values)]
             for value, label in choices:
                 button = QPushButton(label, group_box)
+                if value is not None:
+                    protect_user_text(
+                        button,
+                        "accessibleName",
+                        "text",
+                        "toolTip",
+                    )
                 button.setCheckable(True)
+                button.setMinimumHeight(CONTROL_HEIGHT)
+                button.setMinimumWidth(72)
                 button.setAccessibleName(f"{score.label}: {label}")
                 button.setToolTip(label)
                 button_group.addButton(button)
@@ -282,6 +328,11 @@ class QtQcWorkspace(QWidget):
             tags_layout = QHBoxLayout(tags_box)
             for key, tag in module.tags.items():
                 checkbox = QCheckBox(tag.label, tags_box)
+                protect_user_text(
+                    checkbox,
+                    "text",
+                    "toolTip",
+                )
                 checkbox.setAccessibleName(f"质控标签: {tag.label}")
                 checkbox.setToolTip(tag.label)
                 checkbox.toggled.connect(
@@ -308,6 +359,7 @@ class QtQcWorkspace(QWidget):
 
         self.error_label = QLabel("", self)
         self.error_label.setObjectName("qcError")
+        self.error_label.setProperty("role", "error")
         self.error_label.setAccessibleName("质控操作错误")
         self.error_label.setWordWrap(True)
         self.error_label.hide()
@@ -333,6 +385,10 @@ class QtQcWorkspace(QWidget):
         button.clicked.connect(callback)
         self.action_column.layout().addWidget(button)
         return action, button
+
+    def retranslate_ui(self, _language: str | None = None) -> None:
+        self.language.localize_widget_tree(self)
+        self.queue_model._retranslate_headers(self.language.language)
 
     @property
     def error_text(self) -> str:
@@ -585,6 +641,7 @@ class QtQcWorkspace(QWidget):
         self.workflow.close()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        self.language.unregister_root(self)
         self.close_workflow()
         super().closeEvent(event)
 
@@ -594,18 +651,29 @@ class QtQcControllerWindow(QMainWindow):
 
     closed = Signal()
 
-    def __init__(self, workflow: QcWorkflowService) -> None:
+    def __init__(
+        self,
+        workflow: QcWorkflowService,
+        *,
+        language: LanguageController | None = None,
+    ) -> None:
         super().__init__(None)
         if not isinstance(workflow, QcWorkflowService):
             raise TypeError("QtQcControllerWindow requires QcWorkflowService")
         self._force_discard_close = False
+        self.language = language or get_or_create_language_controller()
         self.setObjectName("qtQcControllerWindow")
         self.setAccessibleName("EasyQC 质控控制器窗口")
         self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setWindowTitle("EasyQC")
-        self.workspace = QtQcWorkspace(workflow, self)
+        self.workspace = QtQcWorkspace(
+            workflow,
+            self,
+            language=self.language,
+        )
         self.setCentralWidget(self.workspace)
         self.resize(560, 720)
+        self.language.register_root(self)
 
     @property
     def workflow(self) -> QcWorkflowService:
@@ -623,8 +691,8 @@ class QtQcControllerWindow(QMainWindow):
         if self.workflow.dirty and not self._force_discard_close:
             answer = QMessageBox.question(
                 self,
-                "尚未保存",
-                "放弃当前未保存的质控修改并关闭？",
+                translate_ui_text("尚未保存"),
+                translate_ui_text("放弃当前未保存的质控修改并关闭？"),
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
@@ -632,6 +700,7 @@ class QtQcControllerWindow(QMainWindow):
                 event.ignore()
                 return
         self.workspace.close_workflow()
+        self.language.unregister_root(self)
         self.closed.emit()
         super().closeEvent(event)
 

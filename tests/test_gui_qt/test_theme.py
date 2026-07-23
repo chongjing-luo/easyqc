@@ -1,0 +1,137 @@
+from __future__ import annotations
+
+from PySide6.QtCore import QEvent
+from PySide6.QtWidgets import QPushButton, QWidget
+
+from gui_qt.theme import (
+    CONTROL_HEIGHT,
+    CONTENT_MARGIN,
+    NAVIGATION_ROW_HEIGHT,
+    apply_easyqc_theme,
+    set_button_role,
+)
+
+
+def test_theme_uses_stable_logical_metrics():
+    assert CONTENT_MARGIN == 20
+    assert CONTROL_HEIGHT >= 32
+    assert NAVIGATION_ROW_HEIGHT >= 42
+
+
+def test_semantic_button_roles_are_properties_not_absolute_geometry(qapp):
+    original_stylesheet = qapp.styleSheet()
+    button = QPushButton("Open")
+    root = QWidget()
+    button.setParent(root)
+
+    try:
+        apply_easyqc_theme(qapp)
+        set_button_role(button, "primary")
+
+        assert button.property("role") == "primary"
+        assert button.minimumHeight() == CONTROL_HEIGHT
+        assert "position:" not in qapp.styleSheet()
+        assert "QPushButton[role=\"primary\"]" in qapp.styleSheet()
+    finally:
+        qapp.setStyleSheet(original_stylesheet)
+
+
+def test_reapplying_identical_theme_does_not_repolish_live_widgets(qapp):
+    class StyleProbe(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.style_changes = 0
+
+        def event(self, event):
+            if event.type() == QEvent.Type.StyleChange:
+                self.style_changes += 1
+            return super().event(event)
+
+    probe = StyleProbe()
+    probe.show()
+    apply_easyqc_theme(qapp)
+    qapp.processEvents()
+    after_first_apply = probe.style_changes
+
+    apply_easyqc_theme(qapp)
+    qapp.processEvents()
+
+    assert probe.style_changes == after_first_apply
+    probe.close()
+
+
+def test_reapplying_theme_after_host_suffix_preserves_host_rules_without_duplication(
+    qapp,
+):
+    class StyleProbe(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.style_changes = 0
+
+        def event(self, event):
+            if event.type() == QEvent.Type.StyleChange:
+                self.style_changes += 1
+            return super().event(event)
+
+    original_stylesheet = qapp.styleSheet()
+    original_theme = qapp.property("_easyqc_theme_stylesheet")
+    host_prefix = "QWidget#hostPrefix { background: #abcdef; }"
+    host_suffix = "QLabel#hostSuffix { color: #123456; }"
+
+    try:
+        qapp.setStyleSheet(host_prefix)
+        apply_easyqc_theme(qapp)
+        easyqc_theme = qapp.property("_easyqc_theme_stylesheet")
+        assert qapp.styleSheet().count(
+            "/* EasyQC managed theme: start */"
+        ) == 1
+        qapp.setStyleSheet(f"{qapp.styleSheet()}\n{host_suffix}")
+
+        apply_easyqc_theme(qapp)
+
+        assert qapp.styleSheet().count(easyqc_theme) == 1
+        assert qapp.styleSheet().count(
+            "/* EasyQC managed theme: start */"
+        ) == 1
+        assert host_prefix in qapp.styleSheet()
+        assert host_suffix in qapp.styleSheet()
+
+        stale_managed_theme = (
+            "/* EasyQC managed theme: start */\n"
+            "QWidget#staleManagedTheme { color: #fedcba; }\n"
+            "/* EasyQC managed theme: end */"
+        )
+        qapp.setStyleSheet(
+            f"{qapp.styleSheet()}\n{stale_managed_theme}"
+        )
+        apply_easyqc_theme(qapp)
+
+        assert qapp.styleSheet().count(
+            "/* EasyQC managed theme: start */"
+        ) == 1
+        assert "staleManagedTheme" not in qapp.styleSheet()
+        assert host_prefix in qapp.styleSheet()
+        assert host_suffix in qapp.styleSheet()
+
+        probe = StyleProbe()
+        probe.show()
+        qapp.processEvents()
+        before_stale_property = probe.style_changes
+        qapp.setProperty(
+            "_easyqc_theme_stylesheet",
+            easyqc_theme[: len(easyqc_theme) // 2],
+        )
+        apply_easyqc_theme(qapp)
+        qapp.processEvents()
+
+        assert qapp.styleSheet().count(easyqc_theme) == 1
+        assert qapp.styleSheet().count(
+            "/* EasyQC managed theme: start */"
+        ) == 1
+        assert host_prefix in qapp.styleSheet()
+        assert host_suffix in qapp.styleSheet()
+        assert probe.style_changes == before_stale_property
+        probe.close()
+    finally:
+        qapp.setStyleSheet(original_stylesheet)
+        qapp.setProperty("_easyqc_theme_stylesheet", original_theme)

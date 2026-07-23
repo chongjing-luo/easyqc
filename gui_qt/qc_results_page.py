@@ -10,6 +10,7 @@ from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from core.table_view_service import TableViewService
+from gui_qt.i18n import LanguageController, translate_ui_text
 from gui_qt.table_workspace import QtTableWorkspace
 
 
@@ -19,7 +20,7 @@ class _QtQcResultsTableWorkspace(QtTableWorkspace):
     def _rebuild_inspector_panels(self) -> None:
         super()._rebuild_inspector_panels()
         for index, label in enumerate(("筛选", "排序", "列显示")):
-            self.inspector_tabs.setTabText(index, label)
+            self.inspector_tabs.setTabText(index, self._ui_text(label))
 
     def _update_status(self) -> None:
         super()._update_status()
@@ -28,22 +29,40 @@ class _QtQcResultsTableWorkspace(QtTableWorkspace):
         start, end = self.visible_range
         visible = len(self.applied_state.columns.visible_columns)
         column_total = len(self.applied_state.columns.order)
-        self.count_label.setText(f"{matched:,} / {total:,} 行")
-        self.range_label.setText(f"第 {start:,}–{end:,} 行")
-        self.columns_status_label.setText(f"列 {visible}/{column_total}")
-        self.filter_action.setText(
-            f"筛选 ({len(self.applied_state.conditions)})"
+        self.count_label.setText(
+            self._ui_text(f"{matched:,} / {total:,} 行")
         )
-        self.sort_action.setText(f"排序 ({len(self.applied_state.sort_rules)})")
-        self.columns_action.setText(f"列显示 ({visible}/{column_total})")
+        self.range_label.setText(
+            self._ui_text(f"第 {start:,}–{end:,} 行")
+        )
+        self.columns_status_label.setText(
+            self._ui_text(f"列 {visible}/{column_total}")
+        )
+        self.filter_action.setText(
+            self._ui_text(
+                f"筛选 ({len(self.applied_state.conditions)})"
+            )
+        )
+        self.sort_action.setText(
+            self._ui_text(f"排序 ({len(self.applied_state.sort_rules)})")
+        )
+        self.columns_action.setText(
+            self._ui_text(f"列显示 ({visible}/{column_total})")
+        )
         if self.selection_outside_view:
-            self.selection_status_label.setText("所选记录不在当前视图中")
+            self.selection_status_label.setText(
+                self._ui_text("所选记录不在当前视图中")
+            )
         elif self.selected_source_position is not None:
             self.selection_status_label.setText(
-                f"已选原始第 {self.selected_source_position + 1:,} 行"
+                self._ui_text(
+                    f"已选原始第 {self.selected_source_position + 1:,} 行"
+                )
             )
         else:
-            self.selection_status_label.setText("未选择记录")
+            self.selection_status_label.setText(
+                self._ui_text("未选择记录")
+            )
 
 
 class QtQcResultsPage(QWidget):
@@ -57,6 +76,7 @@ class QtQcResultsPage(QWidget):
         derive_column_callback: Callable[[str, str], str] | None = None,
         derive_preview_source: Callable[[], pd.DataFrame] | None = None,
         on_derived_column_committed: Callable[[str], None] | None = None,
+        language: LanguageController | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -68,6 +88,7 @@ class QtQcResultsPage(QWidget):
         self._derive_column_callback = derive_column_callback
         self._derive_preview_source = derive_preview_source
         self._on_derived_column_committed = on_derived_column_committed
+        self.language = language
         self._refresh_busy = False
         self.setObjectName("qcResultsPage")
         self.setAccessibleName("质控结果")
@@ -84,6 +105,7 @@ class QtQcResultsPage(QWidget):
             derive_preview_source=self._derive_preview_source,
             on_derived_column_committed=self._on_derived_column_committed,
             page_size=25,
+            language=self.language,
             parent=self,
         )
         self.table_workspace.setObjectName("qcResultsWorkspace")
@@ -148,6 +170,7 @@ class QtQcResultsPage(QWidget):
 
         self.error_label = QLabel("", self)
         self.error_label.setObjectName("qcResultsError")
+        self.error_label.setProperty("role", "error")
         self.error_label.setAccessibleName("质控结果错误")
         self.error_label.setWordWrap(True)
         self.error_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -186,7 +209,8 @@ class QtQcResultsPage(QWidget):
 
     def set_refresh_busy(self, busy: bool) -> None:
         self._refresh_busy = bool(busy)
-        self.refresh_action.setText("刷新中…" if self._refresh_busy else "刷新结果")
+        source = "刷新中…" if self._refresh_busy else "刷新结果"
+        self.refresh_action.setText(translate_ui_text(source))
         self.refresh_action.setEnabled(not self._refresh_busy)
 
     def show_error(self, message: str) -> None:

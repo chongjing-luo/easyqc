@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import pandas as pd
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import QAbstractItemView, QLabel, QPushButton, QToolBar
 
 from core.table_view_service import TableViewService
+from gui_qt.i18n import LanguageController
 from gui_qt.qc_results_page import QtQcResultsPage
+from models.table_view_state import FilterCondition, SortRule
 
 
 def _source() -> pd.DataFrame:
@@ -79,6 +81,40 @@ def test_results_page_is_direct_read_only_shared_table_without_repeated_title(
     ] == ["筛选", "排序", "列显示"]
     assert table.find_identity_exact("SUB003")
     qtbot.waitUntil(lambda: not table._pinned_width_update_pending)
+
+
+def test_results_statuses_stay_english_when_state_changes_after_language_switch(
+    qtbot,
+    tmp_path,
+) -> None:
+    controller = LanguageController(
+        settings=QSettings(str(tmp_path / "language.ini"), QSettings.IniFormat)
+    )
+    page = QtQcResultsPage(
+        _source(),
+        refresh_callback=lambda: True,
+        language=controller,
+    )
+    qtbot.addWidget(page)
+    controller.register_root(page)
+    controller.set_language("en")
+    table = page.table_workspace
+
+    table.begin_filter_edit()
+    table.set_filter_draft(
+        (FilterCondition("site", "==", "A", "site-a"),)
+    )
+    assert table.apply_filter_draft()
+    assert table.apply_sort_rules((SortRule("ezqcid", False),))
+    assert table.select_source_position(0)
+
+    assert table.filter_action.text() == "Filter (1)"
+    assert table.sort_action.text() == "Sort (1)"
+    assert table.columns_action.text() == "Columns (3/3)"
+    assert table.count_label.text() == "2 / 3 rows"
+    assert table.range_label.text() == "Rows 1–2"
+    assert table.columns_status_label.text() == "Columns 3/3"
+    assert table.selection_status_label.text() == "Selected source row 1"
 
 
 def test_results_page_refresh_empty_and_error_states_are_explicit(qtbot) -> None:

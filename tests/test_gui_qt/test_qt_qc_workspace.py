@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 from shiboken6 import isValid
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from core.qc_workflow_service import QcWorkflowService
 from gui_qt import qc_workspace as qc_workspace_module
+from gui_qt.i18n import LanguageController
 from gui_qt.qc_workspace import QtQcWorkspace
 
 
@@ -203,6 +204,84 @@ def test_score_choice_mouse_and_space_activation_update_exactly_one_draft(
     ]
     assert not buttons["Good"].isChecked()
     assert states[-1] is True
+
+
+def test_qc_controller_switches_language_without_losing_unsaved_rating(
+    qtbot,
+    tmp_path,
+) -> None:
+    language = LanguageController(
+        settings=QSettings(str(tmp_path / "qc-language.ini"), QSettings.IniFormat)
+    )
+    controller = _controller_class()(_workflow(tmp_path), language=language)
+    qtbot.addWidget(controller)
+    controller.show()
+    workspace = controller.workspace
+    qtbot.mouseClick(workspace.score_buttons["1"]["Good"], Qt.LeftButton)
+    workspace.notes_edit.setPlainText("keep this draft")
+
+    language.set_language("en")
+
+    try:
+        assert [
+            workspace.queue_model.headerData(column, Qt.Horizontal, Qt.DisplayRole)
+            for column in range(workspace.queue_model.columnCount())
+        ] == ["No.", "ezqcid", "Rating", "Tags"]
+        assert [control.text() for control in workspace.action_controls] == [
+            "Read only",
+            "Filter list",
+            "Previous",
+            "Next",
+            "Save",
+            "Save and next",
+        ]
+        assert workspace.workflow.current_module.scores["1"].value == "Good"
+        assert workspace.notes_edit.toPlainText() == "keep this draft"
+        assert workspace.workflow.dirty
+        assert workspace.score_buttons["1"]["Good"].isChecked()
+        accessibility_texts = {
+            text
+            for widget in (controller, *controller.findChildren(QWidget))
+            for text in (widget.accessibleName(), widget.toolTip())
+            if text
+        }
+        assert {
+            text
+            for text in accessibility_texts
+            if any("\u3400" <= char <= "\u9fff" for char in text)
+        } == set()
+    finally:
+        workspace.workflow.discard_changes()
+
+
+def test_qc_language_switch_preserves_user_defined_chinese_rating_and_tag_text(
+    qtbot,
+    tmp_path,
+) -> None:
+    module = _module()
+    module["scores"]["1"]["label"] = "质控模块"
+    module["scores"]["1"]["num"] = "常量设置,质控结果"
+    module["scores"]["1"]["num_"] = "常量设置,质控结果"
+    module["tags"]["1"]["label"] = "项目选择"
+    language = LanguageController(
+        settings=QSettings(str(tmp_path / "qc-user-text-language.ini"), QSettings.IniFormat)
+    )
+    controller = _controller_class()(
+        _workflow(tmp_path, module=module),
+        language=language,
+    )
+    qtbot.addWidget(controller)
+    controller.show()
+    workspace = controller.workspace
+
+    language.set_language("en")
+
+    score_button = workspace.score_buttons["1"]["常量设置"]
+    assert score_button.parentWidget().title() == "质控模块"
+    assert score_button.text() == "常量设置"
+    assert workspace.score_buttons["1"]["质控结果"].text() == "质控结果"
+    assert workspace.tag_boxes["1"].text() == "项目选择"
+    assert workspace.save_next_button.text() == "Save and next"
 
 
 def test_qc_queue_model_keeps_100k_prepared_queue_rows_virtual_without_local_filter(

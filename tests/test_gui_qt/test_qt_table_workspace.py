@@ -8,7 +8,7 @@ import time
 
 import pandas as pd
 from pandas.testing import assert_frame_equal
-from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QTimer, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QSettings, QTimer, Qt
 from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from core.table_view_service import TableViewError, TableViewService
 from core.table_export_service import TableExportError
+from gui_qt.i18n import LanguageController
 from gui_qt.table_workspace import QtTableWorkspace
 from models.table_view_state import (
     ColumnViewState,
@@ -50,6 +51,143 @@ def _full_result_frame(workspace: QtTableWorkspace) -> pd.DataFrame:
         0,
         max(1, workspace.result.matched_total),
     ).dataframe
+
+
+def test_applied_filter_chip_switches_operator_tooltip_and_accessible_name_to_english(
+    qtbot,
+    tmp_path,
+):
+    controller = LanguageController(
+        settings=QSettings(str(tmp_path / "language.ini"), QSettings.IniFormat)
+    )
+    workspace = QtTableWorkspace(_source(), language=controller)
+    qtbot.addWidget(workspace)
+    workspace.begin_filter_edit()
+    workspace.set_filter_draft(
+        (
+            FilterCondition(
+                column="site",
+                operator="==",
+                value="A",
+                condition_id="site-a",
+            ),
+        )
+    )
+    assert workspace.apply_filter_draft()
+
+    controller.set_language("en")
+    workspace.retranslate_ui()
+
+    action = next(
+        action
+        for action in workspace.applied_toolbar.actions()
+        if action.data() == "site-a"
+    )
+    chip = workspace.applied_toolbar.widgetForAction(action)
+    assert action.text() == "site Equals A  ×"
+    assert action.toolTip() == "Remove filter site Equals A"
+    assert chip is not None
+    assert chip.accessibleName() == "Remove filter site Equals A"
+
+
+def test_table_statuses_stay_english_when_state_changes_after_language_switch(
+    qtbot,
+    tmp_path,
+):
+    controller = LanguageController(
+        settings=QSettings(str(tmp_path / "language.ini"), QSettings.IniFormat)
+    )
+    workspace = QtTableWorkspace(_source(), page_size=2, language=controller)
+    qtbot.addWidget(workspace)
+    controller.register_root(workspace)
+    controller.set_language("en")
+
+    workspace.begin_filter_edit()
+    workspace.set_filter_draft(
+        (FilterCondition("site", "==", "A", "site-a"),)
+    )
+    assert workspace.apply_filter_draft()
+    assert workspace.apply_sort_rules((SortRule("age", False),))
+    assert workspace.next_page()
+    assert workspace.select_source_position(2)
+
+    assert workspace.applied_state.conditions == (
+        FilterCondition("site", "==", "A", "site-a"),
+    )
+    assert workspace.applied_state.sort_rules == (SortRule("age", False),)
+    assert workspace.visible_range == (3, 3)
+    assert workspace.filter_action.text() == "Filter (1)"
+    assert workspace.sort_action.text() == "Sort (1)"
+    assert workspace.columns_action.text() == "Columns (4/4)"
+    assert workspace.count_label.text() == "3 / 5 rows"
+    assert workspace.range_label.text() == "Rows 3–3"
+    assert workspace.columns_status_label.text() == "Columns 4/4"
+    assert workspace.selection_status_label.text() == "Selected source row 3"
+
+
+def test_inspector_column_pin_uses_workspace_language_without_global_controller(
+    qapp,
+    qtbot,
+    tmp_path,
+):
+    previous = getattr(qapp, "_easyqc_language_controller", None)
+    if previous is not None:
+        delattr(qapp, "_easyqc_language_controller")
+    try:
+        controller = LanguageController(
+            settings=QSettings(
+                str(tmp_path / "language.ini"),
+                QSettings.IniFormat,
+            )
+        )
+        workspace = QtTableWorkspace(_source(), language=controller)
+        qtbot.addWidget(workspace)
+        controller.register_root(workspace)
+        controller.set_language("en")
+        panel = workspace.inspector_columns_panel
+        site = next(
+            panel.list_widget.item(row)
+            for row in range(panel.list_widget.count())
+            if panel.list_widget.item(row).data(Qt.ItemDataRole.UserRole)
+            == "site"
+        )
+        panel.list_widget.setCurrentItem(site)
+
+        assert panel.pin_selected()
+
+        pinned_site = panel.list_widget.item(1)
+        assert pinned_site.text() == "site   · pinned"
+        assert (
+            pinned_site.data(Qt.ItemDataRole.AccessibleTextRole)
+            == "site   · pinned"
+        )
+    finally:
+        if previous is not None:
+            qapp._easyqc_language_controller = previous
+
+
+def test_sorted_header_tooltip_switches_language_without_reapplying_sort(
+    qtbot,
+    tmp_path,
+):
+    controller = LanguageController(
+        settings=QSettings(str(tmp_path / "language.ini"), QSettings.IniFormat)
+    )
+    workspace = QtTableWorkspace(_source(), language=controller)
+    qtbot.addWidget(workspace)
+    assert workspace.apply_sort_rules((SortRule("site", ascending=True),))
+
+    controller.set_language("en")
+    workspace.retranslate_ui()
+
+    assert (
+        workspace.table_model.headerData(
+            1,
+            Qt.Horizontal,
+            Qt.ToolTipRole,
+        )
+        == "Sort priority 1 · Ascending"
+    )
 
 
 def test_table_uses_standard_overflow_toolbars_without_fixed_chip_geometry(qtbot):

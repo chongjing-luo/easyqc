@@ -5,19 +5,23 @@ from threading import Event, get_ident
 
 import pandas as pd
 from shiboken6 import isValid
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QObject, Qt, QTimer
+from PySide6.QtGui import QAction, QFont
 from PySide6.QtWidgets import (
     QAbstractButton,
     QComboBox,
     QGroupBox,
     QLabel,
     QListWidget,
+    QLineEdit,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QStackedWidget,
+    QTableWidget,
     QTabWidget,
+    QTextEdit,
     QToolBar,
 )
 
@@ -26,8 +30,10 @@ from core.event_bus import EventType
 from core.project_context_service import ProjectContextError
 from core.table_view_service import TableViewService
 from gui_qt.application import build_product_window
+from gui_qt.i18n import LanguageController, get_or_create_language_controller
 from gui_qt.qc_results_page import QtQcResultsPage
 from models.table_view_state import (
+    ColumnViewState,
     FilterCondition,
     FilterExpression,
     FilterGroup,
@@ -119,6 +125,7 @@ def _add_project(
     prefix="",
     second_module=False,
     module_label=None,
+    module_rater="rater1",
     identity_first=True,
 ):
     configuration = services.configuration_service
@@ -136,7 +143,7 @@ def _add_project(
         }
     configuration.replace_subjects(pd.DataFrame(columns))
     configuration.save_module(
-        _module_payload(label=module_label),
+        _module_payload(label=module_label, rater=module_rater),
         original_name="example",
     )
     if second_module:
@@ -159,7 +166,11 @@ def _window(qtbot, tmp_path, *, second_module=False):
 
 def _primary_navigation_labels(window):
     return [
-        window.navigation.item(index).text().splitlines()[0]
+        (
+            window.project_navigation_label.text()
+            if index == window.project_page_index
+            else window.navigation.item(index).text().splitlines()[0]
+        )
         for index in range(window.navigation.count())
     ]
 
@@ -194,6 +205,44 @@ def _visible_page_texts(page) -> tuple[str, ...]:
     return tuple(texts)
 
 
+def _presentation_texts(root) -> tuple[str, ...]:
+    texts: list[str] = []
+    objects = (root, *root.findChildren(QObject))
+    for obj in objects:
+        for getter_name in ("accessibleName", "toolTip", "windowTitle"):
+            getter = getattr(obj, getter_name, None)
+            if getter is not None:
+                value = getter()
+                if isinstance(value, str) and value.strip():
+                    texts.append(value.strip())
+        if isinstance(obj, QLabel):
+            texts.append(obj.text().strip())
+        elif isinstance(obj, QAbstractButton):
+            texts.append(obj.text().strip())
+        if isinstance(obj, QGroupBox):
+            texts.append(obj.title().strip())
+        if isinstance(obj, (QLineEdit, QPlainTextEdit, QTextEdit)):
+            texts.append(obj.placeholderText().strip())
+        if isinstance(obj, QComboBox):
+            texts.extend(obj.itemText(index).strip() for index in range(obj.count()))
+        if isinstance(obj, QListWidget):
+            texts.extend(obj.item(index).text().strip() for index in range(obj.count()))
+        if isinstance(obj, QTabWidget):
+            texts.extend(obj.tabText(index).strip() for index in range(obj.count()))
+        if isinstance(obj, QTableWidget):
+            texts.extend(
+                obj.horizontalHeaderItem(index).text().strip()
+                for index in range(obj.columnCount())
+                if obj.horizontalHeaderItem(index) is not None
+            )
+    texts.extend(
+        action.text().strip()
+        for action in root.findChildren(QAction)
+        if action.text().strip()
+    )
+    return tuple(text for text in texts if text)
+
+
 def test_empty_product_shell_keeps_configuration_available_without_writes(qtbot, tmp_path) -> None:
     registry = tmp_path / "projects.json"
     services = build_app_services(registry)
@@ -226,7 +275,14 @@ def test_qt_main_window_uses_six_direct_navigation_pages(qtbot, tmp_path) -> Non
         "质控模块",
         "质控结果",
     ]
-    assert window.navigation.item(0).text().splitlines() == ["项目选择", "SAMPLE"]
+    assert window.navigation.item(0).text() == ""
+    assert (
+        window.navigation.itemWidget(window.navigation.item(0))
+        is window.project_navigation_content
+    )
+    assert window.project_navigation_label.text() == "项目选择"
+    assert window.project_navigation_context.text() == "SAMPLE"
+    assert window.project_navigation_context.isVisibleTo(window.navigation)
     assert window.findChild(QLabel, "activeProjectSummary") is None
     assert window.workspace_stack.count() == 6
     assert window.findChild(QListWidget, "primaryNavigation") is window.navigation
@@ -237,6 +293,7 @@ def test_qt_main_window_uses_six_direct_navigation_pages(qtbot, tmp_path) -> Non
     assert window.findChild(QToolBar, "shellContextToolbar") is None
     host_font = QFont(window.font())
     assert window.navigation.spacing() == 4
+    assert window.navigation.wordWrap()
     if host_font.pointSizeF() > 0:
         assert window.navigation.font().pointSizeF() == host_font.pointSizeF() + 1
     line_height = window.navigation.fontMetrics().lineSpacing()
@@ -259,6 +316,176 @@ def test_qt_main_window_navigation_switches_exact_page(qtbot, tmp_path) -> None:
         window.navigation.setCurrentRow(row)
         assert window.workspace_stack.currentIndex() == row
         assert window.workspace_stack.currentWidget() is page
+
+
+def test_runtime_language_switch_updates_six_pages_and_preserves_context(
+    qtbot,
+    tmp_path,
+) -> None:
+    window, _services = _window(qtbot, tmp_path)
+    context = window.current_context
+    table = window.table_workspace
+    table.begin_filter_edit()
+    table.set_filter_draft(
+        (
+            FilterCondition(
+                column="site",
+                operator="!=",
+                value="C",
+                condition_id="site-not-c",
+            ),
+        )
+    )
+    assert table.apply_filter_draft()
+    assert table.apply_sort_rules((SortRule("site", ascending=False),))
+    assert table.apply_column_state(
+        ColumnViewState(
+            order=("ezqcid", "site", "image"),
+            hidden=("image",),
+            pinned=("ezqcid",),
+        )
+    )
+    assert table.set_page_size(1)
+    assert table.next_page()
+    assert table.select_source_position(0)
+    applied_state = table.applied_state
+    table_result = table.result
+    table_window = table.row_window
+    page_offset = table.page_offset
+    selected_source_position = table.selected_source_position
+    window.navigation.setCurrentRow(window.results_page_index)
+    selected_page = window.workspace_stack.currentWidget()
+
+    english_index = window.language_selector.findData("en")
+    window.language_selector.setCurrentIndex(english_index)
+
+    assert isinstance(window.language, LanguageController)
+    assert window.language.language == "en"
+    assert _primary_navigation_labels(window) == [
+        "Project selection",
+        "QC list import",
+        "Pre-QC list",
+        "Constants",
+        "QC modules",
+        "QC results",
+    ]
+    assert window.navigation.item(0).text() == ""
+    assert window.project_navigation_label.text() == "Project selection"
+    assert window.project_navigation_context.text() == "SAMPLE"
+    assert window.navigation.accessibleName() == "EasyQC feature navigation"
+    assert window.language_selector.accessibleName() == "Interface language"
+    assert window.workspace_stack.accessibleName() == "Current EasyQC page"
+    assert window.config_workspace.project_state_preview.text() == "Open now"
+    assert [
+        window.config_workspace.add_score_button.text(),
+        window.config_workspace.remove_score_button.text(),
+        window.config_workspace.add_tag_button.text(),
+        window.config_workspace.remove_tag_button.text(),
+    ] == [
+        "Add rating item",
+        "Delete rating item",
+        "Add tag",
+        "Delete tag",
+    ]
+    assert window.current_context is context
+    assert window.workspace_stack.currentWidget() is selected_page
+    assert window.navigation.currentRow() == window.results_page_index
+    assert table.applied_state is applied_state
+    assert table.result is table_result
+    assert table.row_window is table_window
+    assert table.page_offset == page_offset == 1
+    assert table.selected_source_position == selected_source_position == 0
+    assert table.applied_state.conditions == applied_state.conditions
+    assert table.applied_state.sort_rules == applied_state.sort_rules
+    assert table.applied_state.columns == applied_state.columns
+    assert table.applied_state.page_size == 1
+    filter_chip = next(
+        action
+        for action in table.applied_toolbar.actions()
+        if action.data() == "site-not-c"
+    )
+    assert filter_chip.text() == "site Does not equal C  ×"
+    assert filter_chip.toolTip() == "Remove filter site Does not equal C"
+    assert (
+        table.table_model.headerData(1, Qt.Horizontal, Qt.ToolTipRole)
+        == "Sort priority 1 · Descending"
+    )
+
+    chinese_index = window.language_selector.findData("zh_CN")
+    window.language_selector.setCurrentIndex(chinese_index)
+    assert _primary_navigation_labels(window)[0] == "项目选择"
+    assert table.applied_state is applied_state
+    assert table.result is table_result
+    assert table.row_window is table_window
+    assert table.page_offset == page_offset
+    assert table.selected_source_position == selected_source_position
+    filter_chip = next(
+        action
+        for action in table.applied_toolbar.actions()
+        if action.data() == "site-not-c"
+    )
+    assert filter_chip.text() == "site 不等于 C  ×"
+    assert filter_chip.toolTip() == "移除筛选 site 不等于 C"
+
+
+def test_runtime_language_switch_preserves_module_and_rater_text(
+    qtbot,
+    tmp_path,
+) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    _add_project(
+        services,
+        tmp_path,
+        "SAMPLE",
+        module_label="常量设置",
+        module_rater="项目选择",
+    )
+    window = build_product_window(services)
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
+
+    window.language.set_language("en")
+
+    assert window.current_context.project_name == "SAMPLE"
+    assert window.project_navigation_context.text() == "SAMPLE"
+    assert window.project_combo.currentText() == "SAMPLE"
+    module_item = window.config_workspace.module_list.item(0)
+    module_row = window.config_workspace.module_list.itemWidget(module_item)
+    assert module_row.findChild(QLabel, "moduleRowTitle").text() == "常量设置"
+    assert module_row.findChild(QLabel, "moduleRowDetail").text() == (
+        "AnatQC · 项目选择"
+    )
+    start_button = module_row.findChild(QPushButton, "moduleRowStart")
+    assert start_button.text() == "Start QC"
+    assert start_button.accessibleName() == "Start QC 常量设置"
+
+
+def test_all_six_pages_have_no_untranslated_chinese_in_english_mode(
+    qtbot,
+    tmp_path,
+) -> None:
+    get_or_create_language_controller().set_language("en")
+    window, _services = _window(qtbot, tmp_path)
+    window.language.set_language("en")
+    untranslated: dict[int, list[str]] = {}
+
+    for index, page in enumerate(window.direct_pages):
+        window.navigation.setCurrentRow(index)
+        qtbot.wait(1)
+        values = sorted(
+            {
+                text
+                for text in _presentation_texts(page)
+                if any("\u3400" <= char <= "\u9fff" for char in text)
+                and text != "中文"
+            }
+        )
+        if values:
+            untranslated[index] = values
+
+    window.language.set_language("zh_CN")
+    assert untranslated == {}
 
 
 def test_results_navigation_owns_direct_shared_results_page(qtbot, tmp_path) -> None:

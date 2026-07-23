@@ -207,7 +207,10 @@ def test_import_page_groups_all_four_table_actions_and_derives_subject_column(
     dialog.expression_edit.setPlainText("site")
     qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
     qtbot.waitUntil(
-        lambda: "site_copy" in configuration.subjects().columns,
+        lambda: (
+            "site_copy" in configuration.subjects().columns
+            and page.status_label.text() == "已生成质控前名单列：site_copy"
+        ),
         timeout=3000,
     )
 

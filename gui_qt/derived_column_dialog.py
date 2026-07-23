@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.table_transform import TableTransformEngine
+from gui_qt.i18n import protect_user_text
 from gui_qt.task_runner import RevisionedTaskController
 
 
@@ -80,6 +81,7 @@ class DerivedColumnDialog(QDialog):
         self.columns_list = QListWidget(self)
         self.columns_list.setObjectName("derivedColumnSources")
         self.columns_list.setAccessibleName("可用于表达式的现有列")
+        protect_user_text(self.columns_list, "items")
         for column in self._preview_source.columns:
             item = QListWidgetItem(str(column), self.columns_list)
             if not str(column).isidentifier():
@@ -119,6 +121,7 @@ class DerivedColumnDialog(QDialog):
         self.preview_table = QTableWidget(0, 0, self)
         self.preview_table.setObjectName("derivedColumnPreview")
         self.preview_table.setAccessibleName("新增列前十行预览")
+        protect_user_text(self.preview_table, "headers")
         self.preview_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.preview_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.preview_table.verticalHeader().hide()
