@@ -958,6 +958,67 @@ def test_module_filter_save_blocks_project_switch_and_module_launch(
     )
 
 
+def test_main_close_is_blocked_while_module_filter_save_is_running(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    window, services = _window(qtbot, tmp_path)
+    window.navigation.setCurrentRow(window.modules_page_index)
+    qtbot.waitUntil(
+        lambda: not window.config_workspace.module_filter_task_controller.busy,
+        timeout=3000,
+    )
+    real_save = services.configuration_service.save_module_filter
+    save_started = Event()
+    save_release = Event()
+    save_finished = Event()
+
+    def delayed_save(module_name, expression, **kwargs):
+        save_started.set()
+        assert save_release.wait(2)
+        try:
+            return real_save(module_name, expression, **kwargs)
+        finally:
+            save_finished.set()
+
+    monkeypatch.setattr(
+        services.configuration_service,
+        "save_module_filter",
+        delayed_save,
+    )
+    qtbot.mouseClick(
+        window.config_workspace.set_module_filter_button,
+        Qt.LeftButton,
+    )
+    dialog = window.config_workspace._module_filter_dialog
+    assert dialog is not None
+    expression = _site_filter("A", operator="==")
+    dialog.editor.set_expression(expression)
+    qtbot.mouseClick(dialog.apply_button, Qt.LeftButton)
+    qtbot.waitUntil(save_started.is_set, timeout=3000)
+    assert window.config_workspace.module_filter_write_busy
+
+    first_close = window.close()
+    visible_after_first_close = window.isVisible()
+    close_feedback = window.shell_error_label.text()
+    save_release.set()
+    qtbot.waitUntil(save_finished.is_set, timeout=3000)
+    qtbot.waitUntil(
+        lambda: not window.config_workspace.module_filter_task_controller.busy,
+        timeout=3000,
+    )
+
+    assert first_close is False
+    assert visible_after_first_close
+    assert close_feedback == "质控名单筛选事务正在完成，请稍候"
+    assert services.configuration_service.modules()[0].qc_filter == (
+        filter_expression_to_json_object(expression)
+    )
+    assert window.config_workspace.module_filter_summary.text() == "已筛选：1 条"
+    assert window.close() is True
+
+
 def test_product_restart_restores_last_opened_project_and_its_table(qtbot, tmp_path) -> None:
     registry = tmp_path / "projects.json"
     services = build_app_services(registry)

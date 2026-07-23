@@ -1314,7 +1314,10 @@ class QtMainWindow(QMainWindow):
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self.qc_filter_task_controller.busy:
+        if (
+            self.qc_filter_task_controller.busy
+            or self.config_workspace.module_filter_write_busy
+        ):
             message = "质控名单筛选事务正在完成，请稍候"
             self._set_error(message)
             if self.qc_workspace is not None:
