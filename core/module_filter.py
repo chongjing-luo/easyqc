@@ -5,10 +5,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+import pandas as pd
+
 from core.table_transform import (
     TableTransformError,
     legacy_select_filter_to_operations,
 )
+from core.table_view_service import TableViewService
 from models.table_view_state import (
     FilterCondition,
     FilterExpression,
@@ -82,7 +85,32 @@ def normalize_module_filter(module: Mapping[str, Any]) -> FilterExpression:
     )
 
 
+def resolve_module_filter_identities(
+    subjects: pd.DataFrame,
+    expression: FilterExpression,
+) -> tuple[str, ...]:
+    """Evaluate one row filter and return matched identities in source order.
+
+    The complete subject frame and one typed expression are the only inputs.
+    The function writes nothing, applies no sort/column/pagination state, and
+    propagates table/filter/identity contract errors without an empty fallback.
+    """
+
+    if not isinstance(subjects, pd.DataFrame):
+        raise TypeError("module filter subjects must be a pandas DataFrame")
+    service = TableViewService(subjects)
+    state = service.default_state(
+        page_size=max(1, service.source_total)
+    ).with_filter(expression)
+    result = service.apply_state(state)
+    return tuple(
+        service.validate_qc_identity(result, position)
+        for position in range(result.matched_total)
+    )
+
+
 __all__ = [
     "ModuleFilterCompatibilityError",
     "normalize_module_filter",
+    "resolve_module_filter_identities",
 ]

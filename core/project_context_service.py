@@ -15,6 +15,10 @@ from pandas.api import types as ptypes
 from core.code_executor import CodeExecutor
 from core.configuration_service import ConfigurationError, ConfigurationService
 from core.event_bus import EventBus
+from core.module_filter import (
+    normalize_module_filter,
+    resolve_module_filter_identities,
+)
 from core.qc_workflow_service import QcWorkflowService
 from core.rating_service import RatingService
 from core.project_service import PreparedProjectLoad
@@ -296,9 +300,16 @@ class ProjectContextService:
             self._normalize_identity(value) for value in snapshot.subjects["ezqcid"]
         )
         positions = {identity: index for index, identity in enumerate(source_ids)}
-        requested = source_ids if navigation_ids is None else tuple(
-            self._normalize_identity(value) for value in navigation_ids
-        )
+        if navigation_ids is None:
+            requested = self.resolve_module_queue(snapshot, module_name)
+            if not requested:
+                raise ProjectContextError(
+                    f"QC module filter matches no subjects: {module_name}"
+                )
+        else:
+            requested = tuple(
+                self._normalize_identity(value) for value in navigation_ids
+            )
         if not requested:
             raise ProjectContextError("QC navigation requires at least one ezqcid")
         if any(not identity for identity in requested):
@@ -349,6 +360,33 @@ class ProjectContextService:
             },
             queue_summaries=queue_summaries,
         )
+
+    def resolve_module_queue(
+        self,
+        snapshot: ProjectContextSnapshot,
+        module_name: str,
+    ) -> tuple[str, ...]:
+        """Resolve one saved module rule against ordinary complete-list columns."""
+
+        self._validate_current_snapshot(snapshot)
+        module = next(
+            (item for item in snapshot.modules if item.name == module_name),
+            None,
+        )
+        if module is None:
+            raise ProjectContextError(
+                f"Unknown QC module in current project: {module_name}"
+            )
+        try:
+            expression = normalize_module_filter(module.to_legacy_dict())
+            return resolve_module_filter_identities(
+                snapshot.subjects,
+                expression,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ProjectContextError(
+                f"Invalid QC module filter for '{module_name}': {exc}"
+            ) from exc
 
     @classmethod
     def _qc_queue_summaries(

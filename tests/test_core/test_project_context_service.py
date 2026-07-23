@@ -9,6 +9,12 @@ from core.app_services import build_app_services
 from core.project_context_service import ProjectContextError
 from core.qc_workflow_service import QcWorkflowService
 from core.event_bus import EventType
+from models.table_view_state import (
+    FilterCondition,
+    FilterExpression,
+    FilterGroup,
+)
+from utils.file_utils import FileUtils
 
 
 def _module_payload(*, name: str = "AnatQC", rater: str | None = "rater1") -> dict:
@@ -46,6 +52,31 @@ def _subjects(prefix: str = "") -> pd.DataFrame:
             "site": ["A", "B", "C"],
             "image": [f"/{prefix}one.nii", f"/{prefix}two.nii", f"/{prefix}three.nii"],
         }
+    )
+
+
+def _filter_expression(
+    column: str,
+    operator: str,
+    value,
+) -> FilterExpression:
+    return FilterExpression(
+        group_join="all",
+        groups=(
+            FilterGroup(
+                group_id="module-filter",
+                join="all",
+                conditions=(
+                    FilterCondition(
+                        column,
+                        operator,
+                        value,
+                        "module-filter-condition",
+                        True,
+                    ),
+                ),
+            ),
+        ),
     )
 
 
@@ -228,3 +259,131 @@ def test_failed_project_load_preserves_current_project_and_settings(tmp_path) ->
     assert services.project_service.current_project == alpha_project
     assert dict(services.project_service.settings) == alpha_settings
     assert configuration.current_project == alpha_project
+
+
+def test_context_resolves_empty_and_grouped_module_queues_in_source_order(
+    tmp_path,
+) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    _add_project(services, tmp_path, "SAMPLE")
+    empty_snapshot = services.project_context_service.snapshot()
+
+    assert services.project_context_service.resolve_module_queue(
+        empty_snapshot,
+        "AnatQC",
+    ) == ("SUB001", "SUB002", "SUB003")
+
+    grouped = FilterExpression(
+        group_join="any",
+        groups=(
+            FilterGroup(
+                group_id="site-a",
+                join="all",
+                conditions=(
+                    FilterCondition("site", "==", "A", "site-a-condition"),
+                ),
+            ),
+            FilterGroup(
+                group_id="site-c",
+                join="all",
+                conditions=(
+                    FilterCondition("site", "==", "C", "site-c-condition"),
+                ),
+            ),
+        ),
+    )
+    saved_matches = services.configuration_service.save_module_filter(
+        "AnatQC",
+        grouped,
+    )
+    filtered_snapshot = services.project_context_service.snapshot()
+
+    assert saved_matches == ("SUB001", "SUB003")
+    assert services.project_context_service.resolve_module_queue(
+        filtered_snapshot,
+        "AnatQC",
+    ) == ("SUB001", "SUB003")
+
+
+def test_qc_factory_uses_module_queue_by_default_and_preserves_explicit_queue(
+    tmp_path,
+) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    _add_project(services, tmp_path, "SAMPLE")
+    services.configuration_service.save_module_filter(
+        "AnatQC",
+        _filter_expression("site", "==", "C"),
+    )
+    snapshot = services.project_context_service.snapshot()
+
+    filtered = services.project_context_service.create_qc_workflow(
+        snapshot,
+        module_name="AnatQC",
+        initial_ezqcid="SUB003",
+    )
+    transitional = services.project_context_service.create_qc_workflow(
+        snapshot,
+        module_name="AnatQC",
+        initial_ezqcid="SUB001",
+        navigation_ids=("SUB001", "SUB002"),
+    )
+
+    assert filtered.subject_ids == ("SUB003",)
+    assert transitional.subject_ids == ("SUB001", "SUB002")
+
+
+def test_zero_match_filter_can_save_and_resolve_but_default_launch_rejects(
+    tmp_path,
+) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    _add_project(services, tmp_path, "SAMPLE")
+
+    assert services.configuration_service.save_module_filter(
+        "AnatQC",
+        _filter_expression("site", "==", "missing"),
+    ) == ()
+    snapshot = services.project_context_service.snapshot()
+    assert services.project_context_service.resolve_module_queue(
+        snapshot,
+        "AnatQC",
+    ) == ()
+
+    with pytest.raises(ProjectContextError, match="matches no subjects"):
+        services.project_context_service.create_qc_workflow(
+            snapshot,
+            module_name="AnatQC",
+            initial_ezqcid="SUB001",
+        )
+
+
+def test_failed_filter_save_preserves_detached_context(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    project = _add_project(services, tmp_path, "SAMPLE")
+    snapshot = services.project_context_service.snapshot()
+    before_settings = deepcopy(dict(services.project_service.settings))
+    before_bytes = project.settings_path.read_bytes()
+    real_save = FileUtils.safe_json_save
+
+    def fail_settings(path, data, indent=4):
+        if path == project.settings_path:
+            raise OSError("module filter replace failed")
+        return real_save(path, data, indent)
+
+    monkeypatch.setattr(FileUtils, "safe_json_save", fail_settings)
+
+    with pytest.raises(OSError, match="module filter replace failed"):
+        services.configuration_service.save_module_filter(
+            "AnatQC",
+            _filter_expression("site", "==", "A"),
+        )
+
+    assert dict(services.project_service.settings) == before_settings
+    assert project.settings_path.read_bytes() == before_bytes
+    assert snapshot.modules[0].qc_filter is None
+    assert services.project_context_service.resolve_module_queue(
+        snapshot,
+        "AnatQC",
+    ) == ("SUB001", "SUB002", "SUB003")

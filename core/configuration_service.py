@@ -12,11 +12,18 @@ from typing import Any
 import pandas as pd
 
 from core.event_bus import Event, EventType
+from core.module_filter import resolve_module_filter_identities
 from core.project_service import MODULE_NAME_PATTERN, ProjectService
 from core.table_service import TABLE_ALL, TableService
 from core.table_transform import TableTransformEngine
+from core.table_view_service import TableViewError
 from models.project import Project
 from models.qcmodule import QCModule, Score, Tag
+from models.table_view_state import (
+    FilterExpression,
+    TableViewStateContractError,
+    filter_expression_to_json_object,
+)
 from utils.file_utils import FileUtils
 
 
@@ -430,6 +437,45 @@ class ConfigurationService:
             raise ConfigurationError(f"Unknown module: {original_name}")
         payloads[index] = payload
         self._commit_module_payloads(payloads)
+
+    def save_module_filter(
+        self,
+        module_name: str,
+        expression: FilterExpression,
+    ) -> tuple[str, ...]:
+        """Validate and atomically save only one module's structured filter."""
+
+        if not isinstance(module_name, str) or not module_name.strip():
+            raise ConfigurationError("Module name must be a nonblank string")
+        name = module_name.strip()
+        candidate = self._settings_candidate()
+        modules = candidate.get("qcmodule")
+        if not isinstance(modules, dict):
+            raise ConfigurationError("qcmodule must be an object")
+        matches = [
+            payload
+            for payload in modules.values()
+            if isinstance(payload, dict) and payload.get("name") == name
+        ]
+        if not matches:
+            raise ConfigurationError(f"Unknown module: {name}")
+        if len(matches) != 1:
+            raise ConfigurationError(f"Module name is ambiguous: {name}")
+
+        try:
+            identities = resolve_module_filter_identities(
+                self.subjects(),
+                expression,
+            )
+            serialized = filter_expression_to_json_object(expression)
+        except (TableViewError, TableViewStateContractError) as exc:
+            raise ConfigurationError(str(exc)) from exc
+
+        selected = matches[0]
+        selected["qc_filter"] = serialized
+        selected["select_filter"] = None
+        self.project_service.commit_settings(candidate)
+        return identities
 
     def remove_module(self, name: str) -> None:
         payloads = [module.to_legacy_dict() for module in self.modules() if module.name != name]

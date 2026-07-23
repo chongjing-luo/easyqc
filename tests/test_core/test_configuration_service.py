@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 
 import pandas as pd
@@ -7,8 +8,15 @@ import pytest
 
 from core.configuration_service import ConfigurationError, ConfigurationService
 from core.event_bus import EventType
+from core.module_filter import resolve_module_filter_identities
 from core.project_service import ProjectService
 from core.table_service import TableService
+from core.table_view_service import TableViewService
+from models.table_view_state import (
+    FilterCondition,
+    FilterExpression,
+    FilterGroup,
+)
 from utils.file_utils import FileUtils
 
 
@@ -22,6 +30,33 @@ def _service(tmp_path):
 def _subjects():
     return pd.DataFrame(
         {"ezqcid": ["SUB001", "SUB002"], "site": ["A", "B"], "age": [29, 31]}
+    )
+
+
+def _filter_expression(
+    column: str,
+    operator: str,
+    value,
+    *,
+    condition_id: str = "condition-1",
+) -> FilterExpression:
+    return FilterExpression(
+        group_join="all",
+        groups=(
+            FilterGroup(
+                group_id="group-1",
+                join="all",
+                conditions=(
+                    FilterCondition(
+                        column,
+                        operator,
+                        value,
+                        condition_id,
+                        True,
+                    ),
+                ),
+            ),
+        ),
     )
 
 
@@ -328,3 +363,166 @@ def test_failed_list_import_preserves_memory_and_atomic_table(
 
     pd.testing.assert_frame_equal(service.subjects(), current)
     assert table_path.read_bytes() == before_bytes
+
+
+def test_module_filter_resolution_matches_table_positions_in_source_order() -> None:
+    subjects = pd.DataFrame(
+        {
+            "ezqcid": ["SUB003", "SUB001", "SUB002"],
+            "site": ["C", "A", "B"],
+            "age": [27, 29, 31],
+        }
+    )
+    expression = FilterExpression(
+        group_join="any",
+        groups=(
+            FilterGroup(
+                group_id="site-a",
+                join="all",
+                conditions=(
+                    FilterCondition("site", "==", "A", "site-a-condition"),
+                ),
+            ),
+            FilterGroup(
+                group_id="older",
+                join="all",
+                conditions=(
+                    FilterCondition("age", ">=", 31, "older-condition"),
+                ),
+            ),
+        ),
+    )
+    table_service = TableViewService(subjects)
+    expected_result = table_service.apply_state(
+        table_service.default_state().with_filter(expression)
+    )
+    expected = tuple(
+        subjects.iloc[expected_result.source_positions]["ezqcid"].tolist()
+    )
+
+    assert resolve_module_filter_identities(subjects, expression) == expected
+    assert expected == ("SUB001", "SUB002")
+    assert resolve_module_filter_identities(
+        subjects,
+        _filter_expression("site", "==", "missing"),
+    ) == ()
+
+
+def test_save_module_filters_are_independent_and_clear_only_selected_legacy(
+    tmp_path,
+) -> None:
+    service, projects = _service(tmp_path)
+    service.replace_subjects(_subjects(), notify=False)
+    service.add_module("FuncQC", "Functional QC")
+    first = next(module for module in service.modules() if module.name == "example")
+    first.select_filter = "SELECT * FROM df WHERE site = 'B'"
+    service.save_module(first, original_name="example")
+    second = next(module for module in service.modules() if module.name == "FuncQC")
+    second.select_filter = "SELECT * FROM df WHERE age >= 31"
+    service.save_module(second, original_name="FuncQC")
+    before = deepcopy(projects.settings["qcmodule"])
+
+    first_matches = service.save_module_filter(
+        "example",
+        _filter_expression("site", "==", "A"),
+    )
+
+    after_first = projects.settings["qcmodule"]
+    assert first_matches == ("SUB001",)
+    assert after_first["1"]["qc_filter"] == {
+        "schema_version": 1,
+        "group_join": "all",
+        "groups": [
+            {
+                "group_id": "group-1",
+                "join": "all",
+                "conditions": [
+                    {
+                        "column": "site",
+                        "operator": "==",
+                        "value": "A",
+                        "condition_id": "condition-1",
+                        "enabled": True,
+                    }
+                ],
+            }
+        ],
+    }
+    assert after_first["1"]["select_filter"] is None
+    assert {
+        key: value
+        for key, value in after_first["1"].items()
+        if key not in {"qc_filter", "select_filter"}
+    } == {
+        key: value
+        for key, value in before["1"].items()
+        if key not in {"qc_filter", "select_filter"}
+    }
+    assert after_first["2"] == before["2"]
+    first_after_save = deepcopy(after_first["1"])
+
+    second_matches = service.save_module_filter(
+        "FuncQC",
+        _filter_expression("age", ">=", 31),
+    )
+
+    assert second_matches == ("SUB002",)
+    assert projects.settings["qcmodule"]["1"] == first_after_save
+    assert projects.settings["qcmodule"]["2"]["select_filter"] is None
+    assert projects.settings["qcmodule"]["2"]["qc_filter"] != first_after_save[
+        "qc_filter"
+    ]
+    persisted = json.loads(
+        projects.current_project.settings_path.read_text(encoding="utf-8")
+    )
+    assert persisted["qcmodule"] == projects.settings["qcmodule"]
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        _filter_expression("missing_column", "==", "A"),
+        _filter_expression("age", ">=", "not-a-number"),
+    ],
+)
+def test_save_module_filter_rejects_invalid_condition_without_writing(
+    tmp_path,
+    expression,
+) -> None:
+    service, projects = _service(tmp_path)
+    service.replace_subjects(_subjects(), notify=False)
+    before_settings = deepcopy(dict(projects.settings))
+    before_bytes = projects.current_project.settings_path.read_bytes()
+
+    with pytest.raises(ConfigurationError):
+        service.save_module_filter("example", expression)
+
+    assert dict(projects.settings) == before_settings
+    assert projects.current_project.settings_path.read_bytes() == before_bytes
+
+
+def test_failed_module_filter_commit_restores_memory_and_disk(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    service, projects = _service(tmp_path)
+    service.replace_subjects(_subjects(), notify=False)
+    before_settings = deepcopy(dict(projects.settings))
+    before_bytes = projects.current_project.settings_path.read_bytes()
+    real_save = FileUtils.safe_json_save
+
+    def fail_settings(path, data, indent=4):
+        if path == projects.current_project.settings_path:
+            raise OSError("module filter replace failed")
+        return real_save(path, data, indent)
+
+    monkeypatch.setattr(FileUtils, "safe_json_save", fail_settings)
+
+    with pytest.raises(OSError, match="module filter replace failed"):
+        service.save_module_filter(
+            "example",
+            _filter_expression("site", "==", "A"),
+        )
+
+    assert dict(projects.settings) == before_settings
+    assert projects.current_project.settings_path.read_bytes() == before_bytes
