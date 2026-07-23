@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
@@ -14,7 +12,6 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
-    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -39,11 +36,9 @@ class QtQcQueueModel(QAbstractTableModel):
     def __init__(self, workflow: QcWorkflowService, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.workflow = workflow
-        self._filter_text = ""
-        self._visible_positions: Sequence[int] = range(len(workflow.subject_ids))
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
-        return 0 if parent.isValid() else len(self._visible_positions)
+        return 0 if parent.isValid() else len(self.workflow.subject_ids)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
         return 0 if parent.isValid() else len(self.HEADERS)
@@ -51,7 +46,7 @@ class QtQcQueueModel(QAbstractTableModel):
     def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
         if not index.isValid():
             return None
-        position = self._visible_positions[index.row()]
+        position = index.row()
         identity = self.workflow.subject_ids[position]
         score, tags = self.workflow.queue_summary(identity)
         values = (position + 1, identity, score, tags)
@@ -83,56 +78,46 @@ class QtQcQueueModel(QAbstractTableModel):
             return Qt.NoItemFlags
         return Qt.ItemIsEnabled | Qt.ItemIsSelectable
 
-    def set_filter(self, text: str) -> int:
-        query = str(text).strip().casefold()
-        self.beginResetModel()
-        self._filter_text = str(text).strip()
-        if not query:
-            self._visible_positions = range(len(self.workflow.subject_ids))
-        else:
-            self._visible_positions = tuple(
-                position
-                for position, identity in enumerate(self.workflow.subject_ids)
-                if query
-                in " ".join(
-                    (identity, *self.workflow.queue_summary(identity))
-                ).casefold()
-            )
-        self.endResetModel()
-        return self.rowCount()
-
-    @property
-    def filter_text(self) -> str:
-        return self._filter_text
-
     def identity_at(self, visible_row: int) -> str:
         if visible_row < 0 or visible_row >= self.rowCount():
             raise IndexError("QC queue row is outside the visible list")
-        return self.workflow.subject_ids[self._visible_positions[visible_row]]
+        return self.workflow.subject_ids[visible_row]
 
     def visible_row_for(self, identity: str) -> int | None:
         normalized = str(identity).strip()
+        if normalized == self.workflow.current_ezqcid:
+            return self.workflow.current_index
         return next(
             (
                 visible_row
-                for visible_row, position in enumerate(self._visible_positions)
-                if self.workflow.subject_ids[position] == normalized
+                for visible_row, identity in enumerate(self.workflow.subject_ids)
+                if identity == normalized
             ),
             None,
         )
 
     def current_visible_row(self) -> int | None:
-        return self.visible_row_for(self.workflow.current_ezqcid)
+        return self.workflow.current_index
 
     def neighbor_identity(self, identity: str, delta: int) -> str | None:
-        row = self.visible_row_for(identity)
+        normalized = str(identity).strip()
+        row = (
+            self.workflow.current_index
+            if normalized == self.workflow.current_ezqcid
+            else self.visible_row_for(normalized)
+        )
         if row is None:
             return None
         target = row + int(delta)
         return self.identity_at(target) if 0 <= target < self.rowCount() else None
 
     def refresh_identity(self, identity: str) -> None:
-        row = self.visible_row_for(identity)
+        normalized = str(identity).strip()
+        row = (
+            self.workflow.current_index
+            if normalized == self.workflow.current_ezqcid
+            else self.visible_row_for(normalized)
+        )
         if row is not None:
             self.dataChanged.emit(
                 self.index(row, 2),
@@ -145,6 +130,7 @@ class QtQcWorkspace(QWidget):
     """Render one compact QC draft; Core owns viewer and rating side effects."""
 
     draftStateChanged = Signal(bool)
+    filterRequested = Signal()
 
     def __init__(self, workflow: QcWorkflowService, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -153,6 +139,7 @@ class QtQcWorkspace(QWidget):
         self.workflow = workflow
         self._loading = False
         self._manual_read_only = False
+        self._filter_busy = False
         self._score_groups: dict[str, QButtonGroup] = {}
         self.score_buttons: dict[str, dict[str | None, QRadioButton]] = {}
         self._legacy_score_buttons: dict[str, QRadioButton] = {}
@@ -350,6 +337,10 @@ class QtQcWorkspace(QWidget):
     def error_text(self) -> str:
         return self.error_label.text()
 
+    @property
+    def filter_busy(self) -> bool:
+        return self._filter_busy
+
     def _effective_read_only(self) -> bool:
         return self.workflow.watch_mode or self._manual_read_only
 
@@ -391,7 +382,7 @@ class QtQcWorkspace(QWidget):
             core_read_only = self.workflow.watch_mode
             self.read_only_box.blockSignals(True)
             self.read_only_box.setChecked(core_read_only or self._manual_read_only)
-            self.read_only_box.setEnabled(not core_read_only)
+            self.read_only_box.setEnabled(not core_read_only and not self._filter_busy)
             self.read_only_box.setToolTip(
                 self.workflow.read_only_reason if core_read_only else "仅查看，不修改评分"
             )
@@ -399,10 +390,10 @@ class QtQcWorkspace(QWidget):
             read_only = self._effective_read_only()
             for buttons in self.score_buttons.values():
                 for button in buttons.values():
-                    button.setEnabled(not read_only)
+                    button.setEnabled(not read_only and not self._filter_busy)
             for checkbox in self.tag_boxes.values():
-                checkbox.setEnabled(not read_only)
-            self.notes_edit.setReadOnly(read_only)
+                checkbox.setEnabled(not read_only and not self._filter_busy)
+            self.notes_edit.setReadOnly(read_only or self._filter_busy)
 
             previous_identity = self.queue_model.neighbor_identity(
                 self.workflow.current_ezqcid,
@@ -415,22 +406,27 @@ class QtQcWorkspace(QWidget):
             self._set_action_enabled(
                 self.previous_action,
                 self.previous_button,
-                previous_identity is not None,
+                previous_identity is not None and not self._filter_busy,
             )
             self._set_action_enabled(
                 self.next_action,
                 self.next_button,
-                next_identity is not None,
+                next_identity is not None and not self._filter_busy,
             )
             self._set_action_enabled(
                 self.save_action,
                 self.save_button,
-                not read_only,
+                not read_only and not self._filter_busy,
             )
             self._set_action_enabled(
                 self.save_next_action,
                 self.save_next_button,
-                not read_only and next_identity is not None,
+                not read_only and not self._filter_busy and next_identity is not None,
+            )
+            self._set_action_enabled(
+                self.filter_action,
+                self.filter_button,
+                not self._filter_busy,
             )
             self.queue_model.refresh_identity(self.workflow.current_ezqcid)
             current_row = self.queue_model.current_visible_row()
@@ -556,38 +552,29 @@ class QtQcWorkspace(QWidget):
         self._refresh()
 
     def _prompt_queue_filter(self) -> None:
-        text, accepted = QInputDialog.getText(
-            self,
-            "筛选名单",
-            "匹配 ezqcid、评分或标签（留空显示全部）",
-            text=self.queue_model.filter_text,
-        )
-        if accepted:
-            self.set_queue_filter(text)
-
-    def set_queue_filter(self, text: str) -> bool:
         if self.workflow.dirty:
             self._set_error("请先保存当前修改，再筛选名单")
-            return False
-        previous_filter = self.queue_model.filter_text
-        count = self.queue_model.set_filter(text)
-        try:
-            current_row = self.queue_model.current_visible_row()
-            if count and current_row is None:
-                self.workflow.navigate_to(self.queue_model.identity_at(0))
-        except Exception as exc:
-            self.queue_model.set_filter(previous_filter)
-            self._set_error(str(exc))
-            self._refresh()
-            return False
-        self.filter_button.setToolTip(
-            f"当前筛选：{str(text).strip()} · {count} 条"
-            if str(text).strip()
-            else "显示全部质控名单"
-        )
+            return
+        if self._filter_busy:
+            self._set_error("质控名单筛选事务正在完成，请稍候")
+            return
         self._set_error("")
+        self.filterRequested.emit()
+
+    def set_filter_busy(self, busy: bool) -> None:
+        self._filter_busy = bool(busy)
         self._refresh()
-        return True
+
+    def set_filter_summary(self, matched_total: int, *, filtered: bool) -> None:
+        count = int(matched_total)
+        self.filter_button.setToolTip(
+            f"当前模块筛选匹配 {count} 条"
+            if filtered
+            else f"全部质控名单 · {count} 条"
+        )
+
+    def show_filter_error(self, message: str) -> None:
+        self._set_error(str(message))
 
     def _set_error(self, message: str) -> None:
         self.error_label.setText(message)
@@ -628,6 +615,10 @@ class QtQcControllerWindow(QMainWindow):
         return self.close()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        if self.workspace.filter_busy and not self._force_discard_close:
+            self.workspace.show_filter_error("质控名单筛选事务正在完成，请稍候")
+            event.ignore()
+            return
         if self.workflow.dirty and not self._force_discard_close:
             answer = QMessageBox.question(
                 self,

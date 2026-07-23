@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pandas as pd
@@ -26,6 +27,10 @@ from PySide6.QtWidgets import (
 from core.app_services import AppServices
 from core.configuration_service import ConfigurationSnapshot
 from core.event_bus import Event, EventType
+from core.module_filter import (
+    normalize_module_filter,
+    resolve_module_filter_identities,
+)
 from core.project_context_service import (
     PreparedProjectContext,
     ProjectContextError,
@@ -33,11 +38,32 @@ from core.project_context_service import (
 )
 from core.qc_workflow_service import QcWorkflowService
 from core.table_view_service import TableViewService
+from gui_qt.filter_dialog import FilterDialog
 from gui_qt.project_config_workspace import QtProjectConfigWorkspace
 from gui_qt.qc_results_page import QtQcResultsPage
 from gui_qt.qc_workspace import QtQcControllerWindow, QtQcWorkspace
 from gui_qt.table_workspace import QtTableWorkspace
 from gui_qt.task_runner import RevisionedTaskController
+from models.qcmodule import QCModule
+from models.table_view_state import (
+    FilterExpression,
+    filter_expression_to_json_object,
+)
+
+
+@dataclass
+class _QcFilterTransaction:
+    """One candidate-first replacement bound to an exact live controller."""
+
+    revision: int
+    phase: str
+    source_controller: QtQcControllerWindow | None
+    context_revision: int
+    module_name: str
+    dialog: FilterDialog | None = None
+    expression: FilterExpression | None = None
+    identities: tuple[str, ...] = ()
+    candidate_controller: QtQcControllerWindow | None = None
 
 
 class QtMainWindow(QMainWindow):
@@ -76,6 +102,20 @@ class QtMainWindow(QMainWindow):
         self.context_task_controller.resultReady.connect(self._handle_context_result)
         self.context_task_controller.errorRaised.connect(self._handle_context_error)
         self.context_task_controller.busyChanged.connect(self._set_context_busy)
+        self._qc_filter_revision = 0
+        self._pending_qc_filter: _QcFilterTransaction | None = None
+        self.qc_filter_dialog: FilterDialog | None = None
+        self._preserve_qc_after_filter_publish = False
+        self.qc_filter_task_controller = RevisionedTaskController(self)
+        self.qc_filter_task_controller.resultReady.connect(
+            self._handle_qc_filter_result
+        )
+        self.qc_filter_task_controller.errorRaised.connect(
+            self._handle_qc_filter_error
+        )
+        self.qc_filter_task_controller.busyChanged.connect(
+            self._set_qc_filter_busy
+        )
 
         initial_source = (
             source.copy(deep=True)
@@ -631,6 +671,372 @@ class QtMainWindow(QMainWindow):
     def _derived_subject_column_committed(self, _name: str) -> None:
         self.services.configuration_service.publish_subjects_changed()
 
+    def _qc_filter_transaction_is_current(
+        self,
+        transaction: _QcFilterTransaction,
+    ) -> bool:
+        workflow = self.active_workflow
+        return (
+            self.qc_controller is transaction.source_controller
+            and self.current_context.context_revision
+            == transaction.context_revision
+            and (
+                transaction.phase == "launch_candidate"
+                or self._active_module_name == transaction.module_name
+            )
+            and (workflow is None or not workflow.dirty)
+        )
+
+    @staticmethod
+    def _context_with_module_filter(
+        snapshot: ProjectContextSnapshot,
+        module_name: str,
+        expression: FilterExpression,
+    ) -> ProjectContextSnapshot:
+        """Return a detached workflow snapshot carrying one proposed rule."""
+
+        modules = list(deepcopy(snapshot.modules))
+        matches = [
+            index for index, module in enumerate(modules) if module.name == module_name
+        ]
+        if len(matches) != 1:
+            raise ProjectContextError(
+                f"QC module is missing or ambiguous in current context: {module_name}"
+            )
+        module = modules[matches[0]]
+        payload = module.to_legacy_dict()
+        payload["qc_filter"] = filter_expression_to_json_object(expression)
+        payload["select_filter"] = None
+        modules[matches[0]] = QCModule.from_legacy_dict(payload)
+        return replace(snapshot, modules=tuple(modules))
+
+    def _prepare_qc_workflow_candidate(
+        self,
+        snapshot: ProjectContextSnapshot,
+        module_name: str,
+        current_identity: str,
+        expression: FilterExpression | None = None,
+    ) -> tuple[str, int, tuple[str, ...], QcWorkflowService]:
+        """Worker-side construction of one exact, nonempty QC workflow."""
+
+        if expression is None:
+            identities = self.context_service.resolve_module_queue(
+                snapshot,
+                module_name,
+            )
+            candidate_snapshot = snapshot
+        else:
+            identities = resolve_module_filter_identities(
+                snapshot.subjects,
+                expression,
+            )
+            candidate_snapshot = self._context_with_module_filter(
+                snapshot,
+                module_name,
+                expression,
+            )
+        if not identities:
+            raise ProjectContextError(
+                f"QC module filter matches no subjects: {module_name}"
+            )
+        initial = (
+            current_identity
+            if current_identity in set(identities)
+            else identities[0]
+        )
+        workflow = self.context_service.create_qc_workflow(
+            candidate_snapshot,
+            module_name=module_name,
+            initial_ezqcid=initial,
+            navigation_ids=identities,
+        )
+        return module_name, snapshot.context_revision, identities, workflow
+
+    @Slot()
+    def _open_qc_filter_dialog(self) -> None:
+        controller = self.qc_controller
+        workflow = self.active_workflow
+        if controller is None or workflow is None:
+            self._set_error("请先启动质控")
+            return
+        if workflow.dirty:
+            controller.workspace.show_filter_error(
+                "请先保存当前修改，再筛选名单"
+            )
+            return
+        if self.qc_filter_task_controller.busy:
+            controller.workspace.show_filter_error(
+                "另一项质控名单筛选任务仍在运行"
+            )
+            return
+        snapshot = self.current_context
+        module_name = self._active_module_name
+        self._qc_filter_revision += 1
+        revision = self._qc_filter_revision
+        transaction = _QcFilterTransaction(
+            revision=revision,
+            phase="prepare_dialog",
+            source_controller=controller,
+            context_revision=snapshot.context_revision,
+            module_name=module_name,
+        )
+        self._pending_qc_filter = transaction
+        controller.workspace.show_filter_error("")
+
+        def prepare_dialog():
+            module = next(
+                (item for item in snapshot.modules if item.name == module_name),
+                None,
+            )
+            if module is None:
+                raise ProjectContextError(
+                    f"Unknown QC module in current project: {module_name}"
+                )
+            table_view = TableViewService(snapshot.subjects)
+            expression = normalize_module_filter(module.to_legacy_dict())
+            return (
+                module_name,
+                snapshot.context_revision,
+                table_view.profiles,
+                expression,
+            )
+
+        self.qc_filter_task_controller.submit(revision, prepare_dialog)
+
+    def _qc_filter_dialog_finished(self, dialog: FilterDialog) -> None:
+        pending = self._pending_qc_filter
+        if pending is not None and pending.dialog is dialog:
+            pending.dialog = None
+        if self.qc_filter_dialog is dialog:
+            self.qc_filter_dialog = None
+
+    def _submit_qc_filter_replacement(
+        self,
+        expression: FilterExpression,
+        dialog: FilterDialog,
+    ) -> None:
+        controller = self.qc_controller
+        workflow = self.active_workflow
+        if not isinstance(expression, FilterExpression):
+            dialog.set_error("质控名单筛选窗口返回了无效草稿")
+            return
+        if controller is None or workflow is None:
+            dialog.set_error("当前质控控制器已关闭")
+            return
+        if workflow.dirty:
+            message = "请先保存当前修改，再筛选名单"
+            dialog.set_error(message)
+            controller.workspace.show_filter_error(message)
+            return
+        if self._pending_qc_filter is not None:
+            dialog.set_error("另一项质控名单筛选任务仍在运行")
+            return
+
+        snapshot = self.current_context
+        module_name = self._active_module_name
+        current_identity = workflow.current_ezqcid
+        self._qc_filter_revision += 1
+        revision = self._qc_filter_revision
+        transaction = _QcFilterTransaction(
+            revision=revision,
+            phase="prepare_candidate",
+            source_controller=controller,
+            context_revision=snapshot.context_revision,
+            module_name=module_name,
+            dialog=dialog,
+            expression=expression,
+        )
+        self._pending_qc_filter = transaction
+        controller.workspace.show_filter_error("")
+
+        def prepare_candidate():
+            return self._prepare_qc_workflow_candidate(
+                snapshot,
+                module_name,
+                current_identity,
+                expression,
+            )
+
+        self.qc_filter_task_controller.submit(revision, prepare_candidate)
+
+    @Slot(int, object)
+    def _handle_qc_filter_result(self, revision: int, result: object) -> None:
+        transaction = self._pending_qc_filter
+        if transaction is None or transaction.revision != revision:
+            return
+        if not self._qc_filter_transaction_is_current(transaction):
+            self._fail_qc_filter_transaction(
+                ProjectContextError(
+                    "质控名单筛选所属的控制器或项目上下文已变化"
+                )
+            )
+            return
+
+        if transaction.phase == "prepare_dialog":
+            if not isinstance(result, tuple) or len(result) != 4:
+                self._fail_qc_filter_transaction(
+                    ValueError("质控名单筛选准备任务返回了无效结果")
+                )
+                return
+            module_name, context_revision, profiles, expression = result
+            if (
+                module_name != transaction.module_name
+                or context_revision != transaction.context_revision
+                or not isinstance(expression, FilterExpression)
+            ):
+                self._fail_qc_filter_transaction(
+                    ValueError("质控名单筛选准备结果已失效")
+                )
+                return
+            self._pending_qc_filter = None
+            dialog = FilterDialog(
+                tuple(profiles),
+                expression,
+                transaction.source_controller.workspace,
+            )
+            dialog.applyRequested.connect(
+                lambda draft, target=dialog: self._submit_qc_filter_replacement(
+                    draft,
+                    target,
+                )
+            )
+            dialog.finished.connect(
+                lambda _result, target=dialog: self._qc_filter_dialog_finished(
+                    target
+                )
+            )
+            self.qc_filter_dialog = dialog
+            dialog.open()
+            return
+
+        if transaction.phase in {"launch_candidate", "prepare_candidate"}:
+            if not isinstance(result, tuple) or len(result) != 4:
+                self._fail_qc_filter_transaction(
+                    ValueError("质控候选工作流任务返回了无效结果")
+                )
+                return
+            module_name, context_revision, identities, workflow = result
+            identities = tuple(identities)
+            if (
+                module_name != transaction.module_name
+                or context_revision != transaction.context_revision
+                or not identities
+                or not isinstance(workflow, QcWorkflowService)
+            ):
+                self._fail_qc_filter_transaction(
+                    ValueError("质控候选工作流结果已失效")
+                )
+                return
+            try:
+                candidate = self._build_qc_controller(workflow)
+            except Exception as exc:
+                self._fail_qc_filter_transaction(exc)
+                return
+            if transaction.phase == "launch_candidate":
+                self._pending_qc_filter = None
+                self._install_prepared_qc_controller(candidate, module_name)
+                self._updating_controls = True
+                try:
+                    self.module_combo.setCurrentIndex(
+                        self.module_combo.findData(module_name)
+                    )
+                finally:
+                    self._updating_controls = False
+                self.shell_status_label.setText(
+                    f"已启动质控：{module_name}"
+                )
+                self._set_error("")
+                return
+            transaction.phase = "persist_candidate"
+            transaction.identities = identities
+            transaction.candidate_controller = candidate
+            expression = transaction.expression
+            if expression is None:
+                self._fail_qc_filter_transaction(
+                    ValueError("质控名单候选缺少筛选表达式")
+                )
+                return
+
+            def persist_candidate():
+                return self.services.configuration_service.save_module_filter(
+                    transaction.module_name,
+                    expression,
+                    notify=False,
+                    expected_identities=identities,
+                )
+
+            self.qc_filter_task_controller.submit(revision, persist_candidate)
+            return
+
+        if transaction.phase != "persist_candidate":
+            self._fail_qc_filter_transaction(
+                ValueError(f"不支持的质控名单筛选阶段: {transaction.phase}")
+            )
+            return
+        saved_identities = tuple(result) if isinstance(result, tuple) else ()
+        if saved_identities != transaction.identities:
+            self._fail_qc_filter_transaction(
+                ValueError("保存后的质控名单与候选工作流不一致")
+            )
+            return
+        candidate = transaction.candidate_controller
+        if candidate is None:
+            self._fail_qc_filter_transaction(
+                ValueError("质控名单候选控制器不存在")
+            )
+            return
+        dialog = transaction.dialog
+        module_name = transaction.module_name
+        self._pending_qc_filter = None
+        self._install_prepared_qc_controller(candidate, module_name)
+        if dialog is not None:
+            dialog.complete_apply()
+        self.shell_status_label.setText(f"已更新质控名单：{module_name}")
+        self._set_error("")
+        self._preserve_qc_after_filter_publish = True
+        self.services.configuration_service.publish_modules_changed()
+
+    def _discard_qc_filter_candidate(
+        self,
+        candidate: QtQcControllerWindow | None,
+    ) -> None:
+        if candidate is None:
+            return
+        candidate.setAttribute(Qt.WA_DeleteOnClose, False)
+        candidate.deleteLater()
+
+    def _fail_qc_filter_transaction(self, error: object) -> None:
+        transaction = self._pending_qc_filter
+        if transaction is None:
+            return
+        self._pending_qc_filter = None
+        self._discard_qc_filter_candidate(transaction.candidate_controller)
+        message = str(error).strip() or type(error).__name__
+        if transaction.dialog is not None:
+            transaction.dialog.set_error(message)
+        if self.qc_controller is transaction.source_controller:
+            if transaction.source_controller is not None:
+                transaction.source_controller.workspace.show_filter_error(message)
+        if transaction.phase == "launch_candidate":
+            self.config_workspace.set_module_launch_feedback(
+                f"启动失败：{message}"
+            )
+            self._restore_active_module_selector()
+        self._set_error(message)
+
+    @Slot(int, object)
+    def _handle_qc_filter_error(self, revision: int, error: object) -> None:
+        transaction = self._pending_qc_filter
+        if transaction is None or transaction.revision != revision:
+            return
+        self._fail_qc_filter_transaction(error)
+
+    @Slot(bool)
+    def _set_qc_filter_busy(self, busy: bool) -> None:
+        if self.qc_workspace is not None:
+            self.qc_workspace.set_filter_busy(busy)
+        self._update_context_controls()
+
     def _reject_qc_launch(self, message: str) -> bool:
         text = str(message).strip() or "未知错误"
         self._set_error(text)
@@ -655,31 +1061,30 @@ class QtMainWindow(QMainWindow):
         workflow = self.active_workflow
         if workflow is not None and workflow.dirty:
             return self._reject_qc_launch("请先保存或放弃当前质控修改")
-        identities = tuple(self.current_context.subjects["ezqcid"].astype(str))
-        initial = (
-            workflow.current_ezqcid
-            if workflow is not None and workflow.current_ezqcid in set(identities)
-            else identities[0]
+        if self.qc_filter_task_controller.busy:
+            return self._reject_qc_launch("另一项质控名单任务仍在运行")
+        snapshot = self.current_context
+        current_identity = (
+            workflow.current_ezqcid if workflow is not None else ""
         )
-        try:
-            replacement = self.context_service.create_qc_workflow(
-                self.current_context,
-                module_name=requested,
-                initial_ezqcid=initial,
-                navigation_ids=identities,
+        self._qc_filter_revision += 1
+        revision = self._qc_filter_revision
+        self._pending_qc_filter = _QcFilterTransaction(
+            revision=revision,
+            phase="launch_candidate",
+            source_controller=self.qc_controller,
+            context_revision=snapshot.context_revision,
+            module_name=requested,
+        )
+
+        def prepare_launch():
+            return self._prepare_qc_workflow_candidate(
+                snapshot,
+                requested,
+                current_identity,
             )
-        except Exception as exc:
-            return self._reject_qc_launch(str(exc))
-        self._install_qc_workspace(replacement, requested)
-        self._updating_controls = True
-        try:
-            self.module_combo.setCurrentIndex(
-                self.module_combo.findData(requested)
-            )
-        finally:
-            self._updating_controls = False
-        self.shell_status_label.setText(f"已启动质控：{requested}")
-        self._set_error("")
+
+        self.qc_filter_task_controller.submit(revision, prepare_launch)
         return True
 
     def _module_selected(self, _index: int) -> None:
@@ -734,18 +1139,49 @@ class QtMainWindow(QMainWindow):
         workflow: QcWorkflowService,
         module_name: str,
     ) -> None:
+        replacement = self._build_qc_controller(workflow)
+        self._install_prepared_qc_controller(replacement, module_name)
+
+    def _build_qc_controller(
+        self,
+        workflow: QcWorkflowService,
+    ) -> QtQcControllerWindow:
+        """Create and wire one hidden controller without replacing the live one."""
+
         replacement = QtQcControllerWindow(workflow)
         replacement.workspace.draftStateChanged.connect(self._on_qc_draft_changed)
+        replacement.workspace.filterRequested.connect(
+            self._open_qc_filter_dialog
+        )
         replacement.closed.connect(
             lambda controller=replacement: self._qc_controller_closed(controller)
         )
+        module_filter = normalize_module_filter(
+            workflow.current_module.to_legacy_dict()
+        )
+        replacement.workspace.set_filter_summary(
+            len(workflow.subject_ids),
+            filtered=bool(module_filter.groups),
+        )
+        return replacement
+
+    def _install_prepared_qc_controller(
+        self,
+        replacement: QtQcControllerWindow,
+        module_name: str,
+    ) -> None:
+        """Swap one already-built controller, then expose it to the user."""
+
         previous = self.qc_controller
         if previous is not None:
-            previous.close()
+            if previous.workspace.filter_busy:
+                previous.close_discarding_draft()
+            else:
+                previous.close()
         self.qc_controller = replacement
         self.qc_workspace = replacement.workspace
         self._active_module_name = module_name
-        self._on_qc_draft_changed(workflow.dirty)
+        self._on_qc_draft_changed(replacement.workflow.dirty)
         replacement.show()
         replacement.raise_()
         replacement.activateWindow()
@@ -787,6 +1223,7 @@ class QtMainWindow(QMainWindow):
         dirty = bool(self.active_workflow is not None and self.active_workflow.dirty)
         enabled = (
             not busy
+            and not self.qc_filter_task_controller.busy
             and not derive_busy
             and not dirty
             and not self._injected_preview
@@ -811,16 +1248,22 @@ class QtMainWindow(QMainWindow):
         ):
             section.setEnabled(enabled)
 
-    def _on_project_facts_changed(self, _event: Event) -> None:
+    def _on_project_facts_changed(self, event: Event) -> None:
         if self._closing or self._injected_preview:
             return
         if self.active_workflow is not None and self.active_workflow.dirty:
             self._set_error("项目内容已改变；请先保存或放弃当前质控修改，再刷新")
             return
+        preserve_qc = bool(
+            self._preserve_qc_after_filter_publish
+            and event.type is EventType.MODULES_CHANGED
+        )
+        if event.type is EventType.MODULES_CHANGED:
+            self._preserve_qc_after_filter_publish = False
         self._submit_context(
             "facts_refresh",
             self.context_service.prepare_initial,
-            preserve_qc=False,
+            preserve_qc=preserve_qc,
         )
 
     def _on_rating_saved(self, event: Event) -> None:
@@ -836,6 +1279,13 @@ class QtMainWindow(QMainWindow):
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self.qc_filter_task_controller.busy:
+            message = "质控名单筛选事务正在完成，请稍候"
+            self._set_error(message)
+            if self.qc_workspace is not None:
+                self.qc_workspace.show_filter_error(message)
+            event.ignore()
+            return
         workflow = self.active_workflow
         if workflow is not None and workflow.dirty:
             answer = QMessageBox.question(
@@ -851,6 +1301,8 @@ class QtMainWindow(QMainWindow):
         self._closing = True
         self._unsubscribe_events()
         self.context_task_controller.cancel()
+        self._pending_qc_filter = None
+        self.qc_filter_task_controller.cancel()
         self.table_workspace.close()
         self.results_page.close()
         self.config_workspace.close()

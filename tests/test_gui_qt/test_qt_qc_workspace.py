@@ -66,7 +66,14 @@ def _module(*, rater="rater1", watch_mode=False):
     }
 
 
-def _workflow(tmp_path: Path, *, module=None, executor=None, subjects=None):
+def _workflow(
+    tmp_path: Path,
+    *,
+    module=None,
+    executor=None,
+    subjects=None,
+    initial_ezqcid=None,
+):
     return QcWorkflowService(
         module or _module(),
         subjects
@@ -76,6 +83,7 @@ def _workflow(tmp_path: Path, *, module=None, executor=None, subjects=None):
         ),
         rating_dir=tmp_path / "ratings",
         code_executor=executor or _FakeExecutor(),
+        initial_ezqcid=initial_ezqcid,
     )
 
 
@@ -131,13 +139,14 @@ def test_compact_qc_controller_is_top_level_with_exact_table_and_action_order(
         assert not hasattr(workspace, removed_name)
 
 
-def test_qc_queue_model_keeps_100k_rows_virtual_and_filters_exact_tail_identity(
+def test_qc_queue_model_keeps_100k_prepared_queue_rows_virtual_without_local_filter(
     qtbot,
     tmp_path,
 ) -> None:
     identities = [f"QC-{index:06d}" for index in range(100_000)]
     workflow = _workflow(
         tmp_path,
+        initial_ezqcid=identities[-1],
         subjects=pd.DataFrame(
             {
                 "ezqcid": identities,
@@ -150,21 +159,27 @@ def test_qc_queue_model_keeps_100k_rows_virtual_and_filters_exact_tail_identity(
     model = model_class(workflow)
 
     assert model.rowCount() == 100_000
-    assert isinstance(model._visible_positions, range)
+    assert not hasattr(model, "_visible_positions")
     assert model.data(model.index(99_999, 1), Qt.DisplayRole) == "QC-099999"
-    assert model.set_filter("QC-099999") == 1
-    assert model.identity_at(0) == "QC-099999"
+    assert model.identity_at(99_999) == "QC-099999"
+    assert not hasattr(model, "set_filter")
+    model.visible_row_for = lambda _identity: (_ for _ in ()).throw(
+        AssertionError("current-row hot path used linear fallback")
+    )
+    assert model.current_visible_row() == 99_999
+    assert model.neighbor_identity("QC-099999", -1) == "QC-099998"
+    model.refresh_identity("QC-099999")
 
 
-def test_queue_double_click_opens_exact_identity_and_filter_controls_visible_queue(
+def test_queue_double_click_and_previous_stay_inside_prepared_workflow_queue(
     qtbot,
     tmp_path,
 ) -> None:
     executor = _FakeExecutor()
     subjects = pd.DataFrame(
         {
-            "ezqcid": ["A-001", "B-001", "B-002"],
-            "image": ["a.nii", "b1.nii", "b2.nii"],
+            "ezqcid": ["B-001", "B-002"],
+            "image": ["b1.nii", "b2.nii"],
         }
     )
     controller = _controller_class()(
@@ -174,12 +189,11 @@ def test_queue_double_click_opens_exact_identity_and_filter_controls_visible_que
     controller.show()
     workspace = controller.workspace
 
-    workspace.queue_table.doubleClicked.emit(workspace.queue_model.index(2, 1))
+    workspace.queue_table.doubleClicked.emit(workspace.queue_model.index(1, 1))
 
     assert workspace.workflow.current_ezqcid == "B-002"
     assert executor.started[-1][0] == {0: "freeview b2.nii"}
 
-    assert workspace.set_queue_filter("B-")
     assert workspace.queue_model.rowCount() == 2
     assert [
         workspace.queue_model.data(
@@ -193,22 +207,48 @@ def test_queue_double_click_opens_exact_identity_and_filter_controls_visible_que
     assert executor.started[-1][0] == {0: "freeview b1.nii"}
 
 
-def test_dirty_draft_rejects_queue_filter_without_changing_visible_rows(
+def test_filter_action_requests_structured_transaction_and_dirty_draft_blocks_it(
+    qtbot,
+    tmp_path,
+) -> None:
+    controller = _controller_class()(_workflow(tmp_path))
+    qtbot.addWidget(controller)
+    controller.show()
+    workspace = controller.workspace
+    requests = []
+    workspace.filterRequested.connect(lambda: requests.append(True))
+
+    qtbot.mouseClick(workspace.filter_button, Qt.LeftButton)
+
+    assert requests == [True]
+    assert not hasattr(workspace, "set_queue_filter")
+
+    qtbot.mouseClick(workspace.score_buttons["1"]["Good"], Qt.LeftButton)
+    qtbot.mouseClick(workspace.filter_button, Qt.LeftButton)
+
+    assert requests == [True]
+    assert "请先保存当前修改" in workspace.error_text
+
+
+def test_dirty_draft_rejects_structured_filter_request_without_changing_queue(
     qtbot,
     tmp_path,
 ) -> None:
     workspace = QtQcWorkspace(_workflow(tmp_path))
     qtbot.addWidget(workspace)
+    requests = []
+    workspace.filterRequested.connect(lambda: requests.append(True))
     qtbot.mouseClick(workspace.score_buttons["1"]["Good"], Qt.LeftButton)
+    qtbot.mouseClick(workspace.filter_button, Qt.LeftButton)
 
-    assert not workspace.set_queue_filter("SUB002")
+    assert requests == []
     assert workspace.queue_model.rowCount() == 2
     assert workspace.workflow.current_ezqcid == "SUB001"
     assert workspace.workflow.dirty
     assert "请先保存" in workspace.error_text
 
 
-def test_filtered_save_next_saves_current_then_opens_next_visible_identity(
+def test_prepared_queue_save_next_stays_inside_workflow_identities(
     qtbot,
     tmp_path,
     monkeypatch,
@@ -216,8 +256,8 @@ def test_filtered_save_next_saves_current_then_opens_next_visible_identity(
     executor = _FakeExecutor()
     subjects = pd.DataFrame(
         {
-            "ezqcid": ["A-001", "B-001", "B-002"],
-            "image": ["a.nii", "b1.nii", "b2.nii"],
+            "ezqcid": ["B-001", "B-002"],
+            "image": ["b1.nii", "b2.nii"],
         }
     )
     controller = _controller_class()(
@@ -225,7 +265,6 @@ def test_filtered_save_next_saves_current_then_opens_next_visible_identity(
     )
     qtbot.addWidget(controller)
     workspace = controller.workspace
-    assert workspace.set_queue_filter("B-")
     assert workspace.workflow.current_ezqcid == "B-001"
     qtbot.mouseClick(workspace.score_buttons["1"]["Good"], Qt.LeftButton)
     qtbot.mouseClick(workspace.save_next_button, Qt.LeftButton)

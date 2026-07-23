@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from threading import Event
+from threading import Event, get_ident
 
 import pandas as pd
 from shiboken6 import isValid
@@ -22,11 +22,18 @@ from PySide6.QtWidgets import (
 )
 
 from core.app_services import build_app_services
+from core.event_bus import EventType
 from core.project_context_service import ProjectContextError
 from core.table_view_service import TableViewService
 from gui_qt.application import build_product_window
 from gui_qt.qc_results_page import QtQcResultsPage
-from models.table_view_state import SortRule
+from models.table_view_state import (
+    FilterCondition,
+    FilterExpression,
+    FilterGroup,
+    SortRule,
+    filter_expression_to_json_object,
+)
 
 
 
@@ -56,6 +63,52 @@ def _module_payload(*, name="AnatQC", label=None, rater="rater1"):
         "notes": None,
         "button": {},
     }
+
+
+def _site_filter(value: str, *, operator: str = "!=") -> FilterExpression:
+    return FilterExpression(
+        groups=(
+            FilterGroup(
+                group_id="site-filter",
+                join="all",
+                conditions=(
+                    FilterCondition(
+                        column="site",
+                        operator=operator,
+                        value=value,
+                        condition_id="site-condition",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+def _open_live_qc_filter(window, qtbot):
+    qtbot.mouseClick(window.qc_workspace.filter_button, Qt.LeftButton)
+    qtbot.waitUntil(
+        lambda: getattr(window, "qc_filter_dialog", None) is not None,
+        timeout=3000,
+    )
+    return window.qc_filter_dialog
+
+
+def _start_module_qc(window, qtbot, module_name="AnatQC"):
+    previous = window.qc_controller
+    window.navigation.setCurrentRow(window.modules_page_index)
+    qtbot.mouseClick(
+        window.config_workspace.module_start_buttons[module_name],
+        Qt.LeftButton,
+    )
+    qtbot.waitUntil(
+        lambda: window.qc_controller is not previous,
+        timeout=3000,
+    )
+    qtbot.waitUntil(
+        lambda: not window.qc_filter_task_controller.busy,
+        timeout=3000,
+    )
+    return window.qc_controller
 
 
 def _add_project(
@@ -399,12 +452,7 @@ def test_results_refresh_preserves_clean_qc_controller_and_view_state(
     tmp_path,
 ) -> None:
     window, _services = _window(qtbot, tmp_path)
-    window.navigation.setCurrentRow(window.modules_page_index)
-    qtbot.mouseClick(
-        window.config_workspace.module_start_buttons["AnatQC"],
-        Qt.LeftButton,
-    )
-    controller = window.qc_controller
+    controller = _start_module_qc(window, qtbot)
     assert window.results_workspace.apply_sort_rules(
         (SortRule("site", ascending=False),)
     )
@@ -456,11 +504,7 @@ def test_results_refresh_rejects_dirty_qc_with_specific_visible_error(
     tmp_path,
 ) -> None:
     window, _services = _window(qtbot, tmp_path)
-    window.navigation.setCurrentRow(window.modules_page_index)
-    qtbot.mouseClick(
-        window.config_workspace.module_start_buttons["AnatQC"],
-        Qt.LeftButton,
-    )
+    _start_module_qc(window, qtbot)
     qtbot.mouseClick(
         window.qc_workspace.score_buttons["1"]["Good"],
         Qt.LeftButton,
@@ -767,10 +811,7 @@ def test_module_rows_are_the_sole_visible_qc_launch_and_use_exact_module_name(
         for button in visible_launch_buttons
     )
 
-    qtbot.mouseClick(
-        window.config_workspace.module_start_buttons["FuncQC"],
-        Qt.LeftButton,
-    )
+    _start_module_qc(window, qtbot, "FuncQC")
 
     assert window.qc_workspace.workflow.current_module.name == "FuncQC"
     assert window.qc_controller is not None
@@ -803,6 +844,10 @@ def test_module_launch_core_error_remains_visible_on_module_page(
         window.config_workspace.module_start_buttons["AnatQC"],
         Qt.LeftButton,
     )
+    qtbot.waitUntil(
+        lambda: not window.qc_filter_task_controller.busy,
+        timeout=3000,
+    )
 
     assert window.qc_controller is None
     assert window.config_workspace.module_launch_status_label.isVisibleTo(
@@ -816,18 +861,10 @@ def test_module_launch_core_error_remains_visible_on_module_page(
 
 def test_module_launch_replaces_exactly_one_top_level_controller(qtbot, tmp_path) -> None:
     window, _services = _window(qtbot, tmp_path, second_module=True)
-    window.navigation.setCurrentRow(window.modules_page_index)
-    qtbot.mouseClick(
-        window.config_workspace.module_start_buttons["AnatQC"],
-        Qt.LeftButton,
-    )
-    first_controller = window.qc_controller
+    first_controller = _start_module_qc(window, qtbot)
     first_workflow = window.qc_workspace.workflow
 
-    qtbot.mouseClick(
-        window.config_workspace.module_start_buttons["FuncQC"],
-        Qt.LeftButton,
-    )
+    _start_module_qc(window, qtbot, "FuncQC")
 
     assert window.qc_controller is not first_controller
     assert window.qc_workspace.workflow is not first_workflow
@@ -896,11 +933,7 @@ def test_failed_qc_replacement_keeps_old_workflow_then_success_closes_it(
     monkeypatch,
 ) -> None:
     window, services = _window(qtbot, tmp_path, second_module=True)
-    window.navigation.setCurrentRow(window.modules_page_index)
-    qtbot.mouseClick(
-        window.config_workspace.module_start_buttons["AnatQC"],
-        Qt.LeftButton,
-    )
+    _start_module_qc(window, qtbot)
     previous = window.qc_workspace.workflow
     close_calls = []
     monkeypatch.setattr(
@@ -921,18 +954,462 @@ def test_failed_qc_replacement_keeps_old_workflow_then_success_closes_it(
         window.config_workspace.module_start_buttons["FuncQC"],
         Qt.LeftButton,
     )
+    qtbot.waitUntil(
+        lambda: not window.qc_filter_task_controller.busy,
+        timeout=3000,
+    )
 
     assert window.qc_workspace.workflow is previous
     assert close_calls == []
     assert "replacement failed" in window.shell_error_label.text()
 
     monkeypatch.setattr(services.project_context_service, "create_qc_workflow", real_factory)
-    qtbot.mouseClick(
-        window.config_workspace.module_start_buttons["FuncQC"],
-        Qt.LeftButton,
-    )
+    _start_module_qc(window, qtbot, "FuncQC")
     assert window.qc_workspace.workflow is not previous
     assert close_calls == [True]
+
+
+def test_qc_filter_prepares_hidden_candidate_before_save_then_swaps_and_refreshes(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    window, services = _window(qtbot, tmp_path)
+    old_controller = _start_module_qc(window, qtbot)
+    old_workflow = window.qc_workspace.workflow
+    real_save = services.configuration_service.save_module_filter
+    real_create = window.context_service.create_qc_workflow
+    real_build = window._build_qc_controller
+    save_started = Event()
+    allow_save = Event()
+    gui_thread = get_ident()
+    candidate_workflow_threads = []
+    candidate_controller_threads = []
+    published_threads = []
+    expected_identity_calls = []
+    services.event_bus.subscribe(
+        EventType.MODULES_CHANGED,
+        lambda _event: published_threads.append(get_ident()),
+    )
+
+    def tracked_create(*args, **kwargs):
+        candidate_workflow_threads.append(get_ident())
+        return real_create(*args, **kwargs)
+
+    def tracked_build(workflow):
+        candidate_controller_threads.append(get_ident())
+        return real_build(workflow)
+
+    def delayed_save(
+        module_name,
+        expression,
+        *,
+        notify=True,
+        expected_identities=None,
+    ):
+        expected_identity_calls.append(expected_identities)
+        save_started.set()
+        assert allow_save.wait(2)
+        return real_save(
+            module_name,
+            expression,
+            notify=notify,
+            expected_identities=expected_identities,
+        )
+
+    monkeypatch.setattr(
+        services.configuration_service,
+        "save_module_filter",
+        delayed_save,
+    )
+    monkeypatch.setattr(
+        window.context_service,
+        "create_qc_workflow",
+        tracked_create,
+    )
+    monkeypatch.setattr(window, "_build_qc_controller", tracked_build)
+    qtbot.mouseClick(window.qc_workspace.filter_button, Qt.LeftButton)
+    qtbot.waitUntil(
+        lambda: getattr(window, "qc_filter_dialog", None) is not None,
+        timeout=3000,
+    )
+    dialog = window.qc_filter_dialog
+    expression = _site_filter("A")
+    dialog.editor.set_expression(expression)
+    qtbot.mouseClick(dialog.apply_button, Qt.LeftButton)
+    qtbot.waitUntil(save_started.is_set, timeout=3000)
+
+    transaction = window._pending_qc_filter
+    assert window.qc_controller is old_controller
+    assert window.qc_workspace.workflow is old_workflow
+    assert transaction.candidate_controller is not None
+    assert not transaction.candidate_controller.isVisible()
+    assert services.configuration_service.modules()[0].qc_filter is None
+    dialog.reject()
+    qtbot.waitUntil(lambda: not isValid(dialog), timeout=3000)
+    assert window._pending_qc_filter.dialog is None
+
+    allow_save.set()
+    qtbot.waitUntil(lambda: window.qc_controller is not old_controller, timeout=3000)
+    replacement = window.qc_controller
+    qtbot.waitUntil(
+        lambda: not window.context_task_controller.busy,
+        timeout=3000,
+    )
+    qtbot.waitUntil(
+        lambda: not window.config_workspace.module_filter_task_controller.busy,
+        timeout=3000,
+    )
+
+    assert replacement.isVisible()
+    assert window.qc_controller is replacement
+    assert window.qc_workspace.workflow.subject_ids == ("SUB002", "SUB003")
+    assert window.qc_workspace.workflow.current_ezqcid == "SUB002"
+    assert "2 条" in window.qc_workspace.filter_button.toolTip()
+    assert services.configuration_service.modules()[0].qc_filter == (
+        filter_expression_to_json_object(expression)
+    )
+    assert expected_identity_calls == [("SUB002", "SUB003")]
+    assert candidate_workflow_threads
+    assert all(thread != gui_thread for thread in candidate_workflow_threads)
+    assert candidate_controller_threads == [gui_thread]
+    assert published_threads == [get_ident()]
+    assert window.config_workspace.module_filter_summary.text() == "已筛选：2 条"
+    assert not isValid(old_controller) or not old_controller.isVisible()
+
+
+def test_qc_filter_dialog_profiles_prepare_off_thread_and_cancel_writes_nothing(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    window, services = _window(qtbot, tmp_path)
+    _start_module_qc(window, qtbot)
+    gui_thread = get_ident()
+    prepare_threads = []
+    prepared_columns = []
+    real_init = TableViewService.__init__
+
+    def tracked_init(service, source):
+        prepare_threads.append(get_ident())
+        prepared_columns.append(tuple(source.columns))
+        real_init(service, source)
+
+    monkeypatch.setattr(TableViewService, "__init__", tracked_init)
+    dialog = _open_live_qc_filter(window, qtbot)
+
+    assert prepare_threads
+    assert all(thread != gui_thread for thread in prepare_threads)
+    assert prepared_columns[-1] == tuple(window.current_context.subjects.columns)
+    assert tuple(profile.name for profile in dialog.editor._profiles) == (
+        "ezqcid",
+        "site",
+        "image",
+    )
+
+    dialog.reject()
+    qtbot.waitUntil(lambda: window.qc_filter_dialog is None, timeout=3000)
+
+    assert services.configuration_service.modules()[0].qc_filter is None
+    assert window.qc_workspace.workflow.subject_ids == (
+        "SUB001",
+        "SUB002",
+        "SUB003",
+    )
+
+
+def test_qc_filter_persistence_failure_preserves_then_success_retains_identity(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    window, services = _window(qtbot, tmp_path)
+    old_controller = _start_module_qc(window, qtbot)
+    window.qc_workspace.workflow.navigate_to("SUB002")
+    window.qc_workspace._refresh()
+    close_calls = []
+    monkeypatch.setattr(
+        services.code_executor,
+        "close_current_processes",
+        lambda: close_calls.append(True),
+    )
+    real_save = services.configuration_service.save_module_filter
+
+    def fail_save(*args, **kwargs):
+        raise OSError("module filter disk unavailable")
+
+    monkeypatch.setattr(
+        services.configuration_service,
+        "save_module_filter",
+        fail_save,
+    )
+    dialog = _open_live_qc_filter(window, qtbot)
+    dialog.editor.set_expression(_site_filter("A"))
+    qtbot.mouseClick(dialog.apply_button, Qt.LeftButton)
+    qtbot.waitUntil(
+        lambda: not window.qc_filter_task_controller.busy,
+        timeout=3000,
+    )
+
+    assert window.qc_controller is old_controller
+    assert window.qc_workspace.workflow.current_ezqcid == "SUB002"
+    assert services.configuration_service.modules()[0].qc_filter is None
+    assert "disk unavailable" in window.qc_workspace.error_text
+    assert dialog.isVisible()
+    assert close_calls == []
+
+    monkeypatch.setattr(
+        services.configuration_service,
+        "save_module_filter",
+        real_save,
+    )
+    qtbot.mouseClick(dialog.apply_button, Qt.LeftButton)
+    qtbot.waitUntil(lambda: window.qc_controller is not old_controller, timeout=3000)
+    qtbot.waitUntil(
+        lambda: not window.qc_filter_task_controller.busy,
+        timeout=3000,
+    )
+
+    assert window.qc_workspace.workflow.subject_ids == ("SUB002", "SUB003")
+    assert window.qc_workspace.workflow.current_ezqcid == "SUB002"
+    assert close_calls == [True]
+
+
+def test_qc_filter_expected_identity_mismatch_preserves_live_controller_and_settings(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    window, services = _window(qtbot, tmp_path)
+    old_controller = _start_module_qc(window, qtbot)
+    old_workflow = window.qc_workspace.workflow
+    changed_subjects = window.current_context.subjects.copy(deep=True)
+    changed_subjects["site"] = ["A", "A", "A"]
+    close_calls = []
+    monkeypatch.setattr(
+        services.configuration_service,
+        "subjects",
+        lambda: changed_subjects.copy(deep=True),
+    )
+    monkeypatch.setattr(
+        services.code_executor,
+        "close_current_processes",
+        lambda: close_calls.append(True),
+    )
+
+    dialog = _open_live_qc_filter(window, qtbot)
+    dialog.editor.set_expression(_site_filter("A"))
+    qtbot.mouseClick(dialog.apply_button, Qt.LeftButton)
+    qtbot.waitUntil(
+        lambda: not window.qc_filter_task_controller.busy,
+        timeout=3000,
+    )
+
+    assert window.qc_controller is old_controller
+    assert window.qc_workspace.workflow is old_workflow
+    assert window.qc_workspace.workflow.current_ezqcid == "SUB001"
+    assert services.configuration_service.modules()[0].qc_filter is None
+    assert "matches changed" in window.qc_workspace.error_text
+    assert dialog.isVisible()
+    assert close_calls == []
+
+
+def test_qc_filter_zero_match_and_candidate_failure_write_nothing(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    window, services = _window(qtbot, tmp_path)
+    old_controller = _start_module_qc(window, qtbot)
+    save_calls = []
+    viewer_close_calls = []
+    real_create = window.context_service.create_qc_workflow
+    monkeypatch.setattr(
+        services.code_executor,
+        "close_current_processes",
+        lambda: viewer_close_calls.append(True),
+    )
+    monkeypatch.setattr(
+        services.configuration_service,
+        "save_module_filter",
+        lambda *args, **kwargs: save_calls.append((args, kwargs)),
+    )
+
+    dialog = _open_live_qc_filter(window, qtbot)
+    dialog.editor.set_expression(_site_filter("Z", operator="=="))
+    qtbot.mouseClick(dialog.apply_button, Qt.LeftButton)
+    qtbot.waitUntil(
+        lambda: not window.qc_filter_task_controller.busy,
+        timeout=3000,
+    )
+
+    assert window.qc_controller is old_controller
+    assert "matches no subjects" in window.qc_workspace.error_text
+    assert save_calls == []
+    assert services.configuration_service.modules()[0].qc_filter is None
+
+    def fail_candidate(*args, **kwargs):
+        raise ProjectContextError("candidate workflow unavailable")
+
+    monkeypatch.setattr(
+        window.context_service,
+        "create_qc_workflow",
+        fail_candidate,
+    )
+    dialog.editor.set_expression(_site_filter("A"))
+    qtbot.mouseClick(dialog.apply_button, Qt.LeftButton)
+    qtbot.waitUntil(
+        lambda: not window.qc_filter_task_controller.busy,
+        timeout=3000,
+    )
+
+    assert window.qc_controller is old_controller
+    assert "candidate workflow unavailable" in window.qc_workspace.error_text
+    assert save_calls == []
+    assert viewer_close_calls == []
+    assert services.configuration_service.modules()[0].qc_filter is None
+    monkeypatch.setattr(
+        window.context_service,
+        "create_qc_workflow",
+        real_create,
+    )
+
+    def fail_controller(_workflow):
+        raise RuntimeError("candidate controller unavailable")
+
+    monkeypatch.setattr(window, "_build_qc_controller", fail_controller)
+    dialog.editor.set_expression(_site_filter("A"))
+    qtbot.mouseClick(dialog.apply_button, Qt.LeftButton)
+    qtbot.waitUntil(
+        lambda: not window.qc_filter_task_controller.busy,
+        timeout=3000,
+    )
+
+    assert window.qc_controller is old_controller
+    assert "candidate controller unavailable" in window.qc_workspace.error_text
+    assert save_calls == []
+    assert viewer_close_calls == []
+    assert services.configuration_service.modules()[0].qc_filter is None
+
+    invalid = FilterExpression(
+        groups=(
+            FilterGroup(
+                group_id="invalid-group",
+                join="all",
+                conditions=(
+                    FilterCondition(
+                        column="rating_only",
+                        operator="==",
+                        value="Good",
+                        condition_id="invalid-condition",
+                    ),
+                ),
+            ),
+        ),
+    )
+    dialog.applyRequested.emit(invalid)
+    qtbot.waitUntil(
+        lambda: not window.qc_filter_task_controller.busy,
+        timeout=3000,
+    )
+
+    assert window.qc_controller is old_controller
+    assert "rating_only" in window.qc_workspace.error_text
+    assert save_calls == []
+    assert viewer_close_calls == []
+    assert services.configuration_service.modules()[0].qc_filter is None
+
+
+def test_saved_filter_launch_then_qc_clear_restores_complete_queue(qtbot, tmp_path) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    _add_project(services, tmp_path, "SAMPLE")
+    expression = _site_filter("A")
+    assert services.configuration_service.save_module_filter(
+        "AnatQC",
+        expression,
+        notify=False,
+    ) == ("SUB002", "SUB003")
+    window = build_product_window(services)
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
+    window.navigation.setCurrentRow(window.modules_page_index)
+
+    qtbot.mouseClick(
+        window.config_workspace.module_start_buttons["AnatQC"],
+        Qt.LeftButton,
+    )
+    qtbot.waitUntil(lambda: window.qc_controller is not None, timeout=3000)
+    qtbot.waitUntil(
+        lambda: not window.qc_filter_task_controller.busy,
+        timeout=3000,
+    )
+
+    assert window.qc_workspace.workflow.subject_ids == ("SUB002", "SUB003")
+    assert window.qc_workspace.workflow.current_ezqcid == "SUB002"
+    assert "2 条" in window.qc_workspace.filter_button.toolTip()
+
+    filtered_controller = window.qc_controller
+    dialog = _open_live_qc_filter(window, qtbot)
+    dialog.editor.set_expression(FilterExpression())
+    qtbot.mouseClick(dialog.apply_button, Qt.LeftButton)
+    qtbot.waitUntil(
+        lambda: window.qc_controller is not filtered_controller,
+        timeout=3000,
+    )
+    qtbot.waitUntil(
+        lambda: not window.qc_filter_task_controller.busy,
+        timeout=3000,
+    )
+
+    assert window.qc_workspace.workflow.subject_ids == (
+        "SUB001",
+        "SUB002",
+        "SUB003",
+    )
+    assert window.qc_workspace.workflow.current_ezqcid == "SUB002"
+    assert services.configuration_service.modules()[0].qc_filter == (
+        filter_expression_to_json_object(FilterExpression())
+    )
+    assert window.qc_workspace.filter_button.toolTip() == "全部质控名单 · 3 条"
+
+
+def test_unfiltered_module_launch_builds_workflow_off_thread_and_controller_on_gui(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    window, _services = _window(qtbot, tmp_path)
+    gui_thread = get_ident()
+    workflow_threads = []
+    controller_threads = []
+    real_create = window.context_service.create_qc_workflow
+    real_build = window._build_qc_controller
+
+    def tracked_create(*args, **kwargs):
+        workflow_threads.append(get_ident())
+        return real_create(*args, **kwargs)
+
+    def tracked_build(workflow):
+        controller_threads.append(get_ident())
+        return real_build(workflow)
+
+    monkeypatch.setattr(
+        window.context_service,
+        "create_qc_workflow",
+        tracked_create,
+    )
+    monkeypatch.setattr(window, "_build_qc_controller", tracked_build)
+
+    _start_module_qc(window, qtbot)
+    qtbot.waitUntil(
+        lambda: not window.qc_filter_task_controller.busy,
+        timeout=3000,
+    )
+
+    assert workflow_threads
+    assert all(thread != gui_thread for thread in workflow_threads)
+    assert controller_threads == [gui_thread]
 
 
 def test_dirty_qc_disables_context_replacement_and_close_requires_confirmation(
@@ -941,11 +1418,7 @@ def test_dirty_qc_disables_context_replacement_and_close_requires_confirmation(
     monkeypatch,
 ) -> None:
     window, _services = _window(qtbot, tmp_path)
-    window.navigation.setCurrentRow(window.modules_page_index)
-    qtbot.mouseClick(
-        window.config_workspace.module_start_buttons["AnatQC"],
-        Qt.LeftButton,
-    )
+    _start_module_qc(window, qtbot)
     qtbot.mouseClick(window.qc_workspace.score_buttons["1"]["Good"], Qt.LeftButton)
 
     assert window.qc_workspace.workflow.dirty
@@ -969,12 +1442,7 @@ def test_main_close_accepts_dirty_draft_once_and_closes_controller_resources(
     monkeypatch,
 ) -> None:
     window, services = _window(qtbot, tmp_path)
-    window.navigation.setCurrentRow(window.modules_page_index)
-    qtbot.mouseClick(
-        window.config_workspace.module_start_buttons["AnatQC"],
-        Qt.LeftButton,
-    )
-    controller = window.qc_controller
+    controller = _start_module_qc(window, qtbot)
     close_calls = []
     monkeypatch.setattr(
         services.code_executor,
@@ -1001,11 +1469,7 @@ def test_rating_save_refreshes_table_and_preserves_view_state_and_qc_session(
     tmp_path,
 ) -> None:
     window, _services = _window(qtbot, tmp_path)
-    window.navigation.setCurrentRow(window.modules_page_index)
-    qtbot.mouseClick(
-        window.config_workspace.module_start_buttons["AnatQC"],
-        Qt.LeftButton,
-    )
+    _start_module_qc(window, qtbot)
     table = window.table_workspace
     results = window.results_workspace
     assert table.apply_sort_rules((SortRule("site", ascending=False),))

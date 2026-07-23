@@ -444,8 +444,13 @@ class ConfigurationService:
         expression: FilterExpression,
         *,
         notify: bool = True,
+        expected_identities: tuple[str, ...] | None = None,
     ) -> tuple[str, ...]:
-        """Validate and atomically save only one module's structured filter."""
+        """Validate and atomically save only one module's structured filter.
+
+        When ``expected_identities`` is supplied, the current complete list
+        must still resolve to that exact ordered tuple before settings commit.
+        """
 
         if not isinstance(module_name, str) or not module_name.strip():
             raise ConfigurationError("Module name must be a nonblank string")
@@ -472,6 +477,17 @@ class ConfigurationService:
             serialized = filter_expression_to_json_object(expression)
         except (TableViewError, TableViewStateContractError) as exc:
             raise ConfigurationError(str(exc)) from exc
+        if expected_identities is not None:
+            if not isinstance(expected_identities, tuple) or not all(
+                isinstance(identity, str) for identity in expected_identities
+            ):
+                raise ConfigurationError(
+                    "Expected module filter identities must be a tuple of strings"
+                )
+            if identities != expected_identities:
+                raise ConfigurationError(
+                    "QC module filter matches changed before settings commit"
+                )
 
         selected = matches[0]
         selected["qc_filter"] = serialized
