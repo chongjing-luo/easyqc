@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 import re
@@ -135,6 +136,7 @@ class QCModule:
     control: bool = False
     showing: bool = True
     select_filter: str | None = None
+    qc_filter: dict[str, Any] | None = None
     button: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -163,6 +165,7 @@ class QCModule:
             control=bool(data.get("control", False)),
             showing=bool(data.get("showing", True)),
             select_filter=data.get("select_filter"),
+            qc_filter=deepcopy(data.get("qc_filter")),
             button=data.get("button", {}),
         )
 
@@ -179,6 +182,7 @@ class QCModule:
             "interper": self.interper,
             "control": self.control,
             "select_filter": self.select_filter,
+            "qc_filter": deepcopy(self.qc_filter),
             "showing": self.showing,
             "code_exe": self.code_exe,
             "time": _format_datetime(self.time),

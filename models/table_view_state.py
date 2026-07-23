@@ -16,6 +16,7 @@ import pandas as pd
 MAX_FILTER_GROUPS = 16
 MAX_FILTER_CONDITIONS_PER_GROUP = 64
 MAX_FILTER_CONDITIONS = 256
+FILTER_EXPRESSION_SCHEMA_VERSION = 1
 
 
 class ColumnKind(str, Enum):
@@ -161,20 +162,7 @@ class TableViewState:
                 "widths": [list(item) for item in self.columns.widths],
                 "pinned": list(self.columns.pinned),
             },
-            "filter": {
-                "group_join": expression.group_join,
-                "groups": [
-                    {
-                        "group_id": group.group_id,
-                        "join": group.join,
-                        "conditions": [
-                            _condition_to_json_object(condition)
-                            for condition in group.conditions
-                        ],
-                    }
-                    for group in expression.groups
-                ],
-            },
+            "filter": _filter_expression_to_json_body(expression),
             "sort_rules": [
                 {"column": rule.column, "ascending": rule.ascending}
                 for rule in self.sort_rules
@@ -289,6 +277,56 @@ def normalize_table_view_state_payload(value: object) -> TableViewState:
         revision=_integer(record["revision"], "revision", minimum=0),
         filter=expression,
     )
+
+
+def filter_expression_from_json_object(
+    value: object | None,
+) -> FilterExpression:
+    """Read one standalone schema-version-1 filter without side effects.
+
+    ``None`` is the backward-compatible representation of a missing module
+    filter. Any non-null payload must satisfy the complete strict schema.
+    """
+
+    if value is None:
+        return FilterExpression()
+    record = _record(value, "filter")
+    _require_fields(
+        record,
+        {"schema_version", "group_join", "groups"},
+        "filter",
+    )
+    version = _integer(
+        record["schema_version"],
+        "filter.schema_version",
+        minimum=1,
+    )
+    if version != FILTER_EXPRESSION_SCHEMA_VERSION:
+        raise TableViewStateContractError(
+            f"unsupported filter schema_version: {version}"
+        )
+    expression = _filter_from_json_object(
+        {
+            "group_join": record["group_join"],
+            "groups": record["groups"],
+        }
+    )
+    _validate_filter_expression_contract(expression)
+    return expression if expression.groups else FilterExpression()
+
+
+def filter_expression_to_json_object(
+    expression: FilterExpression,
+) -> dict[str, object]:
+    """Serialize one standalone filter as the strict schema-version-1 object."""
+
+    _validate_filter_expression_contract(expression)
+    if not expression.groups:
+        expression = FilterExpression()
+    return {
+        "schema_version": FILTER_EXPRESSION_SCHEMA_VERSION,
+        **_filter_expression_to_json_body(expression),
+    }
 
 
 def _columns_from_json_object(value: object) -> ColumnViewState:
@@ -418,6 +456,25 @@ def _condition_to_json_object(condition: FilterCondition) -> dict[str, object]:
     }
 
 
+def _filter_expression_to_json_body(
+    expression: FilterExpression,
+) -> dict[str, object]:
+    return {
+        "group_join": expression.group_join,
+        "groups": [
+            {
+                "group_id": group.group_id,
+                "join": group.join,
+                "conditions": [
+                    _condition_to_json_object(condition)
+                    for condition in group.conditions
+                ],
+            }
+            for group in expression.groups
+        ],
+    }
+
+
 def _sort_rule_from_json_object(value: object, index: int) -> SortRule:
     label = f"sort_rules[{index}]"
     record = _record(value, label)
@@ -479,6 +536,63 @@ def _validate_filter_bounds(expression: FilterExpression) -> None:
         raise TableViewStateContractError(
             f"filter contains at most {MAX_FILTER_CONDITIONS} conditions"
         )
+
+
+def _validate_filter_expression_contract(
+    expression: FilterExpression,
+) -> None:
+    if not isinstance(expression, FilterExpression):
+        raise TableViewStateContractError(
+            "filter must be a FilterExpression"
+        )
+    _validate_filter_bounds(expression)
+    if expression.group_join not in {"all", "any"}:
+        raise TableViewStateContractError(
+            "filter.group_join must be 'all' or 'any'"
+        )
+
+    seen_groups: set[str] = set()
+    seen_conditions: set[str] = set()
+    for group_index, group in enumerate(expression.groups):
+        label = f"filter.groups[{group_index}]"
+        if not isinstance(group, FilterGroup):
+            raise TableViewStateContractError(
+                f"{label} must be a FilterGroup"
+            )
+        if not isinstance(group.group_id, str) or not group.group_id.strip():
+            raise TableViewStateContractError(
+                f"{label}.group_id must be a nonblank string"
+            )
+        if group.group_id in seen_groups:
+            raise TableViewStateContractError(
+                f"{label}.group_id is duplicated: {group.group_id}"
+            )
+        seen_groups.add(group.group_id)
+        if group.join not in {"all", "any"}:
+            raise TableViewStateContractError(
+                f"{label}.join must be 'all' or 'any'"
+            )
+
+        for condition_index, condition in enumerate(group.conditions):
+            condition_label = f"{label}.conditions[{condition_index}]"
+            if not isinstance(condition, FilterCondition):
+                raise TableViewStateContractError(
+                    f"{condition_label} must be a FilterCondition"
+                )
+            _text(condition.column, f"{condition_label}.column")
+            _text(condition.operator, f"{condition_label}.operator")
+            _text(condition.condition_id, f"{condition_label}.condition_id")
+            if condition.condition_id in seen_conditions:
+                raise TableViewStateContractError(
+                    f"{condition_label}.condition_id is duplicated: "
+                    f"{condition.condition_id}"
+                )
+            seen_conditions.add(condition.condition_id)
+            _boolean(condition.enabled, f"{condition_label}.enabled")
+            _json_output_value(
+                condition.value,
+                f"{condition_label}.value",
+            )
 
 
 def _text(value: object, label: str, *, allow_empty: bool = False) -> str:
@@ -545,6 +659,7 @@ __all__ = [
     "ColumnKind",
     "ColumnProfile",
     "ColumnViewState",
+    "FILTER_EXPRESSION_SCHEMA_VERSION",
     "FilterCondition",
     "FilterExpression",
     "FilterGroup",
@@ -556,5 +671,7 @@ __all__ = [
     "TableViewResult",
     "TableViewState",
     "TableViewStateContractError",
+    "filter_expression_from_json_object",
+    "filter_expression_to_json_object",
     "normalize_table_view_state_payload",
 ]

@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from models.qcmodule import QCModule, Score, Tag
+from models.rating import Rating
 
 
 def test_score_and_tag_round_trip() -> None:
@@ -35,14 +36,12 @@ def test_qcmodule_accepts_missing_optional_legacy_fields() -> None:
     assert module.to_legacy_dict()["interper"] == "shell"
 
 
-# 16-key schema is the durable contract (verified against real
-# easyqc_CCNPPEKI settings + rating JSON). watch_mode + button are the two
-# keys the model used to drop silently. button was already modeled; watch_mode
-# was not (BUG-1).
-_ALL_SIXTEEN_KEYS = {
+# The 16-key legacy schema was verified against real easyqc_CCNPPEKI settings
+# and rating JSON. qc_filter is the one optional structured extension.
+_ALL_MODULE_KEYS = {
     "name", "label", "rater", "ezqcid", "watch_mode", "interper", "code",
     "code_exe", "tags", "scores", "notes", "time", "control", "showing",
-    "select_filter", "button",
+    "select_filter", "qc_filter", "button",
 }
 
 
@@ -68,19 +67,19 @@ def _sixteen_key_legacy_module() -> dict:
     }
 
 
-def test_qcmodule_sixteen_key_round_trip_preserves_all_keys() -> None:
-    """BUG-1: from_legacy_dict → to_legacy_dict must preserve all 16 keys,
-    including watch_mode (previously dropped silently)."""
+def test_qcmodule_round_trip_preserves_all_module_keys() -> None:
+    """The module model must preserve the legacy keys plus qc_filter."""
     legacy = _sixteen_key_legacy_module()
 
     module = QCModule.from_legacy_dict(legacy)
     result = module.to_legacy_dict()
 
-    assert set(result.keys()) == _ALL_SIXTEEN_KEYS, (
-        f"missing keys: {_ALL_SIXTEEN_KEYS - set(result.keys())}; "
-        f"extra keys: {set(result.keys()) - _ALL_SIXTEEN_KEYS}"
+    assert set(result.keys()) == _ALL_MODULE_KEYS, (
+        f"missing keys: {_ALL_MODULE_KEYS - set(result.keys())}; "
+        f"extra keys: {set(result.keys()) - _ALL_MODULE_KEYS}"
     )
     assert result["watch_mode"] is False
+    assert result["qc_filter"] is None
 
 
 def test_qcmodule_watch_mode_field_round_trip_values() -> None:
@@ -101,3 +100,34 @@ def test_qcmodule_watch_mode_defaults_false_when_absent() -> None:
     module = QCModule.from_legacy_dict(legacy)
     assert module.watch_mode is False
     assert module.to_legacy_dict()["watch_mode"] is False
+
+
+def test_qcmodule_and_rating_snapshot_preserve_structured_qc_filter() -> None:
+    legacy = _sixteen_key_legacy_module()
+    legacy["qc_filter"] = {
+        "schema_version": 1,
+        "group_join": "all",
+        "groups": [
+            {
+                "group_id": "site-group",
+                "join": "any",
+                "conditions": [
+                    {
+                        "column": "site",
+                        "operator": "==",
+                        "value": "A",
+                        "condition_id": "site-a",
+                        "enabled": True,
+                    }
+                ],
+            }
+        ],
+    }
+
+    module = QCModule.from_legacy_dict(legacy)
+    module_payload = module.to_legacy_dict()
+    rating_payload = Rating.from_module(module).to_legacy_dict()
+
+    assert module.qc_filter == legacy["qc_filter"]
+    assert module_payload["qc_filter"] == legacy["qc_filter"]
+    assert rating_payload["qc_filter"] == legacy["qc_filter"]
