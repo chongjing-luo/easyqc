@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -23,8 +24,11 @@ from PySide6.QtWidgets import (
     QLayout,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
+    QSplitter,
     QTableView,
+    QTabWidget,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -39,9 +43,11 @@ from core.table_export_service import (
 )
 from core.table_view_service import QcIdentityError, TableViewError, TableViewService
 from gui_qt.columns_dialog import ColumnsDialog
+from gui_qt.columns_panel import ColumnsPanel
 from gui_qt.filter_dialog import FilterDialog
-from gui_qt.filter_panel import operator_label
+from gui_qt.filter_panel import FilterPanel, operator_label
 from gui_qt.sort_dialog import SortDialog
+from gui_qt.sort_panel import SortPanel
 from gui_qt.table_model import QtTableModel, QtTableRowReference
 from gui_qt.task_runner import RevisionedTaskController
 from models.table_view_state import (
@@ -102,6 +108,7 @@ class QtTableWorkspace(QWidget):
         self.filter_dialog: FilterDialog | None = None
         self.sort_dialog: SortDialog | None = None
         self.columns_dialog: ColumnsDialog | None = None
+        self._inspector_origin_revision: int | None = None
         self.result = self.service.apply_state(self.applied_state)
         self.row_window = self.service.get_window(
             self.result,
@@ -120,18 +127,6 @@ class QtTableWorkspace(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
 
-        title_row = QHBoxLayout()
-        table_title = QLabel("Subjects", self)
-        table_title.setObjectName("tableTitle")
-        self.count_label = QLabel("", self)
-        self.count_label.setObjectName("tableStatus")
-        self.count_label.setAccessibleName("Table row count")
-        self.count_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        title_row.addWidget(table_title)
-        title_row.addStretch(1)
-        title_row.addWidget(self.count_label)
-        layout.addLayout(title_row)
-
         self.action_toolbar = QToolBar("Table actions", self)
         self.action_toolbar.setObjectName("tableToolbar")
         self.action_toolbar.setAccessibleName("Table actions")
@@ -144,19 +139,19 @@ class QtTableWorkspace(QWidget):
             self.action_toolbar,
             "Filter",
             QKeySequence("Ctrl+Shift+F"),
-            self.open_filter_dialog,
+            self.open_filter_inspector,
         )
         self.sort_action = self._add_toolbar_action(
             self.action_toolbar,
             "Sort",
             QKeySequence("Ctrl+Shift+S"),
-            self.open_sort_dialog,
+            self.open_sort_inspector,
         )
         self.columns_action = self._add_toolbar_action(
             self.action_toolbar,
             "Columns",
             QKeySequence("Ctrl+Shift+C"),
-            self.open_columns_dialog,
+            self.open_columns_inspector,
         )
         self.action_toolbar.addSeparator()
         self.filter_button = self.action_toolbar.widgetForAction(self.filter_action)
@@ -190,16 +185,7 @@ class QtTableWorkspace(QWidget):
             self.cancel_export,
         )
         self.cancel_export_action.setVisible(False)
-        self.open_qc_action = self._add_toolbar_action(
-            self.action_toolbar,
-            "Open QC…",
-            QKeySequence("Ctrl+Return"),
-            self.open_selected_qc,
-        )
         self.find_button = self.action_toolbar.widgetForAction(self.find_action)
-        self.open_qc_button = self.action_toolbar.widgetForAction(self.open_qc_action)
-        self.open_qc_button.setObjectName("primaryAction")
-        self.open_qc_button.setAccessibleName("Open selected subject QC")
         self.critical_actions = (
             self.filter_action,
             self.sort_action,
@@ -207,9 +193,13 @@ class QtTableWorkspace(QWidget):
             self.find_action,
             self.export_action,
             self.cancel_export_action,
-            self.open_qc_action,
         )
         self.critical_shortcuts = tuple(self._toolbar_shortcuts)
+        self.open_qc_action = QAction(self)
+        self.open_qc_action.setObjectName("internalOpenQcAction")
+        self.open_qc_action.setVisible(False)
+        self.open_qc_action.setEnabled(False)
+        self.open_qc_button = None
         layout.addWidget(self.action_toolbar)
 
         self.applied_toolbar = QToolBar("Applied view", self)
@@ -220,16 +210,27 @@ class QtTableWorkspace(QWidget):
         self.applied_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
         layout.addWidget(self.applied_toolbar)
 
+        self.workspace_splitter = QSplitter(Qt.Horizontal, self)
+        self.workspace_splitter.setObjectName("tableWorkspaceSplitter")
+        self.workspace_splitter.setAccessibleName("Table and view inspector")
+        self.workspace_splitter.setChildrenCollapsible(False)
+        self.table_panel = QWidget(self.workspace_splitter)
+        self.table_panel.setObjectName("tableMainPanel")
+        self.table_panel.setMinimumWidth(0)
+        table_panel_layout = QVBoxLayout(self.table_panel)
+        table_panel_layout.setContentsMargins(0, 0, 0, 0)
+        table_panel_layout.setSpacing(6)
+
         self.empty_state_label = QLabel(
             "No project table is connected to Qt Preview. Use the default GUI for real QC.",
-            self,
+            self.table_panel,
         )
         self.empty_state_label.setObjectName("previewEmptyState")
         self.empty_state_label.setWordWrap(True)
         self.empty_state_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.empty_state_label)
+        table_panel_layout.addWidget(self.empty_state_label)
 
-        self.table_surface = QFrame(self)
+        self.table_surface = QFrame(self.table_panel)
         self.table_surface.setObjectName("tableSurface")
         self.table_surface.setMinimumWidth(0)
         table_layout = QHBoxLayout(self.table_surface)
@@ -239,9 +240,9 @@ class QtTableWorkspace(QWidget):
         self.table_model = QtTableModel(self.row_window, self)
         self.table_view = QTableView(self.table_surface)
         self.table_view.setObjectName("previewTable")
-        self.table_view.setAccessibleName("EasyQC subject preview table")
+        self.table_view.setAccessibleName("EasyQC pre-QC list")
         self.table_view.setAccessibleDescription(
-            "Read-only subject rows. Filter and sort operate on the complete result."
+            "Read-only list rows. Filter and sort operate on the complete result."
         )
         self.pinned_view = QTableView(self.table_surface)
         self.pinned_view.setObjectName("pinnedIdentityTable")
@@ -266,12 +267,15 @@ class QtTableWorkspace(QWidget):
         table_layout.addWidget(self.pinned_view)
         table_layout.addWidget(self.table_view, 1)
 
-        layout.addWidget(self.table_surface, 1)
+        table_panel_layout.addWidget(self.table_surface, 1)
 
-        footer = QFrame(self)
+        footer = QFrame(self.table_panel)
         footer.setObjectName("tableFooter")
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(10, 7, 10, 7)
+        self.count_label = QLabel("", footer)
+        self.count_label.setObjectName("tableStatus")
+        self.count_label.setAccessibleName("Table row count")
         self.range_label = QLabel("", footer)
         self.columns_status_label = QLabel("", footer)
         self.sort_status_label = QLabel("", footer)
@@ -279,6 +283,7 @@ class QtTableWorkspace(QWidget):
         self.export_status_label.setAccessibleName("Table export status")
         self.selection_status_label = QLabel("No row selected", footer)
         for status_label in (
+            self.count_label,
             self.range_label,
             self.columns_status_label,
             self.sort_status_label,
@@ -287,6 +292,7 @@ class QtTableWorkspace(QWidget):
         ):
             status_label.setMinimumWidth(0)
             status_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        footer_layout.addWidget(self.count_label)
         footer_layout.addWidget(self.range_label)
         footer_layout.addWidget(self.columns_status_label)
         footer_layout.addWidget(self.sort_status_label)
@@ -304,13 +310,24 @@ class QtTableWorkspace(QWidget):
         footer_layout.addWidget(self.page_size_combo)
         footer_layout.addWidget(self.previous_button)
         footer_layout.addWidget(self.next_button)
-        layout.addWidget(footer)
+        table_panel_layout.addWidget(footer)
 
-        self.error_label = QLabel("", self)
+        self.error_label = QLabel("", self.table_panel)
         self.error_label.setObjectName("tableError")
         self.error_label.setWordWrap(True)
         self.error_label.setAccessibleName("Table action error")
-        layout.addWidget(self.error_label)
+        table_panel_layout.addWidget(self.error_label)
+
+        self._build_view_inspector()
+        self.workspace_splitter.addWidget(self.table_panel)
+        self.workspace_splitter.addWidget(self.view_inspector)
+        self.workspace_splitter.setCollapsible(0, False)
+        self.workspace_splitter.setCollapsible(1, True)
+        self.workspace_splitter.setStretchFactor(0, 4)
+        self.workspace_splitter.setStretchFactor(1, 1)
+        self.workspace_splitter.setSizes((800, 320))
+        self.view_inspector.hide()
+        layout.addWidget(self.workspace_splitter, 1)
 
         self.find_edit.returnPressed.connect(lambda: self.find_identity_exact(self.find_edit.text()))
         self.previous_button.clicked.connect(self.previous_page)
@@ -320,10 +337,193 @@ class QtTableWorkspace(QWidget):
         self.pinned_view.horizontalHeader().sectionClicked.connect(self._header_clicked)
         self.pinned_view.horizontalHeader().sectionResized.connect(self._pinned_section_resized)
         self.table_view.selectionModel().selectionChanged.connect(self._selection_changed)
-        self.table_view.doubleClicked.connect(lambda _index: self.open_selected_qc())
-        self.pinned_view.doubleClicked.connect(lambda _index: self.open_selected_qc())
         self.table_view.verticalScrollBar().valueChanged.connect(self.pinned_view.verticalScrollBar().setValue)
         self.pinned_view.verticalScrollBar().valueChanged.connect(self.table_view.verticalScrollBar().setValue)
+
+    def _build_view_inspector(self) -> None:
+        """Compose one draft-only Filter/Sort/Columns inspector."""
+
+        self.view_inspector = QFrame(self.workspace_splitter)
+        self.view_inspector.setObjectName("viewInspector")
+        self.view_inspector.setAccessibleName("Table view inspector")
+        self.view_inspector.setMinimumWidth(0)
+        self.view_inspector.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
+        inspector_layout = QVBoxLayout(self.view_inspector)
+        inspector_layout.setContentsMargins(8, 8, 8, 8)
+        inspector_layout.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.addWidget(QLabel("View options", self.view_inspector))
+        header.addStretch(1)
+        self.inspector_close_button = QPushButton("Close", self.view_inspector)
+        self.inspector_close_button.setObjectName("inspectorCloseButton")
+        self.inspector_close_button.setAccessibleName("Close table view inspector")
+        header.addWidget(self.inspector_close_button)
+        inspector_layout.addLayout(header)
+
+        self.inspector_scroll = QScrollArea(self.view_inspector)
+        self.inspector_scroll.setObjectName("tableInspectorScroll")
+        self.inspector_scroll.setAccessibleName("Scrollable table view drafts")
+        self.inspector_scroll.setWidgetResizable(True)
+        self.inspector_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.inspector_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.inspector_tabs = QTabWidget(self.inspector_scroll)
+        self.inspector_tabs.setObjectName("tableInspector")
+        self.inspector_tabs.setAccessibleName("Filter sort and column drafts")
+        self.inspector_tabs.setMinimumWidth(0)
+        self._rebuild_inspector_panels()
+        self.inspector_scroll.setWidget(self.inspector_tabs)
+        inspector_layout.addWidget(self.inspector_scroll, 1)
+
+        self.inspector_error_label = QLabel("", self.view_inspector)
+        self.inspector_error_label.setObjectName("tableInspectorError")
+        self.inspector_error_label.setAccessibleName("Table view inspector error")
+        self.inspector_error_label.setWordWrap(True)
+        self.inspector_error_label.setVisible(False)
+        inspector_layout.addWidget(self.inspector_error_label)
+
+        action_row = QHBoxLayout()
+        self.inspector_reset_button = QPushButton("Reset", self.view_inspector)
+        self.inspector_cancel_button = QPushButton("Cancel", self.view_inspector)
+        self.inspector_apply_button = QPushButton("Apply", self.view_inspector)
+        self.inspector_reset_button.setAccessibleName("Reset all view drafts")
+        self.inspector_cancel_button.setAccessibleName("Cancel table view editing")
+        self.inspector_apply_button.setAccessibleName("Apply table view drafts")
+        action_row.addWidget(self.inspector_reset_button)
+        action_row.addStretch(1)
+        action_row.addWidget(self.inspector_cancel_button)
+        action_row.addWidget(self.inspector_apply_button)
+        inspector_layout.addLayout(action_row)
+
+        self.inspector_close_button.clicked.connect(self.close_view_inspector)
+        self.inspector_cancel_button.clicked.connect(self.close_view_inspector)
+        self.inspector_reset_button.clicked.connect(self.reset_view_inspector)
+        self.inspector_apply_button.clicked.connect(self.apply_view_inspector)
+
+    def _rebuild_inspector_panels(self) -> None:
+        """Recreate draft panels when the connected table schema changes."""
+
+        while self.inspector_tabs.count():
+            panel = self.inspector_tabs.widget(0)
+            self.inspector_tabs.removeTab(0)
+            panel.deleteLater()
+        self.inspector_filter_panel = FilterPanel(
+            self.service.profiles,
+            self.inspector_tabs,
+        )
+        self.inspector_sort_panel = SortPanel(
+            tuple(self.initial_state.columns.order),
+            self.inspector_tabs,
+        )
+        self.inspector_columns_panel = ColumnsPanel(
+            self._columns_with_current_widths(self.applied_state.columns),
+            self.inspector_tabs,
+        )
+        self.inspector_tabs.addTab(self.inspector_filter_panel, "Filter")
+        self.inspector_tabs.addTab(self.inspector_sort_panel, "Sort")
+        self.inspector_tabs.addTab(self.inspector_columns_panel, "Columns")
+        self._inspector_origin_revision = None
+
+    def _load_inspector_draft(self) -> None:
+        self.inspector_filter_panel.set_expression(
+            self.applied_state.effective_filter
+        )
+        self.inspector_sort_panel.set_rules(self.applied_state.sort_rules)
+        self.inspector_columns_panel.set_state(
+            self._columns_with_current_widths(self.applied_state.columns)
+        )
+        self._set_inspector_error("")
+        self._inspector_origin_revision = self.applied_state.revision
+
+    def _open_view_inspector(self, index: int) -> None:
+        if self.view_inspector.isHidden():
+            self._load_inspector_draft()
+        self.inspector_tabs.setCurrentIndex(index)
+        self.view_inspector.show()
+        available = max(1, self.workspace_splitter.contentsRect().width())
+        target = max(1, int(available * 0.35))
+        self.workspace_splitter.setSizes((max(1, available - target), target))
+        self.inspector_tabs.setFocus(Qt.FocusReason.ShortcutFocusReason)
+
+    def open_filter_inspector(self) -> None:
+        self._open_view_inspector(0)
+
+    def open_sort_inspector(self) -> None:
+        self._open_view_inspector(1)
+
+    def open_columns_inspector(self) -> None:
+        self._open_view_inspector(2)
+
+    def reset_view_inspector(self) -> None:
+        self.inspector_filter_panel.set_expression(
+            self.initial_state.effective_filter
+        )
+        self.inspector_sort_panel.set_rules(self.initial_state.sort_rules)
+        self.inspector_columns_panel.set_state(self.initial_state.columns)
+        self._set_inspector_error("")
+
+    def close_view_inspector(self) -> None:
+        self.view_inspector.hide()
+        self._inspector_origin_revision = None
+        self._set_inspector_error("")
+
+    def apply_view_inspector(self) -> bool:
+        """Commit the three typed drafts as one revision-safe view state."""
+
+        if self._inspector_origin_revision != self.applied_state.revision:
+            self._set_inspector_error(
+                "The applied table view changed. Reopen the inspector and try again."
+            )
+            return False
+        try:
+            expression = self.inspector_filter_panel.expression()
+            rules = self.inspector_sort_panel.rules()
+            columns = self.inspector_columns_panel.state()
+        except (TypeError, ValueError) as exc:
+            self._set_inspector_error(str(exc))
+            return False
+        duplicate_columns = sorted(
+            column
+            for column, count in Counter(rule.column for rule in rules).items()
+            if count > 1
+        )
+        if duplicate_columns:
+            self.inspector_tabs.setCurrentWidget(self.inspector_sort_panel)
+            self.inspector_sort_panel.set_error(
+                "Each sort column can only be used once: "
+                + ", ".join(duplicate_columns)
+            )
+            return False
+        candidate = replace(
+            self.applied_state.with_filter(expression),
+            sort_rules=rules,
+            columns=columns,
+        )
+        if not self._commit_state(
+            candidate,
+            reset_page=True,
+            capture_current_widths=False,
+        ):
+            group_id, condition_id = self._locate_filter_error(
+                expression,
+                self.error_text,
+            )
+            if group_id is not None or condition_id is not None:
+                self.inspector_tabs.setCurrentWidget(self.inspector_filter_panel)
+                self.inspector_filter_panel.set_error(
+                    self.error_text,
+                    group_id=group_id,
+                    condition_id=condition_id,
+                )
+            else:
+                self._set_inspector_error(self.error_text)
+            return False
+        self.close_view_inspector()
+        return True
+
+    def _set_inspector_error(self, message: str) -> None:
+        self.inspector_error_label.setText(str(message))
+        self.inspector_error_label.setVisible(bool(message))
 
     def _add_toolbar_action(
         self,
@@ -534,6 +734,7 @@ class QtTableWorkspace(QWidget):
             columns=self._columns_with_current_widths(self.applied_state.columns),
         )
         self._close_open_dialogs()
+        self.close_view_inspector()
         self.task_controller.cancel()
         self._pending_state = None
         self._pending_reset_page = False
@@ -553,6 +754,7 @@ class QtTableWorkspace(QWidget):
         self.applied_state = candidate
         self.draft_state = None
         self.result = next_result
+        self._rebuild_inspector_panels()
         self.page_offset = 0
         self.selected_source_position = None
         self.selection_outside_view = False
@@ -1133,6 +1335,7 @@ class QtTableWorkspace(QWidget):
 
     @Slot(bool)
     def _set_background_busy(self, busy: bool) -> None:
+        self.inspector_apply_button.setEnabled(not busy)
         if busy:
             self.count_label.setText("Applying…")
         else:
@@ -1142,6 +1345,7 @@ class QtTableWorkspace(QWidget):
         self._pending_state = None
         self._pending_reset_page = False
         self._close_open_dialogs()
+        self.close_view_inspector()
         self.task_controller.cancel()
         if self._export_cancel_event is not None:
             self._export_cancel_event.set()
@@ -1305,8 +1509,7 @@ class QtTableWorkspace(QWidget):
         self.next_button.setEnabled(
             self.page_offset + self.applied_state.page_size < self.result.matched_total
         )
-        has_current_selection = bool(self.table_view.selectionModel().selectedRows())
-        self.open_qc_action.setEnabled(self.on_open_qc is not None and has_current_selection)
+        self.open_qc_action.setEnabled(False)
 
     def _set_error(self, message: str) -> None:
         self.error_label.setText(message)

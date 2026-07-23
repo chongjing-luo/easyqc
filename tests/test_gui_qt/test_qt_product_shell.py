@@ -213,17 +213,15 @@ def test_product_shell_reduced_viewport_keeps_navigation_and_content_reachable(
     assert long_module in window.module_combo.toolTip()
 
 
-def test_table_open_qc_uses_applied_sort_queue_and_selected_identity(qtbot, tmp_path) -> None:
+def test_pre_qc_list_has_no_qc_launch_action(qtbot, tmp_path) -> None:
     window, _services = _window(qtbot, tmp_path)
     table = window.table_workspace
     assert table.apply_sort_rules((SortRule("site", ascending=False),))
     assert table.select_source_position(2)
 
-    assert table.open_selected_qc()
-
-    assert window.navigation.currentRow() == window.project_page_index
-    assert window.qc_workspace.workflow.subject_ids == ("SUB003", "SUB002", "SUB001")
-    assert window.qc_workspace.workflow.current_ezqcid == "SUB003"
+    assert not table.open_qc_action.isVisible()
+    assert table.open_qc_action not in table.action_toolbar.actions()
+    assert window.qc_workspace.workflow.current_ezqcid == "SUB001"
 
 
 def test_stale_table_callback_is_rejected_after_same_id_project_switch(qtbot, tmp_path) -> None:
@@ -310,7 +308,6 @@ def test_rating_save_refreshes_table_and_preserves_view_state_and_qc_session(
     table = window.table_workspace
     assert table.apply_sort_rules((SortRule("site", ascending=False),))
     assert table.find_identity_exact("SUB001")
-    assert table.open_selected_qc()
     qc = window.qc_workspace
     qtbot.mouseClick(qc.score_buttons["1"]["Good"], Qt.LeftButton)
     qtbot.mouseClick(qc.save_button, Qt.LeftButton)

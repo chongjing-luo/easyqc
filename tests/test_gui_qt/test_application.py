@@ -130,7 +130,7 @@ def test_empty_preview_explains_that_no_project_table_is_connected(qtbot, tmp_pa
     assert empty_state is not None
     assert not empty_state.isHidden()
     assert "default GUI" in empty_state.text()
-    assert table.accessibleName() == "EasyQC subject preview table"
+    assert table.accessibleName() == "EasyQC pre-QC list"
 
 
 def test_gui_qt_package_has_no_tkinter_dependency():

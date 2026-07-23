@@ -12,6 +12,7 @@ from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QTimer, Qt
 from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
+    QLabel,
     QScrollArea,
     QSplitter,
     QTabWidget,
@@ -68,8 +69,9 @@ def test_table_uses_standard_overflow_toolbars_without_fixed_chip_geometry(qtbot
     assert applied_toolbar.isMovable() is False
     assert applied_toolbar.minimumHeight() < applied_toolbar.maximumHeight()
     assert workspace.findChild(QScrollArea, "appliedFilterChips") is None
-    assert workspace.findChild(QSplitter, "tableWorkspaceSplitter") is None
-    assert workspace.findChild(QTabWidget, "tableInspector") is None
+    assert workspace.findChild(QSplitter, "tableWorkspaceSplitter") is workspace.workspace_splitter
+    assert workspace.findChild(QTabWidget, "tableInspector") is workspace.inspector_tabs
+    assert workspace.view_inspector.isHidden()
     assert len(workspace.critical_shortcuts) == len(workspace.critical_actions)
     assert all(shortcut.key().toString() for shortcut in workspace.critical_shortcuts)
 
@@ -225,24 +227,22 @@ def test_narrow_toolbar_actions_are_keyboard_reachable(qtbot):
         Qt.Key.Key_F,
         Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
     )
-    assert workspace.filter_dialog is not None and workspace.filter_dialog.isVisible()
-    workspace.filter_dialog.reject()
+    assert workspace.view_inspector.isVisible()
+    assert workspace.inspector_tabs.currentWidget() is workspace.inspector_filter_panel
 
     qtbot.keyClick(
         workspace.table_view,
         Qt.Key.Key_S,
         Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
     )
-    assert workspace.sort_dialog is not None and workspace.sort_dialog.isVisible()
-    workspace.sort_dialog.reject()
+    assert workspace.inspector_tabs.currentWidget() is workspace.inspector_sort_panel
 
     qtbot.keyClick(
         workspace.table_view,
         Qt.Key.Key_C,
         Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
     )
-    assert workspace.columns_dialog is not None and workspace.columns_dialog.isVisible()
-    workspace.columns_dialog.reject()
+    assert workspace.inspector_tabs.currentWidget() is workspace.inspector_columns_panel
 
     assert workspace.select_source_position(0)
     qtbot.keyClick(
@@ -250,7 +250,7 @@ def test_narrow_toolbar_actions_are_keyboard_reachable(qtbot):
         Qt.Key.Key_Return,
         Qt.KeyboardModifier.ControlModifier,
     )
-    assert opened == ["SUB001"]
+    assert opened == []
 
 
 def test_export_action_runs_complete_result_in_background_and_reports_receipt(
@@ -759,16 +759,15 @@ def test_filter_dialog_background_failure_preserves_applied_view(qtbot, monkeypa
     assert "synthetic filter background failure" in workspace.error_text
 
 
-def test_filter_button_opens_nonblocking_dialog_and_group_chip_removal_commits_once(qtbot):
+def test_filter_button_opens_integrated_inspector_and_apply_commits_once(qtbot):
     workspace = QtTableWorkspace(_source())
     qtbot.addWidget(workspace)
     workspace.show()
 
     qtbot.mouseClick(workspace.filter_button, Qt.MouseButton.LeftButton)
-    dialog = workspace.filter_dialog
-    assert dialog is not None
-    assert dialog.isVisible()
-    assert workspace.findChild(QTabWidget, "tableInspector") is None
+    assert workspace.view_inspector.isVisible()
+    assert workspace.inspector_tabs.currentWidget() is workspace.inspector_filter_panel
+    assert workspace.filter_dialog is None
 
     expression = FilterExpression(
         "all",
@@ -785,11 +784,9 @@ def test_filter_button_opens_nonblocking_dialog_and_group_chip_removal_commits_o
             ),
         ),
     )
-    dialog.editor.set_expression(expression)
-    qtbot.mouseClick(
-        dialog.button_box.button(QDialogButtonBox.StandardButton.Apply),
-        Qt.MouseButton.LeftButton,
-    )
+    workspace.inspector_filter_panel.set_expression(expression)
+    qtbot.mouseClick(workspace.inspector_apply_button, Qt.MouseButton.LeftButton)
+    assert workspace.view_inspector.isHidden()
     revision = workspace.applied_state.revision
 
     assert workspace.remove_applied_condition("site-a")
@@ -846,8 +843,7 @@ def test_sort_dialog_cancel_duplicate_and_apply_are_transactional(qtbot):
     initial_state = workspace.applied_state
     initial_result = workspace.result
 
-    qtbot.mouseClick(workspace.sort_button, Qt.MouseButton.LeftButton)
-    dialog = workspace.sort_dialog
+    dialog = workspace.open_sort_dialog()
     assert dialog is not None and dialog.isVisible()
     dialog.editor.set_rules((SortRule("site", True),))
     qtbot.mouseClick(
@@ -931,17 +927,124 @@ def test_columns_dialog_cancel_reset_and_apply_are_transactional(qtbot):
     assert workspace.applied_state.columns.pinned == modified.pinned
 
 
-def test_sort_and_columns_buttons_use_dialogs_without_permanent_inspector(qtbot):
+def test_sort_and_columns_buttons_share_one_draft_inspector_and_cancel(qtbot):
     workspace = QtTableWorkspace(_source())
     qtbot.addWidget(workspace)
     workspace.show()
 
-    assert workspace.findChild(QTabWidget, "tableInspector") is None
+    initial_state = workspace.applied_state
+    assert workspace.view_inspector.isHidden()
     qtbot.mouseClick(workspace.sort_button, Qt.MouseButton.LeftButton)
-    assert workspace.sort_dialog is not None
-    workspace.sort_dialog.reject()
+    assert workspace.view_inspector.isVisible()
+    assert workspace.inspector_tabs.currentWidget() is workspace.inspector_sort_panel
+    workspace.inspector_sort_panel.set_rules((SortRule("site", True),))
     qtbot.mouseClick(workspace.columns_button, Qt.MouseButton.LeftButton)
-    assert workspace.columns_dialog is not None
+    assert workspace.inspector_tabs.currentWidget() is workspace.inspector_columns_panel
+    assert workspace.inspector_sort_panel.rules() == (SortRule("site", True),)
+    qtbot.mouseClick(workspace.inspector_cancel_button, Qt.MouseButton.LeftButton)
+    assert workspace.view_inspector.isHidden()
+    assert workspace.applied_state is initial_state
+
+
+def test_integrated_inspector_applies_all_three_drafts_in_one_revision(qtbot):
+    workspace = QtTableWorkspace(_source())
+    qtbot.addWidget(workspace)
+    workspace.show()
+    initial_revision = workspace.applied_state.revision
+
+    qtbot.mouseClick(workspace.filter_button, Qt.MouseButton.LeftButton)
+    workspace.inspector_filter_panel.set_expression(
+        FilterExpression(
+            "all",
+            (
+                FilterGroup(
+                    "site-a",
+                    "all",
+                    (FilterCondition("site", "==", "A", "site-a"),),
+                ),
+            ),
+        )
+    )
+    workspace.inspector_sort_panel.set_rules((SortRule("age", False),))
+    workspace.inspector_columns_panel.set_state(
+        ColumnViewState(
+            order=("ezqcid", "age", "site", "passed"),
+            hidden=("passed",),
+            pinned=("ezqcid",),
+        )
+    )
+
+    qtbot.mouseClick(workspace.inspector_apply_button, Qt.MouseButton.LeftButton)
+
+    assert workspace.applied_state.revision == initial_revision + 1
+    assert workspace.applied_state.sort_rules == (SortRule("age", False),)
+    assert workspace.applied_state.columns.hidden == ("passed",)
+    assert _full_result_frame(workspace)["ezqcid"].tolist() == [
+        "SUB005",
+        "SUB001",
+        "SUB003",
+    ]
+
+
+def test_source_replacement_closes_inspector_and_rebuilds_its_schema(qtbot):
+    workspace = QtTableWorkspace(_source())
+    qtbot.addWidget(workspace)
+    workspace.show()
+    qtbot.mouseClick(workspace.sort_button, Qt.MouseButton.LeftButton)
+    workspace.inspector_sort_panel.set_rules((SortRule("age", False),))
+
+    refreshed = _source().drop(columns="age")
+    workspace.replace_service(TableViewService(refreshed), preserve_state=True)
+
+    assert workspace.view_inspector.isHidden()
+    assert workspace.inspector_columns_panel.state().order == (
+        "ezqcid",
+        "site",
+        "passed",
+    )
+    assert workspace.inspector_sort_panel.rules() == ()
+
+
+def test_integrated_inspector_reset_close_and_no_table_qc_launch_surface(qtbot):
+    opened = []
+    workspace = QtTableWorkspace(_source(), on_open_qc=opened.append)
+    qtbot.addWidget(workspace)
+    workspace.resize(760, 560)
+    workspace.show()
+
+    assert workspace.findChild(QLabel, "tableTitle") is None
+    assert not workspace.open_qc_action.isVisible()
+    assert workspace.open_qc_action not in workspace.action_toolbar.actions()
+    qtbot.mouseClick(workspace.filter_button, Qt.MouseButton.LeftButton)
+    workspace.inspector_filter_panel.set_expression(
+        FilterExpression(
+            "all",
+            (
+                FilterGroup(
+                    "site-a",
+                    "all",
+                    (FilterCondition("site", "==", "A", "site-a"),),
+                ),
+            ),
+        )
+    )
+    qtbot.mouseClick(workspace.inspector_reset_button, Qt.MouseButton.LeftButton)
+    assert workspace.inspector_filter_panel.expression() == FilterExpression()
+    qtbot.mouseClick(workspace.inspector_close_button, Qt.MouseButton.LeftButton)
+    assert workspace.view_inspector.isHidden()
+    assert workspace.applied_state == workspace.initial_state
+
+    index = workspace.table_model.index(0, 0)
+    workspace.table_view.doubleClicked.emit(index)
+    workspace.pinned_view.doubleClicked.emit(index)
+    assert opened == []
+
+    workspace.resize(640, 520)
+    qtbot.waitUntil(lambda: workspace.width() == 640)
+    qtbot.mouseClick(workspace.columns_button, Qt.MouseButton.LeftButton)
+    assert workspace.workspace_splitter.isVisible()
+    assert workspace.view_inspector.isVisible()
+    assert workspace.inspector_apply_button.isVisible()
 
 
 def test_source_replacement_rejects_open_sort_and_columns_drafts(qtbot):
