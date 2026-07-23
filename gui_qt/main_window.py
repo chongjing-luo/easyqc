@@ -233,6 +233,9 @@ class QtMainWindow(QMainWindow):
             project_loader=self.load_project,
             module_launcher=self.start_qc_module,
         )
+        self.config_workspace.module_filter_task_controller.busyChanged.connect(
+            self._set_module_config_filter_busy
+        )
         project_layout.addWidget(self.config_workspace, 1)
         self.project_combo = self.config_workspace.project_combo
 
@@ -438,6 +441,9 @@ class QtMainWindow(QMainWindow):
         return True
 
     def load_project(self, name: str) -> bool:
+        if self.config_workspace.module_filter_write_busy:
+            self._set_error("质控名单筛选事务正在完成，请稍候")
+            return False
         if self.active_workflow is not None and self.active_workflow.dirty:
             self._set_error("请先保存或放弃当前质控修改，再切换项目")
             return False
@@ -769,6 +775,11 @@ class QtMainWindow(QMainWindow):
                 "另一项质控名单筛选任务仍在运行"
             )
             return
+        if self.config_workspace.module_filter_write_busy:
+            controller.workspace.show_filter_error(
+                "模块质控名单筛选事务正在完成，请稍候"
+            )
+            return
         snapshot = self.current_context
         module_name = self._active_module_name
         self._qc_filter_revision += 1
@@ -830,6 +841,9 @@ class QtMainWindow(QMainWindow):
             return
         if self._pending_qc_filter is not None:
             dialog.set_error("另一项质控名单筛选任务仍在运行")
+            return
+        if self.config_workspace.module_filter_write_busy:
+            dialog.set_error("模块质控名单筛选事务正在完成，请稍候")
             return
 
         snapshot = self.current_context
@@ -956,6 +970,9 @@ class QtMainWindow(QMainWindow):
                     ValueError("质控名单候选缺少筛选表达式")
                 )
                 return
+            expected_state = (
+                self.services.configuration_service.capture_settings_state()
+            )
 
             def persist_candidate():
                 return self.services.configuration_service.save_module_filter(
@@ -963,6 +980,7 @@ class QtMainWindow(QMainWindow):
                     expression,
                     notify=False,
                     expected_identities=identities,
+                    expected_state=expected_state,
                 )
 
             self.qc_filter_task_controller.submit(revision, persist_candidate)
@@ -1034,7 +1052,19 @@ class QtMainWindow(QMainWindow):
     @Slot(bool)
     def _set_qc_filter_busy(self, busy: bool) -> None:
         if self.qc_workspace is not None:
-            self.qc_workspace.set_filter_busy(busy)
+            self.qc_workspace.set_filter_busy(
+                busy
+                or self.config_workspace.module_filter_write_busy
+            )
+        self._update_context_controls()
+
+    @Slot(bool)
+    def _set_module_config_filter_busy(self, _busy: bool) -> None:
+        if self.qc_workspace is not None:
+            self.qc_workspace.set_filter_busy(
+                self.config_workspace.module_filter_write_busy
+                or self.qc_filter_task_controller.busy
+            )
         self._update_context_controls()
 
     def _reject_qc_launch(self, message: str) -> bool:
@@ -1049,7 +1079,11 @@ class QtMainWindow(QMainWindow):
         """Install the exact requested module through the existing QC factory."""
 
         requested = str(module_name).strip()
-        if self._injected_preview or self.context_task_controller.busy:
+        if (
+            self._injected_preview
+            or self.context_task_controller.busy
+            or self.config_workspace.module_filter_write_busy
+        ):
             return self._reject_qc_launch("当前状态无法启动质控")
         if not self.current_context.has_project:
             return self._reject_qc_launch("请先打开项目")
@@ -1224,6 +1258,7 @@ class QtMainWindow(QMainWindow):
         enabled = (
             not busy
             and not self.qc_filter_task_controller.busy
+            and not self.config_workspace.module_filter_write_busy
             and not derive_busy
             and not dirty
             and not self._injected_preview

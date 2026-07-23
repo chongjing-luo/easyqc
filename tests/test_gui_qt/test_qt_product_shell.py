@@ -880,6 +880,10 @@ def test_stale_table_callback_is_rejected_after_same_id_project_switch(qtbot, tm
     window = build_product_window(services)
     qtbot.addWidget(window)
     qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
+    qtbot.waitUntil(
+        lambda: not window.config_workspace.module_filter_task_controller.busy,
+        timeout=3000,
+    )
     assert window.load_project("ALPHA")
     qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
     stale_callback = window.table_workspace.on_open_qc
@@ -892,6 +896,66 @@ def test_stale_table_callback_is_rejected_after_same_id_project_switch(qtbot, tm
     assert window.current_context.project_name == "BETA"
     assert window.qc_workspace is current_workflow
     assert "已失效" in window.shell_error_label.text()
+
+
+def test_module_filter_save_blocks_project_switch_and_module_launch(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    _add_project(services, tmp_path, "ALPHA", prefix="alpha/")
+    _add_project(services, tmp_path, "BETA", prefix="beta/")
+    window = build_product_window(services)
+    qtbot.addWidget(window)
+    qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
+    qtbot.waitUntil(
+        lambda: not window.config_workspace.module_filter_task_controller.busy,
+        timeout=3000,
+    )
+    assert window.load_project("ALPHA")
+    qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
+    window.navigation.setCurrentRow(window.modules_page_index)
+    qtbot.waitUntil(
+        lambda: not window.config_workspace.module_filter_task_controller.busy,
+        timeout=3000,
+    )
+    real_save = services.configuration_service.save_module_filter
+    save_started = Event()
+    save_release = Event()
+
+    def delayed_save(module_name, expression, **kwargs):
+        save_started.set()
+        assert save_release.wait(2)
+        return real_save(module_name, expression, **kwargs)
+
+    monkeypatch.setattr(
+        services.configuration_service,
+        "save_module_filter",
+        delayed_save,
+    )
+    window.config_workspace._submit_module_filter_save(
+        "AnatQC",
+        _site_filter("A", operator="=="),
+    )
+    qtbot.waitUntil(save_started.is_set, timeout=3000)
+
+    switch_accepted = window.load_project("BETA")
+    launch_accepted = window.start_qc_module("AnatQC")
+    save_release.set()
+    qtbot.waitUntil(
+        lambda: not window.config_workspace.module_filter_task_controller.busy,
+        timeout=3000,
+    )
+    qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
+    qtbot.waitUntil(lambda: not window.qc_filter_task_controller.busy, timeout=3000)
+
+    assert (switch_accepted, launch_accepted) == (False, False)
+    assert window.current_context.project_name == "ALPHA"
+    assert services.configuration_service.current_project.name == "ALPHA"
+    assert services.configuration_service.modules()[0].qc_filter == (
+        filter_expression_to_json_object(_site_filter("A", operator="=="))
+    )
 
 
 def test_product_restart_restores_last_opened_project_and_its_table(qtbot, tmp_path) -> None:
@@ -1006,6 +1070,7 @@ def test_qc_filter_prepares_hidden_candidate_before_save_then_swaps_and_refreshe
         *,
         notify=True,
         expected_identities=None,
+        expected_state=None,
     ):
         expected_identity_calls.append(expected_identities)
         save_started.set()
@@ -1015,6 +1080,7 @@ def test_qc_filter_prepares_hidden_candidate_before_save_then_swaps_and_refreshe
             expression,
             notify=notify,
             expected_identities=expected_identities,
+            expected_state=expected_state,
         )
 
     monkeypatch.setattr(

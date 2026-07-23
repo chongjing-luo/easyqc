@@ -497,12 +497,17 @@ def test_module_filter_dialog_cancel_apply_and_clear_are_focused_transactions(
     real_save = config.save_module_filter
     real_publish = config.publish_modules_changed
 
-    def save_filter(module_name, expression, *, notify=True):
+    def save_filter(module_name, expression, *, notify=True, expected_state=None):
         save_calls.append((module_name, expression, notify, get_ident()))
         if len(save_calls) == 1:
             save_started.set()
             save_release.wait(2)
-        return real_save(module_name, expression, notify=notify)
+        return real_save(
+            module_name,
+            expression,
+            notify=notify,
+            expected_state=expected_state,
+        )
 
     def publish_modules_changed():
         publish_threads.append(get_ident())
@@ -568,10 +573,15 @@ def test_rejected_filter_dialog_during_save_does_not_break_completion(
     real_save = config.save_module_filter
     real_publish = config.publish_modules_changed
 
-    def delayed_save(module_name, expression, *, notify=True):
+    def delayed_save(module_name, expression, *, notify=True, expected_state=None):
         save_started.set()
         save_release.wait(2)
-        return real_save(module_name, expression, notify=notify)
+        return real_save(
+            module_name,
+            expression,
+            notify=notify,
+            expected_state=expected_state,
+        )
 
     def publish_modules_changed():
         publish_threads.append(get_ident())
@@ -634,7 +644,13 @@ def test_module_filter_invalid_apply_stays_open_and_dirty_or_new_form_blocks_wri
     workspace, config = _workspace(qtbot, tmp_path)
     save_calls = []
 
-    def reject_filter(module_name, expression, *, notify=True):
+    def reject_filter(
+        module_name,
+        expression,
+        *,
+        notify=True,
+        expected_state=None,
+    ):
         save_calls.append((module_name, expression, notify))
         raise ValueError("筛选条件无效")
 
@@ -774,10 +790,15 @@ def test_stale_module_filter_preview_cannot_replace_new_selection_summary(
     save_release = Event()
     real_save = config.save_module_filter
 
-    def delayed_save(module_name, expression, *, notify=True):
+    def delayed_save(module_name, expression, *, notify=True, expected_state=None):
         save_started.set()
         save_release.wait(2)
-        return real_save(module_name, expression, notify=notify)
+        return real_save(
+            module_name,
+            expression,
+            notify=notify,
+            expected_state=expected_state,
+        )
 
     monkeypatch.setattr(config, "save_module_filter", delayed_save)
     workspace._submit_module_filter_save("FuncQC", FilterExpression())

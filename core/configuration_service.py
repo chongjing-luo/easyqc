@@ -13,7 +13,12 @@ import pandas as pd
 
 from core.event_bus import Event, EventType
 from core.module_filter import resolve_module_filter_identities
-from core.project_service import MODULE_NAME_PATTERN, ProjectService
+from core.project_service import (
+    MODULE_NAME_PATTERN,
+    ProjectService,
+    ProjectSettingsState,
+    ProjectStateConflictError,
+)
 from core.table_service import TABLE_ALL, TableService
 from core.table_transform import TableTransformEngine
 from core.table_view_service import TableViewError
@@ -339,6 +344,14 @@ class ConfigurationService:
         self._require_project()
         return deepcopy(dict(self.project_service.settings))
 
+    def capture_settings_state(self) -> ProjectSettingsState:
+        """Capture the project/settings authority for one background write."""
+
+        try:
+            return self.project_service.capture_settings_state()
+        except ValueError as exc:
+            raise ConfigurationError(str(exc)) from exc
+
     def set_constant(
         self,
         name: str,
@@ -445,6 +458,7 @@ class ConfigurationService:
         *,
         notify: bool = True,
         expected_identities: tuple[str, ...] | None = None,
+        expected_state: ProjectSettingsState | None = None,
     ) -> tuple[str, ...]:
         """Validate and atomically save only one module's structured filter.
 
@@ -455,7 +469,12 @@ class ConfigurationService:
         if not isinstance(module_name, str) or not module_name.strip():
             raise ConfigurationError("Module name must be a nonblank string")
         name = module_name.strip()
-        candidate = self._settings_candidate()
+        state = expected_state or self.capture_settings_state()
+        if not isinstance(state, ProjectSettingsState):
+            raise ConfigurationError(
+                "Expected module filter state must be ProjectSettingsState"
+            )
+        candidate = deepcopy(state.settings)
         modules = candidate.get("qcmodule")
         if not isinstance(modules, dict):
             raise ConfigurationError("qcmodule must be an object")
@@ -492,7 +511,14 @@ class ConfigurationService:
         selected = matches[0]
         selected["qc_filter"] = serialized
         selected["select_filter"] = None
-        self.project_service.commit_settings(candidate, notify=notify)
+        try:
+            self.project_service.commit_settings(
+                candidate,
+                notify=notify,
+                expected_state=state,
+            )
+        except ProjectStateConflictError as exc:
+            raise ConfigurationError(str(exc)) from exc
         return identities
 
     def remove_module(self, name: str) -> None:

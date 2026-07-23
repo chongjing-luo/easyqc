@@ -521,6 +521,55 @@ def test_save_module_filter_can_defer_events_until_gui_thread_publication(
     ]
 
 
+def test_save_module_filter_rejects_project_switch_after_state_capture(
+    tmp_path,
+) -> None:
+    service, projects = _service(tmp_path)
+    service.replace_subjects(_subjects(), notify=False)
+    captured = service.capture_settings_state()
+    sample_path = projects.current_project.settings_path
+    sample_before = sample_path.read_bytes()
+    service.create_project("SECOND", tmp_path)
+    service.replace_subjects(_subjects(), notify=False)
+    second_path = projects.current_project.settings_path
+    second_before = second_path.read_bytes()
+
+    with pytest.raises(ConfigurationError, match="project.*changed"):
+        service.save_module_filter(
+            "example",
+            _filter_expression("site", "==", "A"),
+            notify=False,
+            expected_state=captured,
+        )
+
+    assert sample_path.read_bytes() == sample_before
+    assert second_path.read_bytes() == second_before
+    assert service.modules()[0].qc_filter is None
+
+
+def test_save_module_filter_rejects_settings_change_after_state_capture(
+    tmp_path,
+) -> None:
+    service, projects = _service(tmp_path)
+    service.replace_subjects(_subjects(), notify=False)
+    captured = service.capture_settings_state()
+    service.set_constant("newer_value", "preserve-me")
+    settings_path = projects.current_project.settings_path
+    settings_before = settings_path.read_bytes()
+
+    with pytest.raises(ConfigurationError, match="settings.*changed"):
+        service.save_module_filter(
+            "example",
+            _filter_expression("site", "==", "A"),
+            notify=False,
+            expected_state=captured,
+        )
+
+    assert settings_path.read_bytes() == settings_before
+    assert service.constants()["newer_value"] == "preserve-me"
+    assert service.modules()[0].qc_filter is None
+
+
 @pytest.mark.parametrize(
     "expression",
     [

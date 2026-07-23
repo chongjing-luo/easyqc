@@ -5,6 +5,7 @@ from copy import deepcopy
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
 from types import MappingProxyType
 from typing import Any, Callable
 
@@ -26,12 +27,26 @@ class PreparedProjectLoad:
     settings: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class ProjectSettingsState:
+    """Detached project/settings authority captured before background work."""
+
+    project_name: str
+    project_path: Path
+    settings: dict[str, Any]
+
+
+class ProjectStateConflictError(ValueError):
+    """Raised when an optimistic settings write no longer owns current state."""
+
+
 class ProjectService:
     def __init__(self, registry_path: Path, event_bus: EventBus | None = None) -> None:
         self.registry_path = Path(registry_path)
         self.registry = self._load_registry()
         self.current: Project | None = None
         self._settings: dict[str, Any] = {}
+        self._state_lock = RLock()
         # Typed event bus (P1-C, AC-10). Created internally if not injected so
         # CLI/tests that do not supply one still work; GUI injects a shared bus.
         self.event_bus = event_bus or EventBus()
@@ -99,27 +114,41 @@ class ProjectService:
 
         if not isinstance(prepared, PreparedProjectLoad):
             raise TypeError("commit_load requires PreparedProjectLoad")
-        registered = self.registry.projects.get(prepared.project.name)
-        if registered is None or registered.path != prepared.project.path:
-            raise ValueError("Prepared project is no longer registered")
-        project = prepared.project
-        previous_current = self.current
-        previous_last_project = self.registry.last_project
-        previous_settings = self._settings
-        self.current = project
-        self.registry.last_project = project.name
-        self._settings = deepcopy(prepared.settings)
-        try:
-            if previous_last_project != project.name:
-                self._save_registry()
-        except Exception:
-            self.current = previous_current
-            self.registry.last_project = previous_last_project
-            self._settings = previous_settings
-            raise
+        with self._state_lock:
+            registered = self.registry.projects.get(prepared.project.name)
+            if registered is None or registered.path != prepared.project.path:
+                raise ValueError("Prepared project is no longer registered")
+            project = prepared.project
+            previous_current = self.current
+            previous_last_project = self.registry.last_project
+            previous_settings = self._settings
+            self.current = project
+            self.registry.last_project = project.name
+            self._settings = deepcopy(prepared.settings)
+            try:
+                if previous_last_project != project.name:
+                    self._save_registry()
+            except Exception:
+                self.current = previous_current
+                self.registry.last_project = previous_last_project
+                self._settings = previous_settings
+                raise
         if notify:
             self._notify("project_changed")
         return project
+
+    def capture_settings_state(self) -> ProjectSettingsState:
+        """Return one detached state token for an optimistic settings write."""
+
+        with self._state_lock:
+            self._require_current_project()
+            project = self.current
+            assert project is not None
+            return ProjectSettingsState(
+                project_name=project.name,
+                project_path=Path(project.path),
+                settings=deepcopy(self._settings),
+            )
 
     def remove(self, name: str) -> None:
         if name not in self.registry.projects:
@@ -384,12 +413,17 @@ class ProjectService:
         *,
         change_event: str = "modules_changed",
         notify: bool = True,
+        expected_state: ProjectSettingsState | None = None,
     ) -> None:
         """Atomically persist a copied settings candidate or restore memory."""
 
-        self._require_current_project()
         if change_event not in {"modules_changed", "settings_saved"}:
             raise ValueError(f"不支持的设置变更事件: {change_event}")
+        if expected_state is not None and not isinstance(
+            expected_state,
+            ProjectSettingsState,
+        ):
+            raise TypeError("expected_state must be ProjectSettingsState or None")
         prepared = deepcopy(dict(candidate))
         constants = prepared.get("constants")
         modules = prepared.get("qcmodule")
@@ -409,13 +443,29 @@ class ProjectService:
         if len(set(names)) != len(names):
             raise ValueError("模块名称不能重复")
 
-        previous = self._settings
-        self._settings = prepared
-        try:
-            self.save(notify=notify)
-        except Exception:
-            self._settings = previous
-            raise
+        with self._state_lock:
+            self._require_current_project()
+            current = self.current
+            assert current is not None
+            if expected_state is not None:
+                if (
+                    current.name != expected_state.project_name
+                    or Path(current.path) != expected_state.project_path
+                ):
+                    raise ProjectStateConflictError(
+                        "QC module filter project context changed before settings commit"
+                    )
+                if self._settings != expected_state.settings:
+                    raise ProjectStateConflictError(
+                        "QC module filter project settings changed before settings commit"
+                    )
+            previous = self._settings
+            self._settings = prepared
+            try:
+                self.save(notify=notify)
+            except Exception:
+                self._settings = previous
+                raise
         if notify and change_event != "settings_saved":
             self._notify(change_event)
 
@@ -547,4 +597,9 @@ class ProjectService:
             raise ValueError(f"模块名不合法: {name}")
 
 
-__all__ = ["PreparedProjectLoad", "ProjectService"]
+__all__ = [
+    "PreparedProjectLoad",
+    "ProjectService",
+    "ProjectSettingsState",
+    "ProjectStateConflictError",
+]

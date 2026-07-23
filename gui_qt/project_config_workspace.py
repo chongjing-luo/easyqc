@@ -737,7 +737,11 @@ class QtProjectConfigWorkspace(QWidget):
 
     def _update_project_action_state(self) -> None:
         selected = self._selected_project_entry() is not None
-        enabled = selected and not self.io_task_controller.busy
+        enabled = (
+            selected
+            and not self.io_task_controller.busy
+            and not self.module_filter_write_busy
+        )
         self.load_project_action.setEnabled(enabled)
         self.open_project_directory_action.setEnabled(enabled)
         self.remove_project_action.setEnabled(enabled)
@@ -935,11 +939,31 @@ class QtProjectConfigWorkspace(QWidget):
 
     @Slot(bool)
     def _set_module_filter_busy(self, busy: bool) -> None:
+        enabled = not self.module_filter_write_busy and not self.io_task_controller.busy
+        self.project_combo.setEnabled(enabled)
+        self.project_list.setEnabled(enabled)
+        self.reload_projects_action.setEnabled(enabled)
+        self.new_project_action.setEnabled(enabled)
+        self.import_project_action.setEnabled(enabled)
+        self.tabs.setEnabled(enabled)
+        self.subjects_tab.setEnabled(enabled)
+        self.constants_tab.setEnabled(enabled)
+        self.modules_tab.setEnabled(enabled)
+        self._update_project_action_state()
         if busy:
             self.set_module_filter_button.setEnabled(False)
             self.clear_module_filter_button.setEnabled(False)
             return
         self._update_module_filter_action_state()
+
+    @property
+    def module_filter_write_busy(self) -> bool:
+        pending = self._pending_module_filter
+        return bool(
+            self.module_filter_task_controller.busy
+            and pending is not None
+            and pending[1] == "save"
+        )
 
     def _request_module_filter_preview(self, module) -> None:
         module_name = str(module.name)
@@ -1185,6 +1209,20 @@ class QtProjectConfigWorkspace(QWidget):
                 dialog.set_error(message)
             self._set_error(message)
             return
+        if self.io_task_controller.busy:
+            message = "项目配置任务仍在运行，请稍后重试"
+            if dialog is not None:
+                dialog.set_error(message)
+            self._set_error(message)
+            return
+        try:
+            expected_state = self.configuration.capture_settings_state()
+        except Exception as exc:
+            message = str(exc).strip() or type(exc).__name__
+            if dialog is not None:
+                dialog.set_error(message)
+            self._set_error(message)
+            return
         self._module_filter_revision += 1
         revision = self._module_filter_revision
         self._pending_module_filter = (
@@ -1200,6 +1238,7 @@ class QtProjectConfigWorkspace(QWidget):
                 module_name,
                 expression,
                 notify=False,
+                expected_state=expected_state,
             )
             return module_name, expression, identities
 
@@ -1653,6 +1692,9 @@ class QtProjectConfigWorkspace(QWidget):
         if self.io_task_controller.busy:
             self._set_error("另一项配置任务仍在运行")
             return False
+        if self.module_filter_write_busy:
+            self._set_error("质控名单筛选事务正在完成，请稍候")
+            return False
         labels = {
             "refresh": "正在加载配置…",
             "load_project": "正在加载项目…",
@@ -1715,7 +1757,7 @@ class QtProjectConfigWorkspace(QWidget):
 
     @Slot(bool)
     def _set_io_busy(self, busy: bool) -> None:
-        enabled = not busy
+        enabled = not busy and not self.module_filter_write_busy
         self.project_combo.setEnabled(enabled)
         self.project_list.setEnabled(enabled)
         self.reload_projects_action.setEnabled(enabled)
