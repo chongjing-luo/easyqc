@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Any
 
 import pandas as pd
@@ -89,6 +90,98 @@ class ConfigurationService:
     def remove_project(self, name: str) -> None:
         self.project_service.remove(name)
 
+    @staticmethod
+    def _import_column_name(value: str) -> str:
+        name = str(value).strip()
+        if not name or not name.isidentifier():
+            raise ConfigurationError(f"单列字段名不合法: {name!r}")
+        return name
+
+    @classmethod
+    def _normalize_import_frame(
+        cls,
+        frame: pd.DataFrame,
+        *,
+        single_column_name: str | None = None,
+    ) -> pd.DataFrame:
+        if not isinstance(frame, pd.DataFrame):
+            raise TypeError("导入草稿必须是 pandas DataFrame")
+        if frame.empty:
+            raise ConfigurationError("导入数据为空")
+        columns = tuple(str(column).strip() for column in frame.columns)
+        if any(not column for column in columns):
+            raise ConfigurationError("导入数据包含空白字段名")
+        if len(set(columns)) != len(columns):
+            raise ConfigurationError("导入数据包含重复字段名")
+        result = frame.copy(deep=True)
+        result.columns = columns
+        if len(columns) == 1 and single_column_name is not None:
+            result.columns = (cls._import_column_name(single_column_name),)
+        return result.reset_index(drop=True)
+
+    def draft_from_folder(
+        self,
+        path: str | Path,
+        column_name: str,
+    ) -> pd.DataFrame:
+        """Read immediate child-directory names into one detached draft."""
+
+        directory = Path(path)
+        if not directory.is_dir():
+            raise ConfigurationError(f"导入目录不存在: {directory}")
+        name = self._import_column_name(column_name)
+        values = sorted(entry.name for entry in directory.iterdir() if entry.is_dir())
+        return self._normalize_import_frame(pd.DataFrame({name: values}))
+
+    def draft_from_file(
+        self,
+        path: str | Path,
+        single_column_name: str | None = None,
+    ) -> pd.DataFrame:
+        """Read one supported table/list file into a detached draft."""
+
+        source = Path(path)
+        if not source.is_file():
+            raise ConfigurationError(f"导入文件不存在: {source}")
+        suffix = source.suffix.casefold()
+        try:
+            if suffix == ".csv":
+                frame = pd.read_csv(source, encoding="utf-8")
+            elif suffix in {".xlsx", ".xls"}:
+                frame = pd.read_excel(source)
+            elif suffix in {".txt", ".list"}:
+                name = self._import_column_name(single_column_name or "")
+                values = [
+                    line.strip()
+                    for line in source.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+                frame = pd.DataFrame({name: values})
+                single_column_name = None
+            else:
+                raise ConfigurationError(
+                    f"不支持的导入文件格式: {suffix or '<none>'}"
+                )
+        except ConfigurationError:
+            raise
+        except Exception as exc:
+            raise ConfigurationError(f"读取导入文件失败: {exc}") from exc
+        return self._normalize_import_frame(
+            frame,
+            single_column_name=(
+                single_column_name.strip()
+                if single_column_name is not None and single_column_name.strip()
+                else None
+            ),
+        )
+
+    def draft_from_text(self, text: str, column_name: str) -> pd.DataFrame:
+        """Split direct comma/whitespace text into one detached draft column."""
+
+        name = self._import_column_name(column_name)
+        values = [value for value in re.split(r"[,\s]+", str(text).strip()) if value]
+        return self._normalize_import_frame(pd.DataFrame({name: values}))
+
     def _require_project(self) -> Project:
         project = self.current_project
         if project is None:
@@ -117,25 +210,25 @@ class ConfigurationService:
 
     def _validated_subjects(self, frame: pd.DataFrame) -> pd.DataFrame:
         if not isinstance(frame, pd.DataFrame):
-            raise TypeError("Subjects must be a pandas DataFrame")
+            raise TypeError("质控名单必须是 pandas DataFrame")
         if frame.columns.has_duplicates:
-            raise ConfigurationError("Subject table contains duplicate columns")
+            raise ConfigurationError("质控名单包含重复字段")
         if "ezqcid" not in frame.columns:
-            raise ConfigurationError("Subject table requires ezqcid")
+            raise ConfigurationError("质控名单缺少 ezqcid")
         result = frame.copy(deep=True)
         identities = result["ezqcid"].map(
             lambda value: "" if value is None or pd.isna(value) else str(value).strip()
         )
         if identities.eq("").any():
-            raise ConfigurationError("Subject table contains blank ezqcid")
+            raise ConfigurationError("质控名单包含空白 ezqcid")
         duplicates = sorted(identities[identities.duplicated(keep=False)].unique().tolist())
         if duplicates:
-            raise ConfigurationError(f"Subject table contains duplicate ezqcid: {duplicates}")
+            raise ConfigurationError(f"质控名单包含重复 ezqcid: {duplicates}")
         result["ezqcid"] = identities
         constant_collisions = sorted(set(map(str, result.columns)) & set(self.constants()))
         if constant_collisions:
             raise ConfigurationError(
-                f"Subject column conflicts with constant: {constant_collisions}"
+                f"质控名单字段与常量冲突: {constant_collisions}"
             )
         return result
 
@@ -183,7 +276,7 @@ class ConfigurationService:
                 raise ConfigurationError(f"Column merge overlap: {overlap}")
             candidate = current.merge(incoming, on="ezqcid", how="outer", validate="one_to_one")
         else:
-            raise ConfigurationError(f"Unsupported subject merge mode: {mode}")
+            raise ConfigurationError(f"Unsupported list merge mode: {mode}")
         self.replace_subjects(candidate, notify=notify)
 
     def constants(self) -> dict[str, Any]:
@@ -206,7 +299,7 @@ class ConfigurationService:
         if not name or not name.isidentifier():
             raise ConfigurationError(f"Invalid constant name: {name!r}")
         if name in set(map(str, self.subjects().columns)):
-            raise ConfigurationError(f"Constant conflicts with subject column: {name}")
+            raise ConfigurationError(f"Constant conflicts with list column: {name}")
         candidate = self._settings_candidate()
         constants = candidate.setdefault("constants", {})
         if old_name and old_name != name:

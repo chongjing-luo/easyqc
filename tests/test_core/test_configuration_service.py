@@ -63,7 +63,7 @@ def test_subject_merge_and_constant_column_collisions_fail_loud(tmp_path) -> Non
         )
     with pytest.raises(ConfigurationError, match="column"):
         service.set_constant("site", "bad")
-    with pytest.raises(ConfigurationError, match="constant"):
+    with pytest.raises(ConfigurationError, match="常量"):
         service.replace_subjects(
             pd.DataFrame({"ezqcid": ["SUB001"], "DATA_ROOT": ["shadow"]})
         )
@@ -168,3 +168,113 @@ def test_configuration_snapshot_is_detached_from_authoritative_subjects(tmp_path
     assert snapshot.projects == ("SAMPLE",)
     assert len(snapshot.modules) == 1
     assert service.subjects().loc[0, "site"] == "A"
+
+
+def test_list_import_draft_readers_do_not_mutate_the_active_table(tmp_path) -> None:
+    service, projects = _service(tmp_path)
+    service.replace_subjects(_subjects())
+    table_path = projects.current_project.table_dir / "ezqc_all.csv"
+    before_bytes = table_path.read_bytes()
+
+    folder = tmp_path / "incoming-folders"
+    (folder / "SUB004").mkdir(parents=True)
+    (folder / "SUB003").mkdir()
+    (folder / "ignored.txt").write_text("not a directory", encoding="utf-8")
+    csv_path = tmp_path / "incoming.csv"
+    pd.DataFrame(
+        {"ezqcid": ["SUB005"], "site": ["C"], "scanner_model": ["Prisma"]}
+    ).to_csv(csv_path, index=False)
+
+    folder_draft = service.draft_from_folder(folder, "ezqcid")
+    file_draft = service.draft_from_file(csv_path)
+    text_draft = service.draft_from_text("SUB006, SUB007\nSUB008", "ezqcid")
+
+    assert folder_draft.to_dict("list") == {"ezqcid": ["SUB003", "SUB004"]}
+    assert file_draft.to_dict("records") == [
+        {"ezqcid": "SUB005", "site": "C", "scanner_model": "Prisma"}
+    ]
+    assert text_draft["ezqcid"].tolist() == ["SUB006", "SUB007", "SUB008"]
+    pd.testing.assert_frame_equal(service.subjects(), _subjects())
+    assert table_path.read_bytes() == before_bytes
+
+
+def test_list_import_draft_readers_fail_loud_on_invalid_sources(tmp_path) -> None:
+    service, _projects = _service(tmp_path)
+    unsupported = tmp_path / "incoming.json"
+    unsupported.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ConfigurationError, match="目录"):
+        service.draft_from_folder(tmp_path / "missing", "ezqcid")
+    with pytest.raises(ConfigurationError, match="格式"):
+        service.draft_from_file(unsupported)
+    with pytest.raises(ConfigurationError, match="为空"):
+        service.draft_from_text("  , \n", "ezqcid")
+    with pytest.raises(ConfigurationError, match="字段名"):
+        service.draft_from_text("SUB001", "not a valid field")
+
+
+def test_list_import_merge_columns_and_append_rows_use_exact_normalized_ezqcid(
+    tmp_path,
+) -> None:
+    service, _projects = _service(tmp_path)
+    service.replace_subjects(
+        pd.DataFrame({"ezqcid": ["SUB001", "SUB002"], "site": ["A", "B"]})
+    )
+
+    service.merge_subjects(
+        pd.DataFrame({"ezqcid": [" SUB001 ", "SUB003"], "batch": ["X", "Y"]}),
+        mode="columns",
+    )
+    merged = service.subjects().set_index("ezqcid")
+    assert list(merged.index) == ["SUB001", "SUB002", "SUB003"]
+    assert merged.loc["SUB001", "batch"] == "X"
+    assert merged.loc["SUB003", "batch"] == "Y"
+
+    service.merge_subjects(
+        pd.DataFrame(
+            {
+                "ezqcid": ["SUB004"],
+                "site": ["D"],
+                "batch": ["Z"],
+            }
+        ),
+        mode="rows",
+    )
+    assert service.subjects()["ezqcid"].tolist() == [
+        "SUB001",
+        "SUB002",
+        "SUB003",
+        "SUB004",
+    ]
+
+
+@pytest.mark.parametrize(
+    "incoming, mode, match",
+    [
+        (pd.DataFrame({"ezqcid": ["", "SUB003"], "batch": ["X", "Y"]}), "columns", "空白"),
+        (
+            pd.DataFrame({"ezqcid": ["SUB003", "SUB003"], "batch": ["X", "Y"]}),
+            "columns",
+            "重复",
+        ),
+        (pd.DataFrame({"ezqcid": ["SUB001"], "site": ["changed"]}), "columns", "overlap"),
+        (pd.DataFrame({"ezqcid": ["SUB003"], "other": ["X"]}), "rows", "same columns"),
+    ],
+)
+def test_failed_list_import_preserves_memory_and_atomic_table(
+    tmp_path,
+    incoming,
+    mode,
+    match,
+) -> None:
+    service, projects = _service(tmp_path)
+    current = pd.DataFrame({"ezqcid": ["SUB001", "SUB002"], "site": ["A", "B"]})
+    service.replace_subjects(current)
+    table_path = projects.current_project.table_dir / "ezqc_all.csv"
+    before_bytes = table_path.read_bytes()
+
+    with pytest.raises(ConfigurationError, match=match):
+        service.merge_subjects(incoming, mode=mode)
+
+    pd.testing.assert_frame_equal(service.subjects(), current)
+    assert table_path.read_bytes() == before_bytes
