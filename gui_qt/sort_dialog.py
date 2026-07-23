@@ -26,8 +26,8 @@ class SortDialog(QDialog):
         if not all(isinstance(rule, SortRule) for rule in applied_rules):
             raise TypeError("SortDialog requires SortRule values")
         self.setObjectName("sortDialog")
-        self.setWindowTitle("Sort rows")
-        self.setAccessibleName("Sort table rows")
+        self.setWindowTitle("排序行")
+        self.setAccessibleName("排序表格行")
         self.setModal(True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self._apply_pending = False
@@ -53,9 +53,12 @@ class SortDialog(QDialog):
         self.reset_button = self.button_box.button(
             QDialogButtonBox.StandardButton.Reset
         )
-        self.apply_button.setAccessibleName("Apply sort draft")
-        self.cancel_button.setAccessibleName("Cancel sort editing")
-        self.reset_button.setAccessibleName("Clear sort draft")
+        self.apply_button.setText("应用")
+        self.cancel_button.setText("取消")
+        self.reset_button.setText("重置")
+        self.apply_button.setAccessibleName("应用排序草稿")
+        self.cancel_button.setAccessibleName("取消排序编辑")
+        self.reset_button.setAccessibleName("清空排序草稿")
         self.apply_button.clicked.connect(self._request_apply)
         self.cancel_button.clicked.connect(self.reject)
         self.reset_button.clicked.connect(
@@ -74,7 +77,7 @@ class SortDialog(QDialog):
         )
         if duplicates:
             self.set_error(
-                "Each sort column can only be used once: " + ", ".join(duplicates)
+                "每一列只能用于一条排序规则：" + ", ".join(duplicates)
             )
             return
         self.editor.set_error("")

@@ -251,7 +251,7 @@ def test_total_condition_bound_disables_every_add_condition_button(qtbot, monkey
         for group in dialog.editor.group_editors
     )
     assert not dialog.editor.add_group_button.isEnabled()
-    with pytest.raises(ValueError, match="at most 3 conditions"):
+    with pytest.raises(ValueError, match="最多包含 3 个条件"):
         dialog.editor.add_group()
 
 

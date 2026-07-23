@@ -79,7 +79,7 @@ class QtProjectConfigWorkspace(QWidget):
         self.io_task_controller.errorRaised.connect(self._handle_io_error)
         self.io_task_controller.busyChanged.connect(self._set_io_busy)
         self.setObjectName("qtProjectConfigWorkspace")
-        self.setAccessibleName("EasyQC project configuration")
+        self.setAccessibleName("EasyQC 项目配置")
         self._build_ui()
         current = self.configuration.current_project
         self.refresh(
@@ -248,14 +248,14 @@ class QtProjectConfigWorkspace(QWidget):
 
         self.status_label = QLabel("", self)
         self.status_label.setObjectName("configStatus")
-        self.status_label.setAccessibleName("Configuration task status")
+        self.status_label.setAccessibleName("配置任务状态")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
         self.error_label = QLabel("", self)
         self.error_label.setObjectName("configError")
         self.error_label.setWordWrap(True)
-        self.error_label.setAccessibleName("Configuration error")
+        self.error_label.setAccessibleName("配置错误")
         layout.addWidget(self.error_label)
 
         self.project_list.currentItemChanged.connect(self._preview_project_item)
@@ -433,7 +433,7 @@ class QtProjectConfigWorkspace(QWidget):
         editor.addWidget(QLabel("标签", editor_widget))
         editor.addWidget(self.tag_table, 1)
 
-        self.module_row_actions_toolbar = QToolBar("Module row actions", editor_widget)
+        self.module_row_actions_toolbar = QToolBar("模块条目操作", editor_widget)
         self.module_row_actions_toolbar.setObjectName("configModuleRowActions")
         self.module_row_actions_toolbar.setMovable(False)
         self.module_row_actions_toolbar.setFloatable(False)
@@ -444,7 +444,7 @@ class QtProjectConfigWorkspace(QWidget):
             QKeySequence(),
             lambda: self._append_table_row(
                 self.score_table,
-                ("Quality", "Poor,Fair,Good"),
+                ("质量", "差,一般,好"),
             ),
         )
         (
@@ -460,7 +460,7 @@ class QtProjectConfigWorkspace(QWidget):
             self.module_row_actions_toolbar,
             "添加标签",
             QKeySequence(),
-            lambda: self._append_table_row(self.tag_table, ("Needs review",)),
+            lambda: self._append_table_row(self.tag_table, ("需要复核",)),
         )
         self.remove_tag_action, self.remove_tag_button = self._add_toolbar_action(
             self.module_row_actions_toolbar,
@@ -576,7 +576,7 @@ class QtProjectConfigWorkspace(QWidget):
             missing_entries = set(snapshot.projects) - set(entries_by_name)
             if missing_entries:
                 raise ValueError(
-                    f"Project preview metadata is unavailable: {sorted(missing_entries)}"
+                    f"项目预览信息不可用：{sorted(missing_entries)}"
                 )
             self.project_list.blockSignals(True)
             self.project_list.clear()
@@ -795,10 +795,10 @@ class QtProjectConfigWorkspace(QWidget):
         name = entry.name
         if self.project_loader is not None:
             if not self.project_loader(name):
-                self._set_error("Project load request was not accepted")
+                self._set_error("项目打开请求未被接受")
             else:
                 self._set_error("")
-                self.status_label.setText("Loading project…")
+                self.status_label.setText("正在加载项目…")
             return
         configuration = self.configuration
 
@@ -844,15 +844,15 @@ class QtProjectConfigWorkspace(QWidget):
     def _prompt_create_project(self) -> None:
         from PySide6.QtWidgets import QInputDialog
 
-        name, accepted = QInputDialog.getText(self, "New EasyQC project", "Project name")
+        name, accepted = QInputDialog.getText(self, "新建 EasyQC 项目", "项目名称")
         if not accepted or not name.strip():
             return
-        directory = QFileDialog.getExistingDirectory(self, "Choose project parent directory")
+        directory = QFileDialog.getExistingDirectory(self, "选择项目上级目录")
         if directory:
             self.create_project(name, directory)
 
     def _prompt_import_project(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "Choose an EasyQC project directory")
+        directory = QFileDialog.getExistingDirectory(self, "选择 EasyQC 项目目录")
         if directory:
             configuration = self.configuration
 
@@ -869,8 +869,8 @@ class QtProjectConfigWorkspace(QWidget):
         name = entry.name
         answer = QMessageBox.question(
             self,
-            "Unregister project",
-            f"Unregister {name}? Project files will not be deleted.",
+            "取消项目登记",
+            f"取消登记 {name}？项目文件不会被删除。",
         )
         if answer == QMessageBox.Yes:
             self.remove_project(name)
@@ -992,10 +992,10 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_code.clear()
         self.module_control.setChecked(False)
         self.score_table.setRowCount(1)
-        self.score_table.setItem(0, 0, QTableWidgetItem("Quality"))
-        self.score_table.setItem(0, 1, QTableWidgetItem("Poor,Fair,Good"))
+        self.score_table.setItem(0, 0, QTableWidgetItem("质量"))
+        self.score_table.setItem(0, 1, QTableWidgetItem("差,一般,好"))
         self.tag_table.setRowCount(1)
-        self.tag_table.setItem(0, 0, QTableWidgetItem("Needs review"))
+        self.tag_table.setItem(0, 0, QTableWidgetItem("需要复核"))
 
     def _discard_module_form(self) -> None:
         if self._selected_module_name is None:
@@ -1143,9 +1143,9 @@ class QtProjectConfigWorkspace(QWidget):
     def _choose_module_import(self) -> None:
         path, _filter = QFileDialog.getOpenFileName(
             self,
-            "Import QC module",
+            "导入质控模块",
             "",
-            "JSON files (*.json)",
+            "JSON 文件 (*.json)",
         )
         if path:
             configuration = self.configuration
@@ -1161,9 +1161,9 @@ class QtProjectConfigWorkspace(QWidget):
             return
         path, _filter = QFileDialog.getSaveFileName(
             self,
-            "Export QC module",
+            "导出质控模块",
             f"qcmodule_{self._selected_module_name}.json",
-            "JSON files (*.json)",
+            "JSON 文件 (*.json)",
         )
         if path:
             configuration = self.configuration
@@ -1175,14 +1175,14 @@ class QtProjectConfigWorkspace(QWidget):
 
     def _submit_io(self, operation: str, function: Callable[[], object]) -> bool:
         if self.io_task_controller.busy:
-            self._set_error("Another configuration task is already running")
+            self._set_error("另一项配置任务仍在运行")
             return False
         labels = {
-            "refresh": "Loading configuration…",
-            "load_project": "Loading project…",
-            "import_project": "Importing project…",
-            "import_module": "Importing QC module…",
-            "export_module": "Exporting QC module…",
+            "refresh": "正在加载配置…",
+            "load_project": "正在加载项目…",
+            "import_project": "正在导入项目…",
+            "import_module": "正在导入质控模块…",
+            "export_module": "正在导出质控模块…",
         }
         if operation not in labels:
             raise ValueError(f"Unsupported background operation: {operation}")
@@ -1201,29 +1201,29 @@ class QtProjectConfigWorkspace(QWidget):
         try:
             if operation in {"refresh", "load_project", "import_project"}:
                 if not isinstance(result, ConfigurationSnapshot):
-                    raise TypeError("Project load returned an invalid snapshot")
+                    raise TypeError("项目加载任务返回了无效快照")
                 if operation != "refresh":
                     self.configuration.publish_project_changed()
                 self._selected_module_name = None
                 self.refresh(result)
             elif operation == "import_module":
                 if not isinstance(result, tuple):
-                    raise TypeError("Module import returned an invalid module list")
+                    raise TypeError("模块导入任务返回了无效模块列表")
                 self.configuration.publish_modules_changed()
                 self._refresh_modules(modules=result)
             elif operation != "export_module":
                 raise ValueError(f"Unsupported background operation: {operation}")
         except Exception as exc:
             self._pending_io = None
-            self.status_label.setText("Configuration task failed")
+            self.status_label.setText("配置任务失败")
             self._set_error(str(exc))
             return
         completion = {
-            "refresh": "Configuration loaded",
-            "load_project": "Project loaded",
-            "import_project": "Project import complete",
-            "import_module": "QC module import complete",
-            "export_module": "Export complete",
+            "refresh": "配置已加载",
+            "load_project": "项目已加载",
+            "import_project": "项目导入完成",
+            "import_module": "质控模块导入完成",
+            "export_module": "导出完成",
         }
         self._pending_io = None
         self._set_error("")
@@ -1234,7 +1234,7 @@ class QtProjectConfigWorkspace(QWidget):
         if self._pending_io is None or self._pending_io[0] != revision:
             return
         self._pending_io = None
-        self.status_label.setText("Configuration task failed")
+        self.status_label.setText("配置任务失败")
         self._set_error(str(error).strip() or type(error).__name__)
 
     @Slot(bool)

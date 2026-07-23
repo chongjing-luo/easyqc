@@ -59,19 +59,19 @@ class FilterGroupEditor(QGroupBox):
         return self.error_label.text()
 
     def _build_ui(self) -> None:
-        self.setTitle("Filter group")
+        self.setTitle("筛选组")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
         header = QHBoxLayout()
-        header.addWidget(QLabel("Within this group", self))
+        header.addWidget(QLabel("组内关系", self))
         self.join_combo = QComboBox(self)
-        self.join_combo.addItem("Match all conditions", "all")
-        self.join_combo.addItem("Match any condition", "any")
-        self.join_combo.setAccessibleName(f"Combination for filter group {self.group_id}")
-        self.remove_group_button = QPushButton("Remove group", self)
-        self.remove_group_button.setAccessibleName(f"Remove filter group {self.group_id}")
+        self.join_combo.addItem("满足全部", "all")
+        self.join_combo.addItem("满足任一", "any")
+        self.join_combo.setAccessibleName(f"筛选组 {self.group_id} 的组内关系")
+        self.remove_group_button = QPushButton("删除组", self)
+        self.remove_group_button.setAccessibleName(f"删除筛选组 {self.group_id}")
         header.addWidget(self.join_combo)
         header.addStretch(1)
         header.addWidget(self.remove_group_button)
@@ -88,13 +88,13 @@ class FilterGroupEditor(QGroupBox):
         self.error_label.setObjectName("filterGroupError")
         self.error_label.setTextFormat(Qt.TextFormat.PlainText)
         self.error_label.setWordWrap(True)
-        self.error_label.setAccessibleName(f"Error for filter group {self.group_id}")
+        self.error_label.setAccessibleName(f"筛选组 {self.group_id} 错误")
         self.error_label.setVisible(False)
         layout.addWidget(self.error_label)
 
-        self.add_condition_button = QPushButton("Add condition", self)
+        self.add_condition_button = QPushButton("添加条件", self)
         self.add_condition_button.setAccessibleName(
-            f"Add condition to filter group {self.group_id}"
+            f"向筛选组 {self.group_id} 添加条件"
         )
         layout.addWidget(self.add_condition_button, 0, Qt.AlignmentFlag.AlignLeft)
         self.add_condition_button.clicked.connect(
@@ -107,7 +107,7 @@ class FilterGroupEditor(QGroupBox):
     ) -> FilterConditionRow:
         if len(self.condition_rows) >= MAX_FILTER_CONDITIONS_PER_GROUP:
             raise ValueError(
-                f"Filter group contains at most {MAX_FILTER_CONDITIONS_PER_GROUP} conditions"
+                f"每个筛选组最多包含 {MAX_FILTER_CONDITIONS_PER_GROUP} 个条件"
             )
         condition_id = (
             condition.condition_id
@@ -137,12 +137,12 @@ class FilterGroupEditor(QGroupBox):
 
     def set_group(self, group: FilterGroup) -> None:
         self.group_id = group.group_id
-        self.join_combo.setAccessibleName(f"Combination for filter group {self.group_id}")
-        self.remove_group_button.setAccessibleName(f"Remove filter group {self.group_id}")
+        self.join_combo.setAccessibleName(f"筛选组 {self.group_id} 的组内关系")
+        self.remove_group_button.setAccessibleName(f"删除筛选组 {self.group_id}")
         self.add_condition_button.setAccessibleName(
-            f"Add condition to filter group {self.group_id}"
+            f"向筛选组 {self.group_id} 添加条件"
         )
-        self.error_label.setAccessibleName(f"Error for filter group {self.group_id}")
+        self.error_label.setAccessibleName(f"筛选组 {self.group_id} 错误")
         index = self.join_combo.findData(group.join)
         if index < 0:
             raise ValueError(f"Unknown filter group join: {group.join}")
@@ -192,7 +192,7 @@ class FilterPanel(QWidget):
         if not profiles:
             raise ValueError("FilterPanel requires at least one column profile")
         self.setObjectName("filterPanel")
-        self.setAccessibleName("Grouped filter editor")
+        self.setAccessibleName("分组筛选编辑器")
         self._profiles = tuple(profiles)
         self._group_sequence = 0
         self._condition_sequence = 0
@@ -215,16 +215,16 @@ class FilterPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
         top = QHBoxLayout()
-        top.addWidget(QLabel("Across groups", self))
+        top.addWidget(QLabel("组间关系", self))
         self.top_join_combo = QComboBox(self)
         self.top_join_combo.setObjectName("filterTopJoin")
-        self.top_join_combo.addItem("Match all groups", "all")
-        self.top_join_combo.addItem("Match any group", "any")
-        self.top_join_combo.setAccessibleName("Combination across filter groups")
+        self.top_join_combo.addItem("满足全部组", "all")
+        self.top_join_combo.addItem("满足任一组", "any")
+        self.top_join_combo.setAccessibleName("筛选组之间的关系")
         top.addWidget(self.top_join_combo)
         top.addStretch(1)
-        self.add_group_button = QPushButton("Add group", self)
-        self.add_group_button.setAccessibleName("Add filter group")
+        self.add_group_button = QPushButton("添加组", self)
+        self.add_group_button.setAccessibleName("添加筛选组")
         top.addWidget(self.add_group_button)
         layout.addLayout(top)
 
@@ -243,7 +243,7 @@ class FilterPanel(QWidget):
         self.error_label.setObjectName("filterDialogError")
         self.error_label.setTextFormat(Qt.TextFormat.PlainText)
         self.error_label.setWordWrap(True)
-        self.error_label.setAccessibleName("Filter dialog error")
+        self.error_label.setAccessibleName("筛选编辑错误")
         self.error_label.setVisible(False)
         layout.addWidget(self.error_label)
         self.add_group_button.clicked.connect(
@@ -268,14 +268,14 @@ class FilterPanel(QWidget):
 
     def add_group(self, group: FilterGroup | None = None) -> FilterGroupEditor:
         if len(self.group_editors) >= MAX_FILTER_GROUPS:
-            raise ValueError(f"Filter contains at most {MAX_FILTER_GROUPS} groups")
+            raise ValueError(f"筛选最多包含 {MAX_FILTER_GROUPS} 个组")
         incoming_count = max(1, len(group.conditions) if group is not None else 1)
         current_count = sum(
             len(editor.condition_rows) for editor in self.group_editors
         )
         if current_count + incoming_count > MAX_FILTER_CONDITIONS:
             raise ValueError(
-                f"Filter contains at most {MAX_FILTER_CONDITIONS} conditions"
+                f"筛选最多包含 {MAX_FILTER_CONDITIONS} 个条件"
             )
         group_id = group.group_id if group is not None else self._next_group_id()
         self._used_group_ids.add(group_id)
@@ -345,7 +345,7 @@ class FilterPanel(QWidget):
             if group.conditions:
                 groups.append(group)
         if sum(len(group.conditions) for group in groups) > MAX_FILTER_CONDITIONS:
-            raise ValueError(f"Filter contains at most {MAX_FILTER_CONDITIONS} conditions")
+            raise ValueError(f"筛选最多包含 {MAX_FILTER_CONDITIONS} 个条件")
         return FilterExpression(
             group_join=str(self.top_join_combo.currentData()),
             groups=tuple(groups),
@@ -392,7 +392,7 @@ class FilterPanel(QWidget):
 
     def _update_group_titles(self) -> None:
         for index, editor in enumerate(self.group_editors, start=1):
-            editor.setTitle(f"Group {index}")
+            editor.setTitle(f"第 {index} 组")
 
     def _update_condition_limits(self) -> None:
         condition_count = sum(

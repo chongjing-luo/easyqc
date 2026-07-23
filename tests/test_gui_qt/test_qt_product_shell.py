@@ -6,10 +6,14 @@ import pandas as pd
 from shiboken6 import isValid
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
+    QAbstractButton,
+    QComboBox,
+    QGroupBox,
     QLabel,
     QListWidget,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QStackedWidget,
     QTabWidget,
     QToolBar,
@@ -100,6 +104,36 @@ def _primary_navigation_labels(window):
     ]
 
 
+def _visible_page_texts(page) -> tuple[str, ...]:
+    """Return human-visible control text for the currently selected page."""
+
+    texts: list[str] = []
+    for label in page.findChildren(QLabel):
+        if label.isVisibleTo(page) and label.text().strip():
+            texts.append(label.text().strip())
+    for button in page.findChildren(QAbstractButton):
+        if button.isVisibleTo(page) and button.text().strip():
+            texts.append(button.text().strip())
+    for group in page.findChildren(QGroupBox):
+        if group.isVisibleTo(page) and group.title().strip():
+            texts.append(group.title().strip())
+    for tabs in page.findChildren(QTabWidget):
+        if tabs.isVisibleTo(page):
+            texts.extend(
+                tabs.tabText(index).strip()
+                for index in range(tabs.count())
+                if tabs.tabText(index).strip()
+            )
+    for combo in page.findChildren(QComboBox):
+        if combo.isVisibleTo(page):
+            texts.extend(
+                combo.itemText(index).strip()
+                for index in range(combo.count())
+                if combo.itemText(index).strip()
+            )
+    return tuple(texts)
+
+
 def test_empty_product_shell_keeps_configuration_available_without_writes(qtbot, tmp_path) -> None:
     registry = tmp_path / "projects.json"
     services = build_app_services(registry)
@@ -110,7 +144,7 @@ def test_empty_product_shell_keeps_configuration_available_without_writes(qtbot,
     assert window.current_context.project_name == ""
     assert window.workspace_stack.count() == 6
     assert window.navigation.currentRow() == window.project_page_index
-    assert "No project" in window.shell_empty_label.text()
+    assert "尚未打开项目" in window.shell_empty_label.text()
     assert not registry.exists()
 
 
@@ -260,8 +294,35 @@ def test_direct_configuration_pages_have_no_visible_nested_tabs(qtbot, tmp_path)
 
     assert window.config_workspace.tabs.isHidden()
     assert window.config_workspace.constants_tab.parentWidget() is window.constants_page
-    assert window.config_workspace.subjects_tab.parentWidget() is window.qc_list_import_page
+    assert isinstance(window.qc_list_import_scroll, QScrollArea)
+    assert window.qc_list_import_scroll.widgetResizable()
+    assert window.qc_list_import_scroll.widget() is window.config_workspace.subjects_tab
+    assert window.config_workspace.subjects_tab.parentWidget() is (
+        window.qc_list_import_scroll.viewport()
+    )
     assert window.config_workspace.modules_tab.parentWidget() is window.modules_page
+    for page_index, page, content in (
+        (
+            window.qc_list_import_page_index,
+            window.qc_list_import_page,
+            window.config_workspace.subjects_tab,
+        ),
+        (
+            window.constants_page_index,
+            window.constants_page,
+            window.config_workspace.constants_tab,
+        ),
+        (
+            window.modules_page_index,
+            window.modules_page,
+            window.config_workspace.modules_tab,
+        ),
+    ):
+        window.navigation.setCurrentRow(page_index)
+        qtbot.waitUntil(page.isVisible)
+        assert content.isVisibleTo(page)
+        assert content.size().width() > 0
+        assert content.size().height() > 0
 
 
 def test_shell_uses_neutral_list_language_for_visible_context(qtbot, tmp_path) -> None:
@@ -283,6 +344,139 @@ def test_shell_uses_neutral_list_language_for_visible_context(qtbot, tmp_path) -
     assert "被试" not in visible_shell_text
     assert "变量设置" not in visible_shell_text
     assert "subject" not in visible_shell_text
+
+
+def test_all_six_pages_use_approved_runtime_vocabulary_without_repeated_titles(
+    qtbot,
+    tmp_path,
+) -> None:
+    window, _services = _window(qtbot, tmp_path)
+    forbidden = (
+        "受试者",
+        "被试",
+        "变量设置",
+        "项目设置",
+        "重新打开图像",
+        "查看器已连接",
+        "open qc",
+        "subject",
+    )
+
+    assert window.windowTitle() == "EasyQC"
+    assert window.shell_status_label.text() == "已加载项目：SAMPLE"
+    for row, (navigation_label, page) in enumerate(
+        zip(window.NAVIGATION_LABELS, window.direct_pages, strict=True)
+    ):
+        window.navigation.setCurrentRow(row)
+        qtbot.waitUntil(page.isVisible)
+        visible = _visible_page_texts(page)
+        normalized = "\n".join(visible).casefold()
+        assert not any(term.casefold() in normalized for term in forbidden), (
+            navigation_label,
+            visible,
+        )
+        assert navigation_label not in visible
+
+    module_header = window.config_workspace.module_list_header.layout()
+    project_header = window.config_workspace.project_list_header.layout()
+    assert module_header.indexOf(window.config_workspace.module_list_title) < (
+        module_header.indexOf(window.config_workspace.module_list_toolbar)
+    )
+    assert project_header.indexOf(window.config_workspace.project_list_title) < (
+        project_header.indexOf(window.config_workspace.project_toolbar)
+    )
+    assert window.config_workspace.new_module_action.text() == "新建模块"
+    assert window.config_workspace.import_module_action.text() == "导入模块"
+
+
+def test_pre_qc_and_results_share_one_chinese_table_inspector_vocabulary(
+    qtbot,
+    tmp_path,
+) -> None:
+    window, _services = _window(qtbot, tmp_path)
+    expected_outer = {
+        "筛选",
+        "排序",
+        "列",
+        "查找",
+        "上一页",
+        "下一页",
+        "视图设置",
+        "关闭",
+        "重置",
+        "取消",
+        "应用",
+    }
+    expected_filter = {
+        "组间关系",
+        "添加组",
+        "组内关系",
+        "删除组",
+        "添加条件",
+        "启用",
+        "列",
+        "条件",
+        "值",
+        "删除",
+    }
+    forbidden_english_controls = {
+        "Filter",
+        "Sort",
+        "Columns",
+        "Find",
+        "Export…",
+        "Previous",
+        "Next",
+        "View options",
+        "Close",
+        "Reset",
+        "Cancel",
+        "Apply",
+        "Across groups",
+        "Add group",
+        "Within this group",
+        "Remove group",
+        "Add condition",
+        "Use",
+        "Column",
+        "Operator",
+        "Value",
+        "Remove",
+    }
+
+    for page_index, workspace in (
+        (window.pre_qc_list_page_index, window.table_workspace),
+        (window.results_page_index, window.results_workspace),
+    ):
+        window.navigation.setCurrentRow(page_index)
+        workspace.open_filter_inspector()
+        qtbot.waitUntil(workspace.view_inspector.isVisible)
+        visible = set(_visible_page_texts(window.workspace_stack.currentWidget()))
+        assert expected_outer <= visible
+        assert expected_filter <= visible
+        assert forbidden_english_controls.isdisjoint(visible)
+        assert workspace.export_action.text() == "导出…"
+        assert workspace.export_action in workspace.action_toolbar.actions()
+        assert [workspace.inspector_tabs.tabText(index) for index in range(3)] == [
+            "筛选",
+            "排序",
+            "列",
+        ]
+        assert workspace.inspector_filter_panel.top_join_combo.itemText(0) == "满足全部组"
+        assert workspace.inspector_filter_panel.group_editors[0].join_combo.itemText(0) == (
+            "满足全部"
+        )
+        assert workspace.inspector_filter_panel.condition_rows[0].operator_combo.itemText(0) == (
+            "等于"
+        )
+        workspace.open_sort_inspector()
+        assert workspace.inspector_sort_panel.add_button.text() == "添加排序"
+        rule_row = workspace.inspector_sort_panel.add_rule()
+        assert rule_row.direction_combo.itemText(0) == "升序"
+        workspace.open_columns_inspector()
+        assert workspace.inspector_columns_panel.search_label.text() == "搜索列"
+        assert workspace.inspector_columns_panel.pin_button.text() == "固定"
+        workspace.close_view_inspector()
 
 
 def test_product_shell_reduced_viewport_keeps_navigation_and_content_reachable(
@@ -418,7 +612,7 @@ def test_stale_table_callback_is_rejected_after_same_id_project_switch(qtbot, tm
 
     assert window.current_context.project_name == "BETA"
     assert window.qc_workspace is current_workflow
-    assert "stale" in window.shell_error_label.text().lower()
+    assert "已失效" in window.shell_error_label.text()
 
 
 def test_failed_qc_replacement_keeps_old_workflow_then_success_closes_it(
@@ -600,7 +794,7 @@ def test_initial_project_materialization_runs_without_blocking_qt(
     qtbot.waitUntil(lambda: bool(event_loop_progress), timeout=2000)
 
     assert window.context_task_controller.busy
-    assert "Loading" in window.shell_status_label.text()
+    assert "正在加载" in window.shell_status_label.text()
     release.set()
     qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
     assert window.current_context.project_name == "SAMPLE"

@@ -61,7 +61,7 @@ def test_duplicate_sort_apply_stays_open_and_emits_nothing(qtbot):
 
     assert dialog.isVisible()
     assert emitted == []
-    assert "only be used once" in dialog.editor.error_text
+    assert "只能用于一条排序规则" in dialog.editor.error_text
     assert dialog.editor.error_label.textFormat() == Qt.TextFormat.PlainText
 
 
@@ -106,9 +106,9 @@ def test_sort_reset_cancel_close_and_apply_are_transactional(qtbot):
     )
     assert accepted == [(SortRule("age", False),)]
     assert not apply_dialog.apply_button.isEnabled()
-    assert apply_dialog.apply_button.accessibleName() == "Apply sort draft"
-    assert apply_dialog.cancel_button.accessibleName() == "Cancel sort editing"
-    assert apply_dialog.reset_button.accessibleName() == "Clear sort draft"
+    assert apply_dialog.apply_button.accessibleName() == "应用排序草稿"
+    assert apply_dialog.cancel_button.accessibleName() == "取消排序编辑"
+    assert apply_dialog.reset_button.accessibleName() == "清空排序草稿"
 
 
 def test_sort_fields_have_visible_labels_and_invalid_set_is_atomic(qtbot):
@@ -118,7 +118,7 @@ def test_sort_fields_have_visible_labels_and_invalid_set_is_atomic(qtbot):
     dialog.show()
 
     labels = {label.text() for label in dialog.editor.findChildren(QLabel)}
-    assert {"Priority", "Column", "Direction"} <= labels
+    assert {"优先级", "列", "方向"} <= labels
     with pytest.raises(ValueError, match="Unknown sort column"):
         dialog.editor.set_rules((SortRule("missing", False),))
     assert dialog.editor.rules() == applied

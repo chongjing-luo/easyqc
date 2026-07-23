@@ -80,7 +80,7 @@ class QtTableWorkspace(QWidget):
         if not isinstance(source, pd.DataFrame):
             raise TypeError("QtTableWorkspace source must be a pandas DataFrame")
         self.setObjectName("qtTableWorkspace")
-        self.setAccessibleName("EasyQC Table workspace")
+        self.setAccessibleName("EasyQC 表格工作区")
         self._pinned_width_update_pending = False
         self.service = TableViewService(source)
         self.export_service = TableExportService(self.service)
@@ -127,9 +127,9 @@ class QtTableWorkspace(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
 
-        self.action_toolbar = QToolBar("Table actions", self)
+        self.action_toolbar = QToolBar("表格操作", self)
         self.action_toolbar.setObjectName("tableToolbar")
-        self.action_toolbar.setAccessibleName("Table actions")
+        self.action_toolbar.setAccessibleName("表格操作")
         self.action_toolbar.setMovable(False)
         self.action_toolbar.setFloatable(False)
         self.action_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
@@ -137,19 +137,19 @@ class QtTableWorkspace(QWidget):
 
         self.filter_action = self._add_toolbar_action(
             self.action_toolbar,
-            "Filter",
+            "筛选",
             QKeySequence("Ctrl+Shift+F"),
             self.open_filter_inspector,
         )
         self.sort_action = self._add_toolbar_action(
             self.action_toolbar,
-            "Sort",
+            "排序",
             QKeySequence("Ctrl+Shift+S"),
             self.open_sort_inspector,
         )
         self.columns_action = self._add_toolbar_action(
             self.action_toolbar,
-            "Columns",
+            "列",
             QKeySequence("Ctrl+Shift+C"),
             self.open_columns_inspector,
         )
@@ -162,25 +162,25 @@ class QtTableWorkspace(QWidget):
         self.columns_button.setObjectName("columnsButton")
         self.find_edit = QLineEdit(self.action_toolbar)
         self.find_edit.setObjectName("findIdentity")
-        self.find_edit.setAccessibleName("Exact ezqcid to find")
-        self.find_edit.setPlaceholderText("Find exact ezqcid")
+        self.find_edit.setAccessibleName("查找精确 ezqcid")
+        self.find_edit.setPlaceholderText("查找精确 ezqcid")
         self.find_edit.setClearButtonEnabled(True)
         self.action_toolbar.addWidget(self.find_edit)
         self.find_action = self._add_toolbar_action(
             self.action_toolbar,
-            "Find",
+            "查找",
             QKeySequence("Ctrl+F"),
             lambda: self.find_identity_exact(self.find_edit.text()),
         )
         self.export_action = self._add_toolbar_action(
             self.action_toolbar,
-            "Export…",
+            "导出…",
             QKeySequence("Ctrl+E"),
             self._choose_export_destination,
         )
         self.cancel_export_action = self._add_toolbar_action(
             self.action_toolbar,
-            "Cancel export",
+            "取消导出",
             QKeySequence("Ctrl+Shift+E"),
             self.cancel_export,
         )
@@ -202,9 +202,9 @@ class QtTableWorkspace(QWidget):
         self.open_qc_button = None
         layout.addWidget(self.action_toolbar)
 
-        self.applied_toolbar = QToolBar("Applied view", self)
+        self.applied_toolbar = QToolBar("已应用视图", self)
         self.applied_toolbar.setObjectName("appliedFilterChips")
-        self.applied_toolbar.setAccessibleName("Applied filters")
+        self.applied_toolbar.setAccessibleName("已应用筛选")
         self.applied_toolbar.setMovable(False)
         self.applied_toolbar.setFloatable(False)
         self.applied_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
@@ -212,7 +212,7 @@ class QtTableWorkspace(QWidget):
 
         self.workspace_splitter = QSplitter(Qt.Horizontal, self)
         self.workspace_splitter.setObjectName("tableWorkspaceSplitter")
-        self.workspace_splitter.setAccessibleName("Table and view inspector")
+        self.workspace_splitter.setAccessibleName("表格与视图设置")
         self.workspace_splitter.setChildrenCollapsible(False)
         self.table_panel = QWidget(self.workspace_splitter)
         self.table_panel.setObjectName("tableMainPanel")
@@ -222,7 +222,7 @@ class QtTableWorkspace(QWidget):
         table_panel_layout.setSpacing(6)
 
         self.empty_state_label = QLabel(
-            "No project table is connected to Qt Preview. Use the default GUI for real QC.",
+            "没有可显示的质控前名单。",
             self.table_panel,
         )
         self.empty_state_label.setObjectName("previewEmptyState")
@@ -240,13 +240,13 @@ class QtTableWorkspace(QWidget):
         self.table_model = QtTableModel(self.row_window, self)
         self.table_view = QTableView(self.table_surface)
         self.table_view.setObjectName("previewTable")
-        self.table_view.setAccessibleName("EasyQC pre-QC list")
+        self.table_view.setAccessibleName("EasyQC 质控前名单")
         self.table_view.setAccessibleDescription(
-            "Read-only list rows. Filter and sort operate on the complete result."
+            "只读名单；筛选和排序作用于完整结果。"
         )
         self.pinned_view = QTableView(self.table_surface)
         self.pinned_view.setObjectName("pinnedIdentityTable")
-        self.pinned_view.setAccessibleName("Pinned ezqcid column")
+        self.pinned_view.setAccessibleName("固定 ezqcid 列")
         self._configure_table(self.table_view)
         self._configure_table(self.pinned_view)
         self.table_view.setModel(self.table_model)
@@ -275,13 +275,13 @@ class QtTableWorkspace(QWidget):
         footer_layout.setContentsMargins(10, 7, 10, 7)
         self.count_label = QLabel("", footer)
         self.count_label.setObjectName("tableStatus")
-        self.count_label.setAccessibleName("Table row count")
+        self.count_label.setAccessibleName("表格行数")
         self.range_label = QLabel("", footer)
         self.columns_status_label = QLabel("", footer)
         self.sort_status_label = QLabel("", footer)
         self.export_status_label = QLabel("", footer)
-        self.export_status_label.setAccessibleName("Table export status")
-        self.selection_status_label = QLabel("No row selected", footer)
+        self.export_status_label.setAccessibleName("表格导出状态")
+        self.selection_status_label = QLabel("未选择记录", footer)
         for status_label in (
             self.count_label,
             self.range_label,
@@ -299,14 +299,14 @@ class QtTableWorkspace(QWidget):
         footer_layout.addWidget(self.export_status_label)
         footer_layout.addStretch(1)
         footer_layout.addWidget(self.selection_status_label)
-        footer_layout.addWidget(QLabel("Rows", footer))
+        footer_layout.addWidget(QLabel("每页", footer))
         self.page_size_combo = QComboBox(footer)
         for size in (25, 50, 100, 200, 500):
             self.page_size_combo.addItem(str(size), size)
         if self.page_size_combo.findData(self.applied_state.page_size) < 0:
             self.page_size_combo.insertItem(0, str(self.applied_state.page_size), self.applied_state.page_size)
-        self.previous_button = QPushButton("Previous", footer)
-        self.next_button = QPushButton("Next", footer)
+        self.previous_button = QPushButton("上一页", footer)
+        self.next_button = QPushButton("下一页", footer)
         footer_layout.addWidget(self.page_size_combo)
         footer_layout.addWidget(self.previous_button)
         footer_layout.addWidget(self.next_button)
@@ -315,7 +315,7 @@ class QtTableWorkspace(QWidget):
         self.error_label = QLabel("", self.table_panel)
         self.error_label.setObjectName("tableError")
         self.error_label.setWordWrap(True)
-        self.error_label.setAccessibleName("Table action error")
+        self.error_label.setAccessibleName("表格操作错误")
         table_panel_layout.addWidget(self.error_label)
 
         self._build_view_inspector()
@@ -345,7 +345,7 @@ class QtTableWorkspace(QWidget):
 
         self.view_inspector = QFrame(self.workspace_splitter)
         self.view_inspector.setObjectName("viewInspector")
-        self.view_inspector.setAccessibleName("Table view inspector")
+        self.view_inspector.setAccessibleName("表格视图设置")
         self.view_inspector.setMinimumWidth(0)
         self.view_inspector.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         inspector_layout = QVBoxLayout(self.view_inspector)
@@ -353,23 +353,23 @@ class QtTableWorkspace(QWidget):
         inspector_layout.setSpacing(8)
 
         header = QHBoxLayout()
-        header.addWidget(QLabel("View options", self.view_inspector))
+        header.addWidget(QLabel("视图设置", self.view_inspector))
         header.addStretch(1)
-        self.inspector_close_button = QPushButton("Close", self.view_inspector)
+        self.inspector_close_button = QPushButton("关闭", self.view_inspector)
         self.inspector_close_button.setObjectName("inspectorCloseButton")
-        self.inspector_close_button.setAccessibleName("Close table view inspector")
+        self.inspector_close_button.setAccessibleName("关闭表格视图设置")
         header.addWidget(self.inspector_close_button)
         inspector_layout.addLayout(header)
 
         self.inspector_scroll = QScrollArea(self.view_inspector)
         self.inspector_scroll.setObjectName("tableInspectorScroll")
-        self.inspector_scroll.setAccessibleName("Scrollable table view drafts")
+        self.inspector_scroll.setAccessibleName("可滚动表格视图草稿")
         self.inspector_scroll.setWidgetResizable(True)
         self.inspector_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.inspector_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.inspector_tabs = QTabWidget(self.inspector_scroll)
         self.inspector_tabs.setObjectName("tableInspector")
-        self.inspector_tabs.setAccessibleName("Filter sort and column drafts")
+        self.inspector_tabs.setAccessibleName("筛选、排序和列设置草稿")
         self.inspector_tabs.setMinimumWidth(0)
         self._rebuild_inspector_panels()
         self.inspector_scroll.setWidget(self.inspector_tabs)
@@ -377,18 +377,18 @@ class QtTableWorkspace(QWidget):
 
         self.inspector_error_label = QLabel("", self.view_inspector)
         self.inspector_error_label.setObjectName("tableInspectorError")
-        self.inspector_error_label.setAccessibleName("Table view inspector error")
+        self.inspector_error_label.setAccessibleName("表格视图设置错误")
         self.inspector_error_label.setWordWrap(True)
         self.inspector_error_label.setVisible(False)
         inspector_layout.addWidget(self.inspector_error_label)
 
         action_row = QHBoxLayout()
-        self.inspector_reset_button = QPushButton("Reset", self.view_inspector)
-        self.inspector_cancel_button = QPushButton("Cancel", self.view_inspector)
-        self.inspector_apply_button = QPushButton("Apply", self.view_inspector)
-        self.inspector_reset_button.setAccessibleName("Reset all view drafts")
-        self.inspector_cancel_button.setAccessibleName("Cancel table view editing")
-        self.inspector_apply_button.setAccessibleName("Apply table view drafts")
+        self.inspector_reset_button = QPushButton("重置", self.view_inspector)
+        self.inspector_cancel_button = QPushButton("取消", self.view_inspector)
+        self.inspector_apply_button = QPushButton("应用", self.view_inspector)
+        self.inspector_reset_button.setAccessibleName("重置全部视图草稿")
+        self.inspector_cancel_button.setAccessibleName("取消表格视图编辑")
+        self.inspector_apply_button.setAccessibleName("应用表格视图草稿")
         action_row.addWidget(self.inspector_reset_button)
         action_row.addStretch(1)
         action_row.addWidget(self.inspector_cancel_button)
@@ -419,9 +419,9 @@ class QtTableWorkspace(QWidget):
             self._columns_with_current_widths(self.applied_state.columns),
             self.inspector_tabs,
         )
-        self.inspector_tabs.addTab(self.inspector_filter_panel, "Filter")
-        self.inspector_tabs.addTab(self.inspector_sort_panel, "Sort")
-        self.inspector_tabs.addTab(self.inspector_columns_panel, "Columns")
+        self.inspector_tabs.addTab(self.inspector_filter_panel, "筛选")
+        self.inspector_tabs.addTab(self.inspector_sort_panel, "排序")
+        self.inspector_tabs.addTab(self.inspector_columns_panel, "列")
         self._inspector_origin_revision = None
 
     def _load_inspector_draft(self) -> None:
@@ -472,7 +472,7 @@ class QtTableWorkspace(QWidget):
 
         if self._inspector_origin_revision != self.applied_state.revision:
             self._set_inspector_error(
-                "The applied table view changed. Reopen the inspector and try again."
+                "已应用视图发生变化，请重新打开视图设置后再试。"
             )
             return False
         try:
@@ -490,7 +490,7 @@ class QtTableWorkspace(QWidget):
         if duplicate_columns:
             self.inspector_tabs.setCurrentWidget(self.inspector_sort_panel)
             self.inspector_sort_panel.set_error(
-                "Each sort column can only be used once: "
+                "每一列只能用于一条排序规则："
                 + ", ".join(duplicate_columns)
             )
             return False
@@ -837,7 +837,7 @@ class QtTableWorkspace(QWidget):
         if not isinstance(rules, tuple) or not all(
             isinstance(rule, SortRule) for rule in rules
         ):
-            dialog.set_error("Sort dialog returned an invalid draft")
+            dialog.set_error("排序窗口返回了无效草稿")
             return
         if not self.apply_sort_rules(rules):
             dialog.set_error(self.error_text)
@@ -879,7 +879,7 @@ class QtTableWorkspace(QWidget):
         columns: object,
     ) -> None:
         if not isinstance(columns, ColumnViewState):
-            dialog.set_error("Columns dialog returned an invalid draft")
+            dialog.set_error("列设置窗口返回了无效草稿")
             return
         if not self.apply_column_state(columns):
             dialog.set_error(self.error_text)
@@ -892,7 +892,7 @@ class QtTableWorkspace(QWidget):
         expression: object,
     ) -> None:
         if not isinstance(expression, FilterExpression):
-            dialog.set_error("Filter dialog returned an invalid draft")
+            dialog.set_error("筛选窗口返回了无效草稿")
             return
         candidate = self.applied_state.with_filter(expression)
         if not self._commit_state(candidate, reset_page=True):
@@ -1028,9 +1028,9 @@ class QtTableWorkspace(QWidget):
     def _choose_export_destination(self) -> None:
         destination, _selected_filter = QFileDialog.getSaveFileName(
             self,
-            "Export applied table",
+            "导出当前表格视图",
             "",
-            "CSV files (*.csv)",
+            "CSV 文件 (*.csv)",
         )
         if destination:
             self.start_export(destination)
@@ -1044,12 +1044,12 @@ class QtTableWorkspace(QWidget):
         """Submit one captured applied-result export without blocking Qt."""
 
         if self.export_task_controller.busy:
-            self._set_error("A table export is already running")
+            self._set_error("表格导出任务仍在运行")
             return False
         try:
             output_path = Path(destination)
         except TypeError:
-            self._set_error("Export destination must be a filesystem path")
+            self._set_error("导出位置必须是文件路径")
             return False
         token = Event()
         revision = self.result.state.revision
@@ -1060,7 +1060,7 @@ class QtTableWorkspace(QWidget):
         self._export_revision = revision
         self.last_export_receipt = None
         self.export_status_label.setText(
-            f"Exporting 0 / {result.matched_total:,} rows…"
+            f"正在导出 0 / {result.matched_total:,} 行…"
         )
         self._set_error("")
         self.export_task_controller.submit(
@@ -1086,7 +1086,7 @@ class QtTableWorkspace(QWidget):
         if not self.export_task_controller.busy or self._export_cancel_event is None:
             return False
         self._export_cancel_event.set()
-        self.export_status_label.setText("Cancelling export…")
+        self.export_status_label.setText("正在取消导出…")
         self.cancel_export_action.setEnabled(False)
         return True
 
@@ -1100,7 +1100,7 @@ class QtTableWorkspace(QWidget):
         if revision != self._export_revision:
             return
         self.export_status_label.setText(
-            f"Exporting {completed:,} / {total:,} rows…"
+            f"正在导出 {completed:,} / {total:,} 行…"
         )
 
     @Slot(int, object)
@@ -1110,12 +1110,12 @@ class QtTableWorkspace(QWidget):
         if not isinstance(result, ExportReceipt):
             self._handle_export_error(
                 revision,
-                TableExportError("Background table export returned an invalid receipt"),
+                TableExportError("后台表格导出任务返回了无效回执"),
             )
             return
         self.last_export_receipt = result
         self.export_status_label.setText(
-            f"Exported {result.rows:,} rows · {result.destination.name}"
+            f"已导出 {result.rows:,} 行 · {result.destination.name}"
         )
         self._set_error("")
         self._clear_export_request()
@@ -1125,11 +1125,11 @@ class QtTableWorkspace(QWidget):
         if revision != self._export_revision:
             return
         if isinstance(error, TableExportCancelled):
-            self.export_status_label.setText("Export cancelled")
+            self.export_status_label.setText("导出已取消")
             self._set_error("")
         else:
             message = str(error).strip() or type(error).__name__
-            self.export_status_label.setText("Export failed")
+            self.export_status_label.setText("导出失败")
             self._set_error(message)
         self._clear_export_request()
 
@@ -1172,15 +1172,15 @@ class QtTableWorkspace(QWidget):
     def find_identity_exact(self, identity: str | None = None) -> bool:
         query = (self.find_edit.text() if identity is None else identity).strip()
         if not query:
-            self._set_error("Enter an exact ezqcid")
+            self._set_error("请输入精确的 ezqcid")
             return False
         try:
             result_position = self.service.find_identity(self.result, query)
         except QcIdentityError:
-            self._set_error("The applied result has no ezqcid column")
+            self._set_error("当前结果中没有 ezqcid 列")
             return False
         if result_position is None:
-            self._set_error(f"No exact ezqcid match: {query}")
+            self._set_error(f"没有匹配的 ezqcid：{query}")
             return False
         self.selected_source_position = int(self.result.source_positions[result_position])
         self.page_offset = (
@@ -1225,9 +1225,9 @@ class QtTableWorkspace(QWidget):
         selected = self.table_view.selectionModel().selectedRows()
         if not selected:
             self._set_error(
-                "The selected record is outside the current view"
+                "所选记录不在当前视图中"
                 if self.selected_source_position is not None
-                else "Select a row before opening QC"
+                else "请先选择一行"
             )
             return False
         return self.open_qc_reference(self.table_model.row_reference(selected[0].row()))
@@ -1246,7 +1246,7 @@ class QtTableWorkspace(QWidget):
             return False
         local_row = position - self.row_window.offset
         if local_row < 0 or local_row >= self.table_model.rowCount():
-            self._set_error("The selected record is outside the current view")
+            self._set_error("所选记录不在当前视图中")
             return False
         current = self.table_model.row_reference(local_row)
         if current.source_position != reference.source_position:
@@ -1258,7 +1258,7 @@ class QtTableWorkspace(QWidget):
             self._set_error(str(exc))
             return False
         if self.on_open_qc is None:
-            self._set_error("QC opening is unavailable in Qt Preview")
+            self._set_error("Qt 预览模式不能打开质控")
             return False
         self._set_error("")
         self.on_open_qc(identity)
@@ -1315,7 +1315,7 @@ class QtTableWorkspace(QWidget):
         if not isinstance(result, TableViewResult):
             self._handle_background_error(
                 revision,
-                TableViewError("Background table query returned an invalid result"),
+                TableViewError("后台表格查询返回了无效结果"),
             )
             return
         reset_page = self._pending_reset_page
@@ -1337,7 +1337,7 @@ class QtTableWorkspace(QWidget):
     def _set_background_busy(self, busy: bool) -> None:
         self.inspector_apply_button.setEnabled(not busy)
         if busy:
-            self.count_label.setText("Applying…")
+            self.count_label.setText("正在应用…")
         else:
             self._update_status()
 
@@ -1452,7 +1452,7 @@ class QtTableWorkspace(QWidget):
             summary = self._condition_summary(condition)
             action = QAction(f"{summary}  ×", self.applied_toolbar)
             action.setData(condition.condition_id)
-            action.setToolTip(f"Remove filter {summary}")
+            action.setToolTip(f"移除筛选 {summary}")
             action.triggered.connect(
                 lambda _checked=False, condition_id=condition.condition_id: self.remove_applied_condition(condition_id)
             )
@@ -1460,7 +1460,7 @@ class QtTableWorkspace(QWidget):
             chip = self.applied_toolbar.widgetForAction(action)
             if chip is not None:
                 chip.setObjectName("filterChip")
-                chip.setAccessibleName(f"Remove filter {summary}")
+                chip.setAccessibleName(f"移除筛选 {summary}")
         self.applied_toolbar.setVisible(bool(self.applied_state.conditions))
 
     @staticmethod
@@ -1476,16 +1476,16 @@ class QtTableWorkspace(QWidget):
     def _update_status(self) -> None:
         matched = self.result.matched_total
         total = self.result.source_total
-        self.count_label.setText(f"{matched:,} / {total:,} rows")
+        self.count_label.setText(f"{matched:,} / {total:,} 行")
         self.empty_state_label.setVisible(matched == 0)
         start, end = self.visible_range
-        self.range_label.setText(f"Rows {start:,}–{end:,}")
+        self.range_label.setText(f"第 {start:,}–{end:,} 行")
         visible = len(self.applied_state.columns.visible_columns)
         column_total = len(self.applied_state.columns.order)
-        self.columns_status_label.setText(f"Columns {visible}/{column_total}")
-        self.filter_action.setText(f"Filter ({len(self.applied_state.conditions)})")
-        self.sort_action.setText(f"Sort ({len(self.applied_state.sort_rules)})")
-        self.columns_action.setText(f"Columns ({visible}/{column_total})")
+        self.columns_status_label.setText(f"列 {visible}/{column_total}")
+        self.filter_action.setText(f"筛选 ({len(self.applied_state.conditions)})")
+        self.sort_action.setText(f"排序 ({len(self.applied_state.sort_rules)})")
+        self.columns_action.setText(f"列 ({visible}/{column_total})")
         self.sort_status_label.setText(
             " · ".join(
                 f"{priority} {rule.column} {'↑' if rule.ascending else '↓'}"
@@ -1493,13 +1493,13 @@ class QtTableWorkspace(QWidget):
             )
         )
         if self.selection_outside_view:
-            self.selection_status_label.setText("Selected record is outside this view")
+            self.selection_status_label.setText("所选记录不在当前视图中")
         elif self.selected_source_position is not None:
             self.selection_status_label.setText(
-                f"Selected source row {self.selected_source_position + 1:,}"
+                f"已选原始第 {self.selected_source_position + 1:,} 行"
             )
         else:
-            self.selection_status_label.setText("No row selected")
+            self.selection_status_label.setText("未选择记录")
         page_index = self.page_size_combo.findData(self.applied_state.page_size)
         if page_index >= 0:
             self.page_size_combo.blockSignals(True)

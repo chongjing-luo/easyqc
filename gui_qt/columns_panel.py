@@ -35,39 +35,39 @@ class ColumnsPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
-        heading = QLabel("Columns", self)
+        heading = QLabel("列设置", self)
         layout.addWidget(heading)
         hint = QLabel(
-            "Checked columns are visible. Pinned columns stay at the front.", self
+            "勾选要显示的列；固定列始终位于表格最前面。", self
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
         self.search_edit = QLineEdit(self)
-        self.search_edit.setPlaceholderText("Search columns")
+        self.search_edit.setPlaceholderText("搜索列")
         self.search_edit.setClearButtonEnabled(True)
-        self.search_edit.setAccessibleName("Search table columns")
-        self.search_label = QLabel("Search columns", self)
+        self.search_edit.setAccessibleName("搜索表格列")
+        self.search_label = QLabel("搜索列", self)
         self.search_label.setBuddy(self.search_edit)
         layout.addWidget(self.search_label)
         layout.addWidget(self.search_edit)
 
         self.list_widget = QListWidget(self)
         self.list_widget.setObjectName("columnList")
-        self.list_widget.setAccessibleName("Table column order and visibility")
+        self.list_widget.setAccessibleName("表格列顺序与可见性")
         self.list_widget.setAlternatingRowColors(True)
         layout.addWidget(self.list_widget, 1)
 
         actions = QHBoxLayout()
-        self.move_up_button = QPushButton("Move up", self)
-        self.move_down_button = QPushButton("Move down", self)
-        self.pin_button = QPushButton("Pin", self)
-        self.unpin_button = QPushButton("Unpin", self)
+        self.move_up_button = QPushButton("上移", self)
+        self.move_down_button = QPushButton("下移", self)
+        self.pin_button = QPushButton("固定", self)
+        self.unpin_button = QPushButton("取消固定", self)
         for button, name in (
-            (self.move_up_button, "Move selected column up"),
-            (self.move_down_button, "Move selected column down"),
-            (self.pin_button, "Pin selected column"),
-            (self.unpin_button, "Unpin selected column"),
+            (self.move_up_button, "上移所选列"),
+            (self.move_down_button, "下移所选列"),
+            (self.pin_button, "固定所选列"),
+            (self.unpin_button, "取消固定所选列"),
         ):
             button.setAccessibleName(name)
             actions.addWidget(button)
@@ -78,7 +78,7 @@ class ColumnsPanel(QWidget):
         self.error_label.setObjectName("columnsError")
         self.error_label.setTextFormat(Qt.TextFormat.PlainText)
         self.error_label.setWordWrap(True)
-        self.error_label.setAccessibleName("Column draft error")
+        self.error_label.setAccessibleName("列设置草稿错误")
         layout.addWidget(self.error_label)
 
         self.search_edit.textChanged.connect(self._refresh_search)
@@ -112,16 +112,16 @@ class ColumnsPanel(QWidget):
         hidden_set = set(hidden)
         pinned_set = set(pinned)
         if len(order_set) != len(order):
-            raise ValueError("Column draft contains duplicate columns")
+            raise ValueError("列设置中包含重复列")
         if len(hidden_set) != len(hidden) or len(pinned_set) != len(pinned):
-            raise ValueError("Hidden and pinned column lists cannot contain duplicates")
+            raise ValueError("隐藏列或固定列列表中包含重复项")
         unknown = (hidden_set | pinned_set) - order_set
         if unknown:
-            raise ValueError(f"Column draft contains unknown columns: {sorted(unknown)}")
+            raise ValueError(f"列设置中包含未知列：{sorted(unknown)}")
         hidden_pinned = hidden_set & pinned_set
         if hidden_pinned:
             raise ValueError(
-                "Columns cannot be both hidden and pinned: "
+                "列不能同时隐藏和固定："
                 + ", ".join(sorted(hidden_pinned))
             )
         if "ezqcid" in order and (
@@ -129,9 +129,9 @@ class ColumnsPanel(QWidget):
             or "ezqcid" not in pinned_set
             or "ezqcid" in hidden_set
         ):
-            raise ValueError("ezqcid must remain first, visible and pinned")
+            raise ValueError("ezqcid 必须保持在第一列、可见且固定")
         if set(order[: len(pinned_set)]) != pinned_set:
-            raise ValueError("Pinned columns must form one contiguous leading block")
+            raise ValueError("固定列必须组成连续的前置列区")
         self._widths = state.widths
         self.list_widget.clear()
         for column in order:
@@ -174,7 +174,7 @@ class ColumnsPanel(QWidget):
     ) -> None:
         item.setData(COLUMN_ROLE, column)
         item.setData(PINNED_ROLE, pinned)
-        item.setText(f"{column}   · pinned" if pinned else column)
+        item.setText(f"{column}   · 已固定" if pinned else column)
         item.setData(Qt.ItemDataRole.AccessibleTextRole, item.text())
         flags = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
         if not pinned:
@@ -207,7 +207,7 @@ class ColumnsPanel(QWidget):
             return False
         column = str(self.list_widget.item(row).data(COLUMN_ROLE))
         if column == "ezqcid":
-            self.set_error("ezqcid must remain the first column")
+            self.set_error("ezqcid 必须保持为第一列")
             return False
         target = self._target_row(row, delta)
         if target is None:

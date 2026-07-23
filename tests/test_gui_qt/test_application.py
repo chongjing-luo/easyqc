@@ -70,7 +70,8 @@ def test_preview_window_renders_injected_core_table_and_closes_cleanly(qtbot, tm
     assert table.model().data(table.model().index(1, 0)) == "SUB002"
     assert window.services is services
     assert "2 / 2" in window.status_label.text()
-    assert "Preview" in window.windowTitle()
+    assert window.windowTitle() == "EasyQC"
+    assert window.accessibleName() == "EasyQC 表格预览"
     assert_frame_equal(source, original)
 
     window.close()
@@ -129,8 +130,8 @@ def test_empty_preview_explains_that_no_project_table_is_connected(qtbot, tmp_pa
 
     assert empty_state is not None
     assert not empty_state.isHidden()
-    assert "default GUI" in empty_state.text()
-    assert table.accessibleName() == "EasyQC pre-QC list"
+    assert "没有可显示" in empty_state.text()
+    assert table.accessibleName() == "EasyQC 质控前名单"
 
 
 def test_gui_qt_package_has_no_tkinter_dependency():

@@ -102,7 +102,7 @@ class QtQcResultsPage(QWidget):
         self.table_workspace.find_edit.setObjectName("qcResultsFindIdentity")
         self.table_workspace.find_edit.setAccessibleName("搜索精确 ezqcid")
         self.table_workspace.find_action.setText("查找")
-        self.table_workspace.export_action.setText("导出结果")
+        self.table_workspace.export_action.setText("导出…")
         self.table_workspace.export_action.setToolTip("导出当前质控结果视图")
         self.table_workspace.previous_button.setText("上一页")
         self.table_workspace.next_button.setText("下一页")

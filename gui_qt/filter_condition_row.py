@@ -67,20 +67,20 @@ _OPERATORS_BY_KIND = {
 }
 
 _OPERATOR_LABELS = {
-    "==": "is",
-    "!=": "is not",
-    "contains": "contains",
-    "startswith": "starts with",
-    "endswith": "ends with",
-    ">": "greater than",
-    ">=": "at least",
-    "<": "less than",
-    "<=": "at most",
-    "between": "between",
-    "in": "is one of",
-    "not_in": "is not one of",
-    "isna": "is empty",
-    "notna": "is not empty",
+    "==": "等于",
+    "!=": "不等于",
+    "contains": "包含",
+    "startswith": "开头为",
+    "endswith": "结尾为",
+    ">": "大于",
+    ">=": "大于或等于",
+    "<": "小于",
+    "<=": "小于或等于",
+    "between": "范围",
+    "in": "属于",
+    "not_in": "不属于",
+    "isna": "为空",
+    "notna": "不为空",
 }
 
 
@@ -161,12 +161,12 @@ class FilterConditionRow(QFrame):
         layout.setHorizontalSpacing(8)
         layout.setVerticalSpacing(5)
 
-        self.enabled_checkbox = QCheckBox("Use", self)
+        self.enabled_checkbox = QCheckBox("启用", self)
         self.enabled_checkbox.setChecked(True)
-        self.column_label = QLabel("Column", self)
-        self.operator_label_widget = QLabel("Operator", self)
-        self.value_label = QLabel("Value", self)
-        self.remove_button = QPushButton("Remove", self)
+        self.column_label = QLabel("列", self)
+        self.operator_label_widget = QLabel("条件", self)
+        self.value_label = QLabel("值", self)
+        self.remove_button = QPushButton("删除", self)
         self.remove_button.setObjectName("removeFilterCondition")
         self.column_combo = QComboBox(self)
         self.column_combo.setObjectName("filterColumn")
@@ -181,7 +181,7 @@ class FilterConditionRow(QFrame):
         self.choice_combo.setObjectName("filterChoice")
         self.membership_edit = QPlainTextEdit(self.value_stack)
         self.membership_edit.setObjectName("filterMembership")
-        self.membership_edit.setPlaceholderText("One value per line")
+        self.membership_edit.setPlaceholderText("每行一个值")
         self.membership_edit.setTabChangesFocus(True)
 
         self.range_widget = QWidget(self.value_stack)
@@ -192,9 +192,9 @@ class FilterConditionRow(QFrame):
         self.range_start.setObjectName("filterRangeStart")
         self.range_end = QLineEdit(self.range_widget)
         self.range_end.setObjectName("filterRangeEnd")
-        range_layout.addWidget(QLabel("From", self.range_widget))
+        range_layout.addWidget(QLabel("从", self.range_widget))
         range_layout.addWidget(self.range_start)
-        range_layout.addWidget(QLabel("To", self.range_widget))
+        range_layout.addWidget(QLabel("到", self.range_widget))
         range_layout.addWidget(self.range_end)
 
         self.datetime_edit = QDateTimeEdit(self.value_stack)
@@ -210,11 +210,11 @@ class FilterConditionRow(QFrame):
         for editor in (self.datetime_range_start, self.datetime_range_end):
             editor.setCalendarPopup(True)
             editor.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
-        datetime_range_layout.addWidget(QLabel("From", self.datetime_range_widget))
+        datetime_range_layout.addWidget(QLabel("从", self.datetime_range_widget))
         datetime_range_layout.addWidget(self.datetime_range_start)
-        datetime_range_layout.addWidget(QLabel("To", self.datetime_range_widget))
+        datetime_range_layout.addWidget(QLabel("到", self.datetime_range_widget))
         datetime_range_layout.addWidget(self.datetime_range_end)
-        self.no_value_label = QLabel("No value required", self.value_stack)
+        self.no_value_label = QLabel("无需填写值", self.value_stack)
 
         for widget in (
             self.literal_edit,
@@ -270,25 +270,25 @@ class FilterConditionRow(QFrame):
 
     def _set_accessible_names(self) -> None:
         suffix = self.condition_id
-        self.enabled_checkbox.setAccessibleName(f"Enable filter condition {suffix}")
-        self.column_combo.setAccessibleName(f"Column for filter condition {suffix}")
-        self.operator_combo.setAccessibleName(f"Operator for filter condition {suffix}")
-        self.literal_edit.setAccessibleName(f"Value for filter condition {suffix}")
-        self.choice_combo.setAccessibleName(f"Choice for filter condition {suffix}")
+        self.enabled_checkbox.setAccessibleName(f"启用筛选条件 {suffix}")
+        self.column_combo.setAccessibleName(f"筛选条件 {suffix} 的列")
+        self.operator_combo.setAccessibleName(f"筛选条件 {suffix} 的判断方式")
+        self.literal_edit.setAccessibleName(f"筛选条件 {suffix} 的值")
+        self.choice_combo.setAccessibleName(f"筛选条件 {suffix} 的选项")
         self.membership_edit.setAccessibleName(
-            f"Values for filter condition {suffix}, one per line"
+            f"筛选条件 {suffix} 的多个值，每行一个"
         )
-        self.range_start.setAccessibleName(f"Start value for filter condition {suffix}")
-        self.range_end.setAccessibleName(f"End value for filter condition {suffix}")
-        self.datetime_edit.setAccessibleName(f"Date and time for filter condition {suffix}")
+        self.range_start.setAccessibleName(f"筛选条件 {suffix} 的起始值")
+        self.range_end.setAccessibleName(f"筛选条件 {suffix} 的结束值")
+        self.datetime_edit.setAccessibleName(f"筛选条件 {suffix} 的日期时间")
         self.datetime_range_start.setAccessibleName(
-            f"Start date and time for filter condition {suffix}"
+            f"筛选条件 {suffix} 的起始日期时间"
         )
         self.datetime_range_end.setAccessibleName(
-            f"End date and time for filter condition {suffix}"
+            f"筛选条件 {suffix} 的结束日期时间"
         )
-        self.remove_button.setAccessibleName(f"Remove filter condition {suffix}")
-        self.error_label.setAccessibleName(f"Error for filter condition {suffix}")
+        self.remove_button.setAccessibleName(f"删除筛选条件 {suffix}")
+        self.error_label.setAccessibleName(f"筛选条件 {suffix} 错误")
 
     def _populate_columns(self) -> None:
         for profile in self._profiles.values():
@@ -326,9 +326,9 @@ class FilterConditionRow(QFrame):
             if profile.kind == ColumnKind.NUMBER:
                 self.range_start.setValidator(_number_validator(self.range_start))
                 self.range_end.setValidator(_number_validator(self.range_end))
-                placeholder = "Number"
+                placeholder = "数值"
             else:
-                placeholder = "Value"
+                placeholder = "值"
             self.range_start.setPlaceholderText(placeholder)
             self.range_end.setPlaceholderText(placeholder)
             self.value_stack.setCurrentWidget(self.range_widget)
@@ -342,7 +342,8 @@ class FilterConditionRow(QFrame):
             self.choice_combo.clear()
             values = (True, False) if profile.kind == ColumnKind.BOOLEAN else profile.values
             for value in values:
-                self.choice_combo.addItem(str(value), value)
+                label = "是" if value is True else "否" if value is False else str(value)
+                self.choice_combo.addItem(label, value)
             self.value_stack.setCurrentWidget(self.choice_combo)
         elif profile.kind == ColumnKind.DATETIME:
             self.value_control_kind = "datetime"
@@ -351,9 +352,9 @@ class FilterConditionRow(QFrame):
             self.value_control_kind = "literal"
             if profile.kind == ColumnKind.NUMBER:
                 self.literal_edit.setValidator(_number_validator(self.literal_edit))
-                self.literal_edit.setPlaceholderText("Number")
+                self.literal_edit.setPlaceholderText("数值")
             else:
-                self.literal_edit.setPlaceholderText("Value")
+                self.literal_edit.setPlaceholderText("值")
                 if profile.values:
                     completer = QCompleter(
                         [str(value) for value in profile.values],

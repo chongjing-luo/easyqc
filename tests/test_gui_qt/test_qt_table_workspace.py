@@ -54,9 +54,9 @@ def _full_result_frame(workspace: QtTableWorkspace) -> pd.DataFrame:
 def test_table_uses_standard_overflow_toolbars_without_fixed_chip_geometry(qtbot):
     workspace = QtTableWorkspace(_source())
     qtbot.addWidget(workspace)
-    workspace.resize(360, 560)
+    workspace.resize(280, 560)
     workspace.show()
-    qtbot.waitUntil(lambda: workspace.width() == 360)
+    qtbot.waitUntil(lambda: workspace.width() == 280)
 
     action_toolbar = workspace.findChild(QToolBar, "tableToolbar")
     applied_toolbar = workspace.findChild(QToolBar, "appliedFilterChips")
@@ -208,9 +208,9 @@ def test_narrow_toolbar_actions_are_keyboard_reachable(qtbot):
     opened = []
     workspace = QtTableWorkspace(_source(), on_open_qc=opened.append)
     qtbot.addWidget(workspace)
-    workspace.resize(360, 560)
+    workspace.resize(280, 560)
     workspace.show()
-    qtbot.waitUntil(lambda: workspace.width() == 360)
+    qtbot.waitUntil(lambda: workspace.width() == 280)
     workspace.activateWindow()
     workspace.table_view.setFocus()
     qtbot.waitUntil(workspace.table_view.hasFocus)
@@ -220,7 +220,7 @@ def test_narrow_toolbar_actions_are_keyboard_reachable(qtbot):
         Qt.Key.Key_F,
         Qt.KeyboardModifier.ControlModifier,
     )
-    assert "exact ezqcid" in workspace.error_text
+    assert "精确的 ezqcid" in workspace.error_text
 
     qtbot.keyClick(
         workspace.table_view,
@@ -307,7 +307,7 @@ def test_export_action_runs_complete_result_in_background_and_reports_receipt(
     )
     assert workspace.last_export_receipt.rows == before_result.matched_total
     assert workspace.last_export_receipt.state_revision == before_state.revision
-    assert "Exported 5 rows" in workspace.export_status_label.text()
+    assert "已导出 5 行" in workspace.export_status_label.text()
     assert workspace.export_action.isEnabled()
     assert not workspace.cancel_export_action.isVisible()
     assert workspace.applied_state is before_state
@@ -352,7 +352,7 @@ def test_cancel_export_preserves_destination_and_restores_actions(
     qtbot.waitUntil(lambda: not workspace.export_task_controller.busy, timeout=3000)
     assert destination.read_bytes() == original
     assert list(tmp_path.glob(f".{destination.name}.*.partial")) == []
-    assert "cancelled" in workspace.export_status_label.text().lower()
+    assert "导出已取消" in workspace.export_status_label.text()
     assert workspace.last_export_receipt is None
     assert workspace.export_action.isEnabled()
     assert not workspace.cancel_export_action.isVisible()
@@ -381,7 +381,7 @@ def test_export_failure_is_visible_and_keeps_existing_destination(
 
     assert destination.read_bytes() == original
     assert "synthetic export failure" in workspace.error_text
-    assert "failed" in workspace.export_status_label.text().lower()
+    assert "导出失败" in workspace.export_status_label.text()
     assert workspace.last_export_receipt is None
     assert workspace.export_action.isEnabled()
     assert not workspace.cancel_export_action.isVisible()
@@ -470,7 +470,7 @@ def test_running_export_rejects_second_request_and_disabled_shortcut(
 
     try:
         assert not workspace.start_export(second_destination, chunk_size=2)
-        assert "already running" in workspace.error_text
+        assert "仍在运行" in workspace.error_text
         qtbot.keyClick(
             workspace.table_view,
             Qt.Key.Key_E,
@@ -542,7 +542,7 @@ def test_filter_draft_cancel_apply_and_invalid_input_preserve_last_result(qtbot)
     valid_ids = _full_result_frame(workspace)["ezqcid"].tolist()
     assert valid_ids == ["SUB001", "SUB003", "SUB005"]
     assert workspace.filter_count == 1
-    assert workspace.applied_chip_texts == ("site is A",)
+    assert workspace.applied_chip_texts == ("site 等于 A",)
 
     workspace.begin_filter_edit()
     workspace.set_filter_draft((FilterCondition("age", ">", "not-a-number", "bad"),))
@@ -820,7 +820,7 @@ def test_multi_sort_header_state_and_column_layout_are_applied(qtbot):
     assert "1 site ↑" in workspace.sort_status_label.text()
     assert "2 age ↓" in workspace.sort_status_label.text()
     assert workspace.table_view.horizontalHeader().sortIndicatorSection() == 1
-    assert workspace.table_model.headerData(1, Qt.Horizontal, Qt.ToolTipRole) == "Sort priority 1 · ascending"
+    assert workspace.table_model.headerData(1, Qt.Horizontal, Qt.ToolTipRole) == "排序优先级 1 · 升序"
     assert workspace.applied_state.columns.width_for("site") == 211
 
     columns = ColumnViewState(
@@ -1250,7 +1250,7 @@ def test_large_table_background_error_preserves_last_applied_result(qtbot, monke
 
     assert workspace.apply_sort_rules((SortRule("age", False),))
     assert workspace.task_controller.busy
-    assert "Applying" in workspace.count_label.text()
+    assert "正在应用" in workspace.count_label.text()
     qtbot.waitUntil(lambda: bool(workspace.error_text), timeout=2000)
     qtbot.waitUntil(lambda: not workspace.task_controller.busy, timeout=2000)
 

@@ -24,8 +24,8 @@ class FilterDialog(QDialog):
         if not isinstance(applied_filter, FilterExpression):
             raise TypeError("FilterDialog requires a FilterExpression")
         self.setObjectName("filterDialog")
-        self.setWindowTitle("Filter rows")
-        self.setAccessibleName("Filter table rows")
+        self.setWindowTitle("筛选行")
+        self.setAccessibleName("筛选表格行")
         self.setModal(True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self._apply_pending = False
@@ -52,9 +52,12 @@ class FilterDialog(QDialog):
         self.reset_button = self.button_box.button(
             QDialogButtonBox.StandardButton.Reset
         )
-        self.apply_button.setAccessibleName("Apply filter draft")
-        self.cancel_button.setAccessibleName("Cancel filter editing")
-        self.reset_button.setAccessibleName("Reset filter draft")
+        self.apply_button.setText("应用")
+        self.cancel_button.setText("取消")
+        self.reset_button.setText("重置")
+        self.apply_button.setAccessibleName("应用筛选草稿")
+        self.cancel_button.setAccessibleName("取消筛选编辑")
+        self.reset_button.setAccessibleName("重置筛选草稿")
 
         self.apply_button.clicked.connect(self._request_apply)
         self.cancel_button.clicked.connect(self.reject)

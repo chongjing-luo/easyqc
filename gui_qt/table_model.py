@@ -73,8 +73,8 @@ class QtTableModel(QAbstractTableModel):
             if role == Qt.ToolTipRole:
                 for priority, rule in enumerate(self._sort_rules, start=1):
                     if rule.column == column:
-                        direction = "ascending" if rule.ascending else "descending"
-                        return f"Sort priority {priority} · {direction}"
+                        direction = "升序" if rule.ascending else "降序"
+                        return f"排序优先级 {priority} · {direction}"
         if orientation == Qt.Vertical and 0 <= section < self.rowCount() and role == Qt.DisplayRole:
             return str(self._offset + section + 1)
         return None

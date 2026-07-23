@@ -39,7 +39,7 @@ def test_column_search_filters_without_mutating_the_draft(qtbot):
 
     assert visible == ["age"]
     assert dialog.editor.state() == before
-    assert dialog.editor.search_edit.accessibleName() == "Search table columns"
+    assert dialog.editor.search_edit.accessibleName() == "搜索表格列"
 
 
 def test_column_visibility_pin_unpin_and_move_keep_one_leading_block(qtbot):
@@ -138,9 +138,9 @@ def test_columns_reset_cancel_close_and_apply_are_transactional(qtbot):
     )
     assert accepted == [applied]
     assert not apply_dialog.apply_button.isEnabled()
-    assert apply_dialog.apply_button.accessibleName() == "Apply column draft"
-    assert apply_dialog.cancel_button.accessibleName() == "Cancel column editing"
-    assert apply_dialog.reset_button.accessibleName() == "Restore default columns"
+    assert apply_dialog.apply_button.accessibleName() == "应用列设置草稿"
+    assert apply_dialog.cancel_button.accessibleName() == "取消列设置编辑"
+    assert apply_dialog.reset_button.accessibleName() == "恢复默认列设置"
     apply_dialog.set_error("<b>unsafe</b>")
     assert apply_dialog.editor.error_label.textFormat() == Qt.TextFormat.PlainText
     assert apply_dialog.editor.error_text == "<b>unsafe</b>"
@@ -152,9 +152,9 @@ def test_search_has_a_visible_label_and_invalid_state_is_atomic(qtbot):
     dialog.show()
     before = dialog.editor.state()
 
-    assert dialog.editor.search_label.text() == "Search columns"
+    assert dialog.editor.search_label.text() == "搜索列"
     assert dialog.editor.search_label.buddy() is dialog.editor.search_edit
-    with pytest.raises(ValueError, match="hidden and pinned"):
+    with pytest.raises(ValueError, match="同时隐藏和固定"):
         dialog.editor.set_state(
             ColumnViewState(
                 order=DEFAULT.order,
@@ -163,7 +163,7 @@ def test_search_has_a_visible_label_and_invalid_state_is_atomic(qtbot):
             )
         )
     assert dialog.editor.state() == before
-    with pytest.raises(ValueError, match="contiguous leading block"):
+    with pytest.raises(ValueError, match="连续的前置列区"):
         dialog.editor.set_state(
             ColumnViewState(
                 order=DEFAULT.order,

@@ -54,7 +54,7 @@ def test_results_page_is_direct_read_only_shared_table_without_repeated_title(
         "排序 (0)",
         "列 (3/3)",
         "查找",
-        "导出结果",
+        "导出…",
     ]
     assert table.find_edit.placeholderText() == "搜索 ezqcid"
     assert all(

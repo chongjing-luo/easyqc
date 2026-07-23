@@ -28,8 +28,8 @@ class ColumnsDialog(QDialog):
         if set(applied_state.order) != set(default_state.order):
             raise ValueError("Applied and default column states must describe one table")
         self.setObjectName("columnsDialog")
-        self.setWindowTitle("Choose columns")
-        self.setAccessibleName("Choose table columns")
+        self.setWindowTitle("选择列")
+        self.setAccessibleName("选择表格列")
         self.setModal(True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self._default_state = default_state
@@ -54,9 +54,12 @@ class ColumnsDialog(QDialog):
         self.reset_button = self.button_box.button(
             QDialogButtonBox.StandardButton.Reset
         )
-        self.apply_button.setAccessibleName("Apply column draft")
-        self.cancel_button.setAccessibleName("Cancel column editing")
-        self.reset_button.setAccessibleName("Restore default columns")
+        self.apply_button.setText("应用")
+        self.cancel_button.setText("取消")
+        self.reset_button.setText("重置")
+        self.apply_button.setAccessibleName("应用列设置草稿")
+        self.cancel_button.setAccessibleName("取消列设置编辑")
+        self.reset_button.setAccessibleName("恢复默认列设置")
         self.apply_button.clicked.connect(self._request_apply)
         self.cancel_button.clicked.connect(self.reject)
         self.reset_button.clicked.connect(

@@ -30,18 +30,18 @@ class SortRuleRow(QFrame):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
         self.priority_label = QLabel("", self)
-        self.priority_label.setAccessibleName("Sort priority")
+        self.priority_label.setAccessibleName("排序优先级")
         self.column_combo = QComboBox(self)
-        self.column_combo.setAccessibleName("Sort column")
+        self.column_combo.setAccessibleName("排序列")
         for column in columns:
             self.column_combo.addItem(column, column)
         self.direction_combo = QComboBox(self)
-        self.direction_combo.setAccessibleName("Sort direction")
-        self.direction_combo.addItem("Ascending", True)
-        self.direction_combo.addItem("Descending", False)
-        self.move_up_button = QPushButton("Move up", self)
-        self.move_down_button = QPushButton("Move down", self)
-        self.remove_button = QPushButton("Remove", self)
+        self.direction_combo.setAccessibleName("排序方向")
+        self.direction_combo.addItem("升序", True)
+        self.direction_combo.addItem("降序", False)
+        self.move_up_button = QPushButton("上移", self)
+        self.move_down_button = QPushButton("下移", self)
+        self.remove_button = QPushButton("删除", self)
         layout.addWidget(self.priority_label)
         layout.addWidget(self.column_combo, 2)
         layout.addWidget(self.direction_combo, 1)
@@ -60,11 +60,11 @@ class SortRuleRow(QFrame):
 
     def set_priority(self, priority: int) -> None:
         self.priority_label.setText(str(priority))
-        self.column_combo.setAccessibleName(f"Sort column priority {priority}")
-        self.direction_combo.setAccessibleName(f"Sort direction priority {priority}")
-        self.move_up_button.setAccessibleName(f"Move sort priority {priority} up")
-        self.move_down_button.setAccessibleName(f"Move sort priority {priority} down")
-        self.remove_button.setAccessibleName(f"Remove sort priority {priority}")
+        self.column_combo.setAccessibleName(f"排序优先级 {priority} 的列")
+        self.direction_combo.setAccessibleName(f"排序优先级 {priority} 的方向")
+        self.move_up_button.setAccessibleName(f"上移排序优先级 {priority}")
+        self.move_down_button.setAccessibleName(f"下移排序优先级 {priority}")
+        self.remove_button.setAccessibleName(f"删除排序优先级 {priority}")
 
     def set_rule(self, rule: SortRule) -> None:
         column_index = self.column_combo.findData(rule.column)
@@ -96,17 +96,17 @@ class SortPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
-        heading = QLabel("Sort priority", self)
+        heading = QLabel("排序优先级", self)
         layout.addWidget(heading)
-        hint = QLabel("Rules are applied from top to bottom.", self)
+        hint = QLabel("从上到下依次应用排序规则。", self)
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
         field_labels = QHBoxLayout()
         field_labels.setContentsMargins(8, 0, 8, 0)
-        field_labels.addWidget(QLabel("Priority", self))
-        field_labels.addWidget(QLabel("Column", self), 2)
-        field_labels.addWidget(QLabel("Direction", self), 1)
+        field_labels.addWidget(QLabel("优先级", self))
+        field_labels.addWidget(QLabel("列", self), 2)
+        field_labels.addWidget(QLabel("方向", self), 1)
         field_labels.addStretch(2)
         layout.addLayout(field_labels)
 
@@ -124,14 +124,14 @@ class SortPanel(QWidget):
         self.error_label.setObjectName("sortError")
         self.error_label.setTextFormat(Qt.TextFormat.PlainText)
         self.error_label.setWordWrap(True)
-        self.error_label.setAccessibleName("Sort draft error")
+        self.error_label.setAccessibleName("排序草稿错误")
         layout.addWidget(self.error_label)
 
         actions = QHBoxLayout()
-        self.add_button = QPushButton("Add sort", self)
-        self.clear_button = QPushButton("Clear", self)
-        self.add_button.setAccessibleName("Add sort rule")
-        self.clear_button.setAccessibleName("Clear sort rules")
+        self.add_button = QPushButton("添加排序", self)
+        self.clear_button = QPushButton("清空", self)
+        self.add_button.setAccessibleName("添加排序规则")
+        self.clear_button.setAccessibleName("清空排序规则")
         actions.addWidget(self.add_button)
         actions.addWidget(self.clear_button)
         actions.addStretch(1)
@@ -151,7 +151,7 @@ class SortPanel(QWidget):
 
     def add_rule(self, rule: SortRule | None = None) -> SortRuleRow:
         if len(self.rule_rows) >= len(self._columns):
-            raise ValueError("A sort draft cannot contain more rows than columns")
+            raise ValueError("排序规则数不能超过列数")
         if rule is None:
             used = {existing.rule().column for existing in self.rule_rows}
             column = next(column for column in self._columns if column not in used)
@@ -198,7 +198,7 @@ class SortPanel(QWidget):
     def set_rules(self, rules: tuple[SortRule, ...]) -> None:
         rules = tuple(rules)
         if len(rules) > len(self._columns):
-            raise ValueError("A sort draft cannot contain more rows than columns")
+            raise ValueError("排序规则数不能超过列数")
         if not all(isinstance(rule, SortRule) for rule in rules):
             raise TypeError("SortPanel rows require SortRule values")
         unknown = next(

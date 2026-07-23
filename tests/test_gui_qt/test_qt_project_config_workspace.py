@@ -169,7 +169,7 @@ def test_initial_configuration_snapshot_loads_without_blocking_qt(
     qtbot.waitUntil(started.is_set, timeout=2000)
 
     assert workspace.io_task_controller.busy
-    assert "Loading configuration" in workspace.status_label.text()
+    assert "正在加载配置" in workspace.status_label.text()
     assert workspace.subject_model.rowCount() == 0
 
     release.set()
@@ -486,7 +486,7 @@ def test_project_load_runs_in_background_and_keeps_qt_responsive(
     qtbot.waitUntil(lambda: bool(event_loop_progress), timeout=2000)
 
     assert workspace.io_task_controller.busy
-    assert "Loading project" in workspace.status_label.text()
+    assert "正在加载项目" in workspace.status_label.text()
     assert not workspace.tabs.isEnabled()
 
     release.set()
@@ -540,10 +540,10 @@ def test_module_export_runs_in_background_and_reports_completion(
     qtbot.mouseClick(workspace.export_module_button, Qt.LeftButton)
     qtbot.waitUntil(started.is_set, timeout=2000)
     assert workspace.io_task_controller.busy
-    assert "Exporting QC module" in workspace.status_label.text()
+    assert "正在导出质控模块" in workspace.status_label.text()
     assert not output.exists()
 
     release.set()
     qtbot.waitUntil(lambda: not workspace.io_task_controller.busy, timeout=2000)
     assert output.exists()
-    assert "Export complete" in workspace.status_label.text()
+    assert "导出完成" in workspace.status_label.text()

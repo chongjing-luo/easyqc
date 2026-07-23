@@ -10,11 +10,13 @@ from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QMainWindow,
     QMessageBox,
+    QScrollArea,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
@@ -94,14 +96,8 @@ class QtMainWindow(QMainWindow):
         self.qc_controller: QtQcControllerWindow | None = None
 
         self.setObjectName("qtPreviewWindow")
-        self.setAccessibleName(
-            "EasyQC Qt preview" if self._injected_preview else "EasyQC workspace"
-        )
-        self.setWindowTitle(
-            "EasyQC — Qt Table Preview"
-            if self._injected_preview
-            else "EasyQC — Quality control workspace"
-        )
+        self.setAccessibleName("EasyQC 表格预览" if self._injected_preview else "EasyQC 工作区")
+        self.setWindowTitle("EasyQC")
         self.resize(1360, 840)
         self._build_content(initial_source)
         self._subscribe_events()
@@ -165,7 +161,7 @@ class QtMainWindow(QMainWindow):
         project_layout.setSpacing(8)
         self.shell_status_label = QLabel("", self.project_page)
         self.shell_status_label.setObjectName("shellStatus")
-        self.shell_status_label.setAccessibleName("Project context status")
+        self.shell_status_label.setAccessibleName("项目状态")
         self.shell_status_label.setWordWrap(True)
         self.shell_status_label.setSizePolicy(
             QSizePolicy.Ignored,
@@ -174,7 +170,7 @@ class QtMainWindow(QMainWindow):
         project_layout.addWidget(self.shell_status_label)
         self.shell_error_label = QLabel("", self.project_page)
         self.shell_error_label.setObjectName("shellError")
-        self.shell_error_label.setAccessibleName("Project routing error")
+        self.shell_error_label.setAccessibleName("项目操作错误")
         self.shell_error_label.setWordWrap(True)
         self.shell_error_label.setSizePolicy(
             QSizePolicy.Ignored,
@@ -209,12 +205,22 @@ class QtMainWindow(QMainWindow):
         constants_layout = QVBoxLayout(self.constants_page)
         constants_layout.setContentsMargins(18, 16, 18, 16)
         constants_layout.addWidget(self.config_workspace.constants_tab)
+        self.config_workspace.constants_tab.show()
 
         self.qc_list_import_page = QWidget(self.workspace_stack)
         self.qc_list_import_page.setObjectName("qcListImportPage")
         variables_layout = QVBoxLayout(self.qc_list_import_page)
         variables_layout.setContentsMargins(18, 16, 18, 16)
-        variables_layout.addWidget(self.config_workspace.subjects_tab)
+        self.qc_list_import_scroll = QScrollArea(self.qc_list_import_page)
+        self.qc_list_import_scroll.setObjectName("qcListImportScroll")
+        self.qc_list_import_scroll.setAccessibleName("可滚动质控名单导入页")
+        self.qc_list_import_scroll.setWidgetResizable(True)
+        self.qc_list_import_scroll.setFrameShape(QFrame.NoFrame)
+        self.qc_list_import_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.qc_list_import_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.qc_list_import_scroll.setWidget(self.config_workspace.subjects_tab)
+        variables_layout.addWidget(self.qc_list_import_scroll)
+        self.config_workspace.subjects_tab.show()
         self.variables_page = self.qc_list_import_page
 
         self.pre_qc_list_page = QWidget(self.workspace_stack)
@@ -222,7 +228,7 @@ class QtMainWindow(QMainWindow):
         table_layout = QVBoxLayout(self.pre_qc_list_page)
         table_layout.setContentsMargins(0, 0, 0, 0)
         self.shell_empty_label = QLabel(
-            "No project is loaded. Open 项目选择 to create or import one.",
+            "尚未打开项目，请在“项目选择”中创建或导入项目。",
             self.pre_qc_list_page,
         )
         self.shell_empty_label.setObjectName("shellEmptyState")
@@ -329,24 +335,24 @@ class QtMainWindow(QMainWindow):
 
     def _submit_context(self, operation: str, function, *, preserve_qc: bool) -> bool:
         if self.context_task_controller.busy:
-            self._set_error("Another project materialization is already running")
+            self._set_error("另一项项目加载任务仍在运行")
             return False
         self._context_revision += 1
         self._pending_context = (self._context_revision, operation, preserve_qc)
         self._set_error("")
         self.shell_status_label.setText(
-            "Loading project data…" if operation != "rating_refresh" else "Refreshing rating results…"
+            "正在加载项目数据…" if operation != "rating_refresh" else "正在刷新质控结果…"
         )
         self.context_task_controller.submit(self._context_revision, function)
         return True
 
     def load_project(self, name: str) -> bool:
         if self.active_workflow is not None and self.active_workflow.dirty:
-            self._set_error("Save or discard the current QC draft before changing project")
+            self._set_error("请先保存或放弃当前质控修改，再切换项目")
             return False
         name = str(name).strip()
         if not name:
-            self._set_error("Select a project to load")
+            self._set_error("请选择要打开的项目")
             return False
         return self._submit_context(
             "project_load",
@@ -356,7 +362,7 @@ class QtMainWindow(QMainWindow):
 
     def refresh_context(self) -> bool:
         if self.active_workflow is not None and self.active_workflow.dirty:
-            self._set_error("Save or discard the current QC draft before reloading")
+            self._set_error("请先保存或放弃当前质控修改，再刷新项目")
             return False
         return self._submit_context(
             "refresh",
@@ -399,19 +405,19 @@ class QtMainWindow(QMainWindow):
             self._apply_context(snapshot, preserve_qc=preserve_qc)
         except Exception as exc:
             self._pending_context = None
-            self.shell_status_label.setText("Project load failed")
+            self.shell_status_label.setText("项目加载失败")
             message = str(exc).strip() or type(exc).__name__
             self._set_error(message)
             self.results_page.show_error(message)
             return
         self._pending_context = None
         self.shell_status_label.setText(
-            "Rating results refreshed"
+            "质控结果已刷新"
             if operation in {"rating_refresh", "results_refresh"}
             else (
-                f"Loaded {snapshot.project_name}"
+                f"已加载项目：{snapshot.project_name}"
                 if snapshot.has_project
-                else "No project is loaded"
+                else "尚未加载项目"
             )
         )
         self._set_error("")
@@ -421,7 +427,7 @@ class QtMainWindow(QMainWindow):
         if self._pending_context is None or self._pending_context[0] != revision:
             return
         self._pending_context = None
-        self.shell_status_label.setText("Project load failed")
+        self.shell_status_label.setText("项目加载失败")
         message = str(error).strip() or type(error).__name__
         self._set_error(message)
         self.results_page.show_error(message)
@@ -502,7 +508,7 @@ class QtMainWindow(QMainWindow):
 
             self.module_combo.clear()
             for module in snapshot.modules:
-                rater = str(module.rater or "").strip() or "read-only"
+                rater = str(module.rater or "").strip() or "只读"
                 self.module_combo.addItem(
                     f"{module.label} · {module.name} · {rater}",
                     module.name,
@@ -617,10 +623,10 @@ class QtMainWindow(QMainWindow):
 
     def _open_table_qc(self, identity: str, context_revision: int) -> None:
         if context_revision != self.current_context.context_revision:
-            self._set_error("The Table action belongs to a stale project context")
+            self._set_error("该表格操作属于已失效的项目上下文")
             return
         if self.active_workflow is not None and self.active_workflow.dirty:
-            self._set_error("Save or discard the current QC draft before opening another queue")
+            self._set_error("请先保存或放弃当前质控修改，再打开其他名单")
             return
         module_name = str(self.module_combo.currentData() or "")
         try:
@@ -704,7 +710,7 @@ class QtMainWindow(QMainWindow):
         if self._closing or self._injected_preview:
             return
         if self.active_workflow is not None and self.active_workflow.dirty:
-            self._set_error("Project facts changed while a QC draft is open; save or discard, then reload")
+            self._set_error("项目内容已改变；请先保存或放弃当前质控修改，再刷新")
             return
         self._submit_context(
             "facts_refresh",
@@ -729,8 +735,8 @@ class QtMainWindow(QMainWindow):
         if workflow is not None and workflow.dirty:
             answer = QMessageBox.question(
                 self,
-                "Unsaved QC draft",
-                "Discard the unsaved QC draft and close EasyQC?",
+                "尚未保存",
+                "放弃当前未保存的质控修改并关闭 EasyQC？",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
