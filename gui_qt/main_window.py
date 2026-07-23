@@ -40,6 +40,15 @@ from gui_qt.task_runner import RevisionedTaskController
 class QtMainWindow(QMainWindow):
     """Own one accepted project context and at most one live QC workflow."""
 
+    NAVIGATION_LABELS = (
+        "项目选择",
+        "质控名单导入",
+        "质控前名单",
+        "常量设置",
+        "质控模块",
+        "质控结果",
+    )
+
     def __init__(
         self,
         services: AppServices,
@@ -129,17 +138,10 @@ class QtMainWindow(QMainWindow):
         self.navigation.setObjectName("primaryNavigation")
         self.navigation.setAccessibleName("EasyQC 功能导航")
         self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.navigation.addItems(
-            ("项目选择", "常量设置", "变量设置", "受试者", "质控模块", "质控结果")
-        )
+        self.navigation.addItems(self.NAVIGATION_LABELS)
         navigation_layout.addWidget(self.navigation, 1)
-        self.context_badge = QLabel("No project", navigation_panel)
-        self.context_badge.setObjectName("activeProjectSummary")
-        self.context_badge.setAccessibleName("当前项目")
-        self.context_badge.setWordWrap(True)
-        navigation_layout.addWidget(self.context_badge)
         minimum_navigation_width = max(
-            self.navigation.fontMetrics().horizontalAdvance("质控模块") + 48,
+            self.navigation.fontMetrics().horizontalAdvance("质控名单导入") + 48,
             132,
         )
         navigation_panel.setMinimumWidth(minimum_navigation_width)
@@ -201,25 +203,27 @@ class QtMainWindow(QMainWindow):
         constants_layout.setContentsMargins(18, 16, 18, 16)
         constants_layout.addWidget(self.config_workspace.constants_tab)
 
-        self.variables_page = QWidget(self.workspace_stack)
-        self.variables_page.setObjectName("variablesSettingsPage")
-        variables_layout = QVBoxLayout(self.variables_page)
+        self.qc_list_import_page = QWidget(self.workspace_stack)
+        self.qc_list_import_page.setObjectName("qcListImportPage")
+        variables_layout = QVBoxLayout(self.qc_list_import_page)
         variables_layout.setContentsMargins(18, 16, 18, 16)
         variables_layout.addWidget(self.config_workspace.subjects_tab)
+        self.variables_page = self.qc_list_import_page
 
-        self.subjects_page = QWidget(self.workspace_stack)
-        self.subjects_page.setObjectName("subjectsPage")
-        table_layout = QVBoxLayout(self.subjects_page)
+        self.pre_qc_list_page = QWidget(self.workspace_stack)
+        self.pre_qc_list_page.setObjectName("preQcListPage")
+        table_layout = QVBoxLayout(self.pre_qc_list_page)
         table_layout.setContentsMargins(0, 0, 0, 0)
         self.shell_empty_label = QLabel(
             "No project is loaded. Open 项目选择 to create or import one.",
-            self.subjects_page,
+            self.pre_qc_list_page,
         )
         self.shell_empty_label.setObjectName("shellEmptyState")
         self.shell_empty_label.setWordWrap(True)
         table_layout.addWidget(self.shell_empty_label)
-        self.table_workspace = QtTableWorkspace(source, parent=self.subjects_page)
+        self.table_workspace = QtTableWorkspace(source, parent=self.pre_qc_list_page)
         table_layout.addWidget(self.table_workspace, 1)
+        self.subjects_page = self.pre_qc_list_page
 
         self.modules_page = QWidget(self.workspace_stack)
         self.modules_page.setObjectName("qcModulesPage")
@@ -242,9 +246,9 @@ class QtMainWindow(QMainWindow):
 
         self.direct_pages = (
             self.project_page,
+            self.qc_list_import_page,
+            self.pre_qc_list_page,
             self.constants_page,
-            self.variables_page,
-            self.subjects_page,
             self.modules_page,
             self.results_page,
         )
@@ -252,14 +256,16 @@ class QtMainWindow(QMainWindow):
             self.workspace_stack.addWidget(page)
         (
             self.project_page_index,
+            self.qc_list_import_page_index,
+            self.pre_qc_list_page_index,
             self.constants_page_index,
-            self.variables_page_index,
-            self.subjects_page_index,
             self.modules_page_index,
             self.results_page_index,
         ) = range(len(self.direct_pages))
-        self.table_page = self.subjects_page
-        self.table_tab_index = self.subjects_page_index
+        self.variables_page_index = self.qc_list_import_page_index
+        self.subjects_page_index = self.pre_qc_list_page_index
+        self.table_page = self.pre_qc_list_page
+        self.table_tab_index = self.pre_qc_list_page_index
         self.config_page = self.project_page
         self.config_tab_index = self.project_page_index
         layout.addWidget(self.workspace_stack, 1)
@@ -272,7 +278,7 @@ class QtMainWindow(QMainWindow):
         self.qc_layout = QVBoxLayout(self.qc_page)
         self.qc_layout.setContentsMargins(0, 0, 0, 0)
         self.qc_placeholder = QLabel(
-            "Load a project with subjects and a QC module to begin review.",
+            "Load a project with list entries and a QC module to begin review.",
             self.qc_page,
         )
         self.qc_placeholder.setObjectName("qcEmptyState")
@@ -292,7 +298,7 @@ class QtMainWindow(QMainWindow):
         self.module_combo.currentTextChanged.connect(self.module_combo.setToolTip)
         self.navigation.currentRowChanged.connect(self.workspace_stack.setCurrentIndex)
         self.navigation.setCurrentRow(
-            self.subjects_page_index if self._injected_preview else self.project_page_index
+            self.pre_qc_list_page_index if self._injected_preview else self.project_page_index
         )
         self._sync_preview_aliases()
 
@@ -395,7 +401,7 @@ class QtMainWindow(QMainWindow):
             "Rating results refreshed"
             if operation == "rating_refresh"
             else (
-                f"Loaded {snapshot.project_name} · {len(snapshot.subjects):,} subjects"
+                f"Loaded {snapshot.project_name}"
                 if snapshot.has_project
                 else "No project is loaded"
             )
@@ -507,15 +513,29 @@ class QtMainWindow(QMainWindow):
                 module_index = 0
             self.module_combo.setCurrentIndex(module_index)
             self._active_module_name = str(self.module_combo.currentData() or "")
-            self.context_badge.setText(
-                (
-                    f"{snapshot.project_name} · r{snapshot.context_revision}"
-                    if snapshot.has_project
-                    else "No project"
-                )
+            self._set_project_navigation_context(
+                snapshot.project_name if snapshot.has_project else ""
             )
         finally:
             self._updating_controls = False
+
+    def _set_project_navigation_context(self, project_name: str) -> None:
+        """Show the active project only as secondary text on 项目选择."""
+
+        item = self.navigation.item(self.project_page_index)
+        if item is None:
+            return
+        name = str(project_name).strip()
+        item.setText(
+            self.NAVIGATION_LABELS[self.project_page_index]
+            if not name
+            else f"{self.NAVIGATION_LABELS[self.project_page_index]}\n{name}"
+        )
+        item.setToolTip(name)
+        item.setData(
+            Qt.AccessibleTextRole,
+            "项目选择" if not name else f"项目选择，当前项目 {name}",
+        )
 
     def _module_selected(self, _index: int) -> None:
         if self._updating_controls or not self.current_context.has_project:

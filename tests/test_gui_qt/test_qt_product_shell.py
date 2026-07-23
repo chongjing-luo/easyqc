@@ -5,6 +5,7 @@ from threading import Event
 import pandas as pd
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
+    QLabel,
     QListWidget,
     QMessageBox,
     QStackedWidget,
@@ -89,6 +90,13 @@ def _window(qtbot, tmp_path, *, second_module=False):
     return window, services
 
 
+def _primary_navigation_labels(window):
+    return [
+        window.navigation.item(index).text().splitlines()[0]
+        for index in range(window.navigation.count())
+    ]
+
+
 def test_empty_product_shell_keeps_configuration_available_without_writes(qtbot, tmp_path) -> None:
     registry = tmp_path / "projects.json"
     services = build_app_services(registry)
@@ -113,14 +121,16 @@ def test_qt_main_window_uses_six_direct_navigation_pages(qtbot, tmp_path) -> Non
     assert window.qc_workspace is not None
     assert window.qc_workspace.workflow.current_module.name == "AnatQC"
     assert window.config_workspace.configuration is services.configuration_service
-    assert [window.navigation.item(i).text() for i in range(window.navigation.count())] == [
+    assert _primary_navigation_labels(window) == [
         "项目选择",
+        "质控名单导入",
+        "质控前名单",
         "常量设置",
-        "变量设置",
-        "受试者",
         "质控模块",
         "质控结果",
     ]
+    assert window.navigation.item(0).text().splitlines() == ["项目选择", "SAMPLE"]
+    assert window.findChild(QLabel, "activeProjectSummary") is None
     assert window.workspace_stack.count() == 6
     assert window.findChild(QListWidget, "primaryNavigation") is window.navigation
     assert window.findChild(QStackedWidget, "workspaceStack") is window.workspace_stack
@@ -133,6 +143,14 @@ def test_qt_main_window_uses_six_direct_navigation_pages(qtbot, tmp_path) -> Non
 def test_qt_main_window_navigation_switches_exact_page(qtbot, tmp_path) -> None:
     window, _services = _window(qtbot, tmp_path)
 
+    assert window.direct_pages == (
+        window.project_page,
+        window.qc_list_import_page,
+        window.pre_qc_list_page,
+        window.constants_page,
+        window.modules_page,
+        window.results_page,
+    )
     for row, page in enumerate(window.direct_pages):
         window.navigation.setCurrentRow(row)
         assert window.workspace_stack.currentIndex() == row
@@ -144,8 +162,25 @@ def test_direct_configuration_pages_have_no_visible_nested_tabs(qtbot, tmp_path)
 
     assert window.config_workspace.tabs.isHidden()
     assert window.config_workspace.constants_tab.parentWidget() is window.constants_page
-    assert window.config_workspace.subjects_tab.parentWidget() is window.variables_page
+    assert window.config_workspace.subjects_tab.parentWidget() is window.qc_list_import_page
     assert window.config_workspace.modules_tab.parentWidget() is window.modules_page
+
+
+def test_shell_uses_neutral_list_language_for_visible_context(qtbot, tmp_path) -> None:
+    window, _services = _window(qtbot, tmp_path)
+
+    visible_shell_text = " ".join(
+        [
+            *(window.navigation.item(index).text() for index in range(window.navigation.count())),
+            window.shell_status_label.text(),
+            window.shell_empty_label.text(),
+            window.qc_placeholder.text(),
+        ]
+    ).casefold()
+    assert "受试者" not in visible_shell_text
+    assert "被试" not in visible_shell_text
+    assert "变量设置" not in visible_shell_text
+    assert "subject" not in visible_shell_text
 
 
 def test_product_shell_reduced_viewport_keeps_navigation_and_content_reachable(
