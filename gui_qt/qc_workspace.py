@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QRadioButton,
     QScrollArea,
     QSizePolicy,
     QTableView,
@@ -141,8 +140,8 @@ class QtQcWorkspace(QWidget):
         self._manual_read_only = False
         self._filter_busy = False
         self._score_groups: dict[str, QButtonGroup] = {}
-        self.score_buttons: dict[str, dict[str | None, QRadioButton]] = {}
-        self._legacy_score_buttons: dict[str, QRadioButton] = {}
+        self.score_buttons: dict[str, dict[str | None, QPushButton]] = {}
+        self._legacy_score_buttons: dict[str, QPushButton] = {}
         self.tag_boxes: dict[str, QCheckBox] = {}
         self.setObjectName("qtQcWorkspace")
         self.setAccessibleName("EasyQC 质控控制器")
@@ -253,7 +252,8 @@ class QtQcWorkspace(QWidget):
             self.score_buttons[key] = {}
             choices = [(None, "未评"), *((value, value) for value in score.allowed_values)]
             for value, label in choices:
-                button = QRadioButton(label, group_box)
+                button = QPushButton(label, group_box)
+                button.setCheckable(True)
                 button.setAccessibleName(f"{score.label}: {label}")
                 button.setToolTip(label)
                 button_group.addButton(button)
@@ -266,7 +266,8 @@ class QtQcWorkspace(QWidget):
                         checked,
                     )
                 )
-            legacy_button = QRadioButton("", group_box)
+            legacy_button = QPushButton("", group_box)
+            legacy_button.setCheckable(True)
             legacy_button.setEnabled(False)
             legacy_button.hide()
             button_group.addButton(legacy_button)

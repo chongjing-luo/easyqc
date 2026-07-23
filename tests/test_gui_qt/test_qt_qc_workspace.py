@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QTableView,
     QWidget,
@@ -137,6 +138,71 @@ def test_compact_qc_controller_is_top_level_with_exact_table_and_action_order(
         "discard_button",
     ):
         assert not hasattr(workspace, removed_name)
+
+
+def test_score_choices_are_native_exclusive_rectangular_push_buttons(
+    qtbot,
+    tmp_path,
+) -> None:
+    workspace = QtQcWorkspace(_workflow(tmp_path))
+    qtbot.addWidget(workspace)
+    workspace.show()
+
+    buttons = workspace.score_buttons["1"]
+    legacy_button = workspace._legacy_score_buttons["1"]
+    group = workspace._score_groups["1"]
+
+    assert tuple(buttons) == (None, "Poor", "Fair", "Good")
+    assert all(isinstance(button, QPushButton) for button in buttons.values())
+    assert isinstance(legacy_button, QPushButton)
+    assert all(button.isCheckable() for button in (*buttons.values(), legacy_button))
+    assert group.exclusive()
+    assert set(group.buttons()) == {*buttons.values(), legacy_button}
+    assert group.checkedButton() is buttons[None]
+    assert [value for value, button in buttons.items() if button.isChecked()] == [None]
+    assert workspace.findChildren(QRadioButton) == []
+    assert all(
+        button.styleSheet() == "" and button.icon().isNull()
+        for button in (*buttons.values(), legacy_button)
+    )
+
+
+def test_score_choice_mouse_and_space_activation_update_exactly_one_draft(
+    qtbot,
+    tmp_path,
+) -> None:
+    workflow = _workflow(tmp_path)
+    workspace = QtQcWorkspace(workflow)
+    qtbot.addWidget(workspace)
+    workspace.show()
+    workspace.activateWindow()
+    states = []
+    workspace.draftStateChanged.connect(states.append)
+    buttons = workspace.score_buttons["1"]
+
+    qtbot.mousePress(buttons["Good"], Qt.LeftButton)
+    assert buttons["Good"].isDown()
+    qtbot.mouseRelease(buttons["Good"], Qt.LeftButton)
+
+    assert not buttons["Good"].isDown()
+    assert workflow.current_module.scores["1"].value == "Good"
+    assert [value for value, button in buttons.items() if button.isChecked()] == [
+        "Good"
+    ]
+    assert states[-1] is True
+
+    buttons["Fair"].setFocus()
+    qtbot.waitUntil(buttons["Fair"].hasFocus)
+    qtbot.keyClick(buttons["Fair"], Qt.Key.Key_Space)
+
+    assert buttons["Fair"].hasFocus()
+    assert buttons["Fair"].accessibleName() == "Quality: Fair"
+    assert workflow.current_module.scores["1"].value == "Fair"
+    assert [value for value, button in buttons.items() if button.isChecked()] == [
+        "Fair"
+    ]
+    assert not buttons["Good"].isChecked()
+    assert states[-1] is True
 
 
 def test_qc_queue_model_keeps_100k_prepared_queue_rows_virtual_without_local_filter(
@@ -307,6 +373,14 @@ def test_manual_and_core_read_only_use_the_single_top_control_but_keep_viewer(
     assert not workspace.read_only_box.isChecked()
     assert workspace.score_buttons["1"]["Good"].isEnabled()
 
+    workspace.set_filter_busy(True)
+    assert not workspace.score_buttons["1"]["Good"].isEnabled()
+    assert workspace.queue_table.isEnabled()
+    assert not workspace.next_button.isEnabled()
+    workspace.set_filter_busy(False)
+    assert workspace.score_buttons["1"]["Good"].isEnabled()
+    assert workspace.next_button.isEnabled()
+
     forced = _controller_class()(_workflow(tmp_path, module=_module(rater=None)))
     qtbot.addWidget(forced)
     assert forced.workspace.read_only_box.isChecked()
@@ -369,6 +443,10 @@ def test_qt_qc_editor_saves_full_draft_then_advances(qtbot, tmp_path) -> None:
     assert list((tmp_path / "ratings").glob("AnatQC._.SUB001*.json"))
     assert workspace.queue_model.current_visible_row() == 1
     assert workspace.queue_table.currentIndex().row() == 1
+    assert workspace.score_buttons["1"][None].isChecked()
+    assert sum(
+        button.isChecked() for button in workspace.score_buttons["1"].values()
+    ) == 1
     assert workspace.error_text == ""
 
 
@@ -385,6 +463,8 @@ def test_qt_failed_save_stays_on_current_subject_and_shows_error(qtbot, tmp_path
     qtbot.mouseClick(workspace.save_next_button, Qt.LeftButton)
 
     assert workflow.current_ezqcid == "SUB001"
+    assert workflow.dirty
+    assert workspace.score_buttons["1"]["Good"].isChecked()
     assert "disk unavailable" in workspace.error_text
 
 
@@ -497,8 +577,11 @@ def test_qt_schema_drift_shows_reused_legacy_score_then_restores_editing(
     workspace.show()
 
     legacy_button = workspace._legacy_score_buttons["1"]
+    assert isinstance(legacy_button, QPushButton)
+    assert legacy_button.isCheckable()
     assert legacy_button.isVisible()
     assert legacy_button.isChecked()
+    assert workspace._score_groups["1"].checkedButton() is legacy_button
     assert not legacy_button.isEnabled()
     assert legacy_button.text() == "Accept（旧评分值，不在当前选项中）"
     assert "Quality" in legacy_button.accessibleName()
@@ -518,6 +601,9 @@ def test_qt_schema_drift_shows_reused_legacy_score_then_restores_editing(
     assert workspace._legacy_score_buttons["1"] is legacy_button
     assert legacy_button.isHidden()
     assert workspace.score_buttons["1"][None].isChecked()
+    assert workspace._score_groups["1"].checkedButton() is (
+        workspace.score_buttons["1"][None]
+    )
     assert workspace.score_buttons["1"]["Good"].isEnabled()
     assert workspace.tag_boxes["1"].isEnabled()
     assert not workspace.notes_edit.isReadOnly()
@@ -589,4 +675,8 @@ def test_qt_qc_save_emits_clean_draft_without_a_visible_discard_control(
 
     assert not workflow.dirty
     assert workflow.current_module.scores["1"].value == "Good"
+    assert workspace.score_buttons["1"]["Good"].isChecked()
+    assert sum(
+        button.isChecked() for button in workspace.score_buttons["1"].values()
+    ) == 1
     assert states[-1] is False
