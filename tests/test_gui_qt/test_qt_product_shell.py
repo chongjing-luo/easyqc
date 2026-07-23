@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from core.app_services import build_app_services
 from core.project_context_service import ProjectContextError
 from gui_qt.application import build_product_window
+from gui_qt.qc_results_page import QtQcResultsPage
 from models.table_view_state import SortRule
 
 
@@ -157,6 +158,101 @@ def test_qt_main_window_navigation_switches_exact_page(qtbot, tmp_path) -> None:
         window.navigation.setCurrentRow(row)
         assert window.workspace_stack.currentIndex() == row
         assert window.workspace_stack.currentWidget() is page
+
+
+def test_results_navigation_owns_direct_shared_results_page(qtbot, tmp_path) -> None:
+    window, _services = _window(qtbot, tmp_path)
+    window.navigation.setCurrentRow(window.results_page_index)
+
+    assert isinstance(window.results_page, QtQcResultsPage)
+    assert window.results_workspace is window.results_page.table_workspace
+    assert window.results_workspace is not window.table_workspace
+    assert window.results_workspace.service is window.current_context.table_view_service
+    assert window.workspace_stack.currentWidget() is window.results_page
+    assert window.findChild(QLabel, "qcResultsTitle") is None
+
+
+def test_results_refresh_preserves_clean_qc_controller_and_view_state(
+    qtbot,
+    tmp_path,
+) -> None:
+    window, _services = _window(qtbot, tmp_path)
+    window.navigation.setCurrentRow(window.modules_page_index)
+    qtbot.mouseClick(
+        window.config_workspace.module_start_buttons["AnatQC"],
+        Qt.LeftButton,
+    )
+    controller = window.qc_controller
+    assert window.results_workspace.apply_sort_rules(
+        (SortRule("site", ascending=False),)
+    )
+
+    window.navigation.setCurrentRow(window.results_page_index)
+    qtbot.mouseClick(window.results_page.refresh_button, Qt.LeftButton)
+    qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
+
+    assert window.qc_controller is controller
+    assert window.results_workspace.applied_state.sort_rules == (
+        SortRule("site", ascending=False),
+    )
+    assert not window.results_page.error_label.isVisible()
+
+
+def test_results_refresh_error_is_visible_and_later_success_clears_it(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    window, services = _window(qtbot, tmp_path)
+    window.navigation.setCurrentRow(window.results_page_index)
+    real_prepare = services.project_context_service.prepare_initial
+
+    def fail_prepare():
+        raise ProjectContextError("rating aggregation unavailable")
+
+    monkeypatch.setattr(
+        services.project_context_service,
+        "prepare_initial",
+        fail_prepare,
+    )
+    qtbot.mouseClick(window.results_page.refresh_button, Qt.LeftButton)
+    qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
+    assert "rating aggregation unavailable" in window.results_page.error_label.text()
+
+    monkeypatch.setattr(
+        services.project_context_service,
+        "prepare_initial",
+        real_prepare,
+    )
+    qtbot.mouseClick(window.results_page.refresh_button, Qt.LeftButton)
+    qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
+    assert not window.results_page.error_label.isVisible()
+
+
+def test_results_refresh_rejects_dirty_qc_with_specific_visible_error(
+    qtbot,
+    tmp_path,
+) -> None:
+    window, _services = _window(qtbot, tmp_path)
+    window.navigation.setCurrentRow(window.modules_page_index)
+    qtbot.mouseClick(
+        window.config_workspace.module_start_buttons["AnatQC"],
+        Qt.LeftButton,
+    )
+    qtbot.mouseClick(
+        window.qc_workspace.score_buttons["1"]["Good"],
+        Qt.LeftButton,
+    )
+
+    window.navigation.setCurrentRow(window.results_page_index)
+    qtbot.mouseClick(window.results_page.refresh_button, Qt.LeftButton)
+
+    assert not window.context_task_controller.busy
+    assert window.qc_workspace.workflow.dirty
+    assert window.results_page.error_label.text() == (
+        "请先保存或放弃当前质控修改，再刷新结果"
+    )
+    assert window.qc_controller.close_discarding_draft()
 
 
 def test_direct_configuration_pages_have_no_visible_nested_tabs(qtbot, tmp_path) -> None:
@@ -442,7 +538,9 @@ def test_rating_save_refreshes_table_and_preserves_view_state_and_qc_session(
         Qt.LeftButton,
     )
     table = window.table_workspace
+    results = window.results_workspace
     assert table.apply_sort_rules((SortRule("site", ascending=False),))
+    assert results.apply_sort_rules((SortRule("site", ascending=True),))
     assert table.find_identity_exact("SUB001")
     qc = window.qc_workspace
     qtbot.mouseClick(qc.score_buttons["1"]["Good"], Qt.LeftButton)
@@ -453,6 +551,9 @@ def test_rating_save_refreshes_table_and_preserves_view_state_and_qc_session(
     assert window.table_workspace.applied_state.sort_rules == (
         SortRule("site", ascending=False),
     )
+    assert window.results_workspace.applied_state.sort_rules == (
+        SortRule("site", ascending=True),
+    )
     result_frame = window.table_workspace.service.get_window(
         window.table_workspace.result,
         0,
@@ -462,6 +563,12 @@ def test_rating_save_refreshes_table_and_preserves_view_state_and_qc_session(
     row = result_frame.set_index("ezqcid").loc["SUB001"]
     assert row["AnatQC.rater1.score1"] == "Good"
     assert window.table_workspace.find_identity_exact("SUB001")
+    results_frame = window.results_workspace.service.get_window(
+        window.results_workspace.result,
+        0,
+        max(1, window.results_workspace.result.matched_total),
+    ).dataframe
+    assert results_frame.set_index("ezqcid").loc["SUB001", "AnatQC.rater1.score1"] == "Good"
 
 
 def test_initial_project_materialization_runs_without_blocking_qt(

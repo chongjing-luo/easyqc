@@ -32,6 +32,7 @@ from core.project_context_service import (
 from core.qc_workflow_service import QcWorkflowService
 from core.table_view_service import TableViewService
 from gui_qt.project_config_workspace import QtProjectConfigWorkspace
+from gui_qt.qc_results_page import QtQcResultsPage
 from gui_qt.qc_workspace import QtQcControllerWindow, QtQcWorkspace
 from gui_qt.table_workspace import QtTableWorkspace
 from gui_qt.task_runner import RevisionedTaskController
@@ -107,6 +108,10 @@ class QtMainWindow(QMainWindow):
 
         if self._injected_preview:
             self.table_workspace.replace_service(
+                self.current_context.table_view_service,
+                preserve_state=False,
+            )
+            self.results_page.replace_service(
                 self.current_context.table_view_service,
                 preserve_state=False,
             )
@@ -238,14 +243,12 @@ class QtMainWindow(QMainWindow):
         self.module_combo.setAccessibleName("当前质控模块")
         self.module_combo.hide()
 
-        self.results_page = QWidget(self.workspace_stack)
-        self.results_page.setObjectName("qcResultsPage")
-        results_layout = QVBoxLayout(self.results_page)
-        results_layout.setContentsMargins(18, 16, 18, 16)
-        results_title = QLabel("质控结果", self.results_page)
-        results_title.setObjectName("qcResultsTitle")
-        results_layout.addWidget(results_title)
-        results_layout.addStretch(1)
+        self.results_page = QtQcResultsPage(
+            source,
+            refresh_callback=self.refresh_results,
+            parent=self.workspace_stack,
+        )
+        self.results_workspace = self.results_page.table_workspace
 
         self.direct_pages = (
             self.project_page,
@@ -361,6 +364,20 @@ class QtMainWindow(QMainWindow):
             preserve_qc=False,
         )
 
+    def refresh_results(self) -> bool:
+        """Refresh derived rating results without replacing a clean QC session."""
+
+        if self.active_workflow is not None and self.active_workflow.dirty:
+            message = "请先保存或放弃当前质控修改，再刷新结果"
+            self._set_error(message)
+            self.results_page.show_error(message)
+            return False
+        return self._submit_context(
+            "results_refresh",
+            self.context_service.prepare_initial,
+            preserve_qc=True,
+        )
+
     def _project_selected(self, _index: int) -> None:
         name = self.project_combo.currentData() or self.project_combo.currentText()
         if name and name != self.current_context.project_name:
@@ -383,12 +400,14 @@ class QtMainWindow(QMainWindow):
         except Exception as exc:
             self._pending_context = None
             self.shell_status_label.setText("Project load failed")
-            self._set_error(str(exc).strip() or type(exc).__name__)
+            message = str(exc).strip() or type(exc).__name__
+            self._set_error(message)
+            self.results_page.show_error(message)
             return
         self._pending_context = None
         self.shell_status_label.setText(
             "Rating results refreshed"
-            if operation == "rating_refresh"
+            if operation in {"rating_refresh", "results_refresh"}
             else (
                 f"Loaded {snapshot.project_name}"
                 if snapshot.has_project
@@ -403,10 +422,13 @@ class QtMainWindow(QMainWindow):
             return
         self._pending_context = None
         self.shell_status_label.setText("Project load failed")
-        self._set_error(str(error).strip() or type(error).__name__)
+        message = str(error).strip() or type(error).__name__
+        self._set_error(message)
+        self.results_page.show_error(message)
 
     @Slot(bool)
     def _set_context_busy(self, _busy: bool) -> None:
+        self.results_page.set_refresh_busy(_busy)
         self._update_context_controls()
 
     def _apply_context(
@@ -424,6 +446,10 @@ class QtMainWindow(QMainWindow):
         previous_module = self._active_module_name
         self.current_context = snapshot
         self.table_workspace.replace_service(
+            snapshot.table_view_service,
+            preserve_state=bool(preserve_qc and same_project),
+        )
+        self.results_page.replace_service(
             snapshot.table_view_service,
             preserve_state=bool(preserve_qc and same_project),
         )
@@ -715,6 +741,7 @@ class QtMainWindow(QMainWindow):
         self._unsubscribe_events()
         self.context_task_controller.cancel()
         self.table_workspace.close()
+        self.results_page.close()
         self.config_workspace.close()
         self._clear_qc_workspace(discard_draft=True)
         super().closeEvent(event)
