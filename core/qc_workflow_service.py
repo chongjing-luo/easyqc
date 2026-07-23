@@ -52,6 +52,7 @@ class QcWorkflowService:
         initial_ezqcid: str | None = None,
         event_bus: EventBus | None = None,
         event_context: Mapping[str, Any] | None = None,
+        queue_summaries: Mapping[str, tuple[str, str]] | None = None,
     ) -> None:
         if not isinstance(subjects, pd.DataFrame):
             raise TypeError("QC subjects must be a pandas DataFrame")
@@ -60,12 +61,16 @@ class QcWorkflowService:
         )
         self._source = subjects.copy(deep=True)
         self._subject_ids = self._validated_subject_ids(self._source)
+        self._subject_index = {
+            identity: index for index, identity in enumerate(self._subject_ids)
+        }
         self._constants = dict(constants or {})
         self._rating_dir = Path(rating_dir) if rating_dir is not None else None
         self._rating_store = rating_service or RatingService
         self._code_executor = code_executor or CodeExecutor()
         self._event_bus = event_bus
         self._event_context = dict(event_context or {})
+        self._queue_summaries = self._validated_queue_summaries(queue_summaries)
         self._session_read_only_reasons: list[str] = []
         self._case_read_only_reasons: list[str] = []
         self._dirty = False
@@ -83,10 +88,11 @@ class QcWorkflowService:
             self._current_index = 0
         else:
             normalized = self._normalize_identity(initial_ezqcid)
-            try:
-                self._current_index = self._subject_ids.index(normalized)
-            except ValueError as exc:
-                raise QcIdentityError(f"Initial ezqcid is not in the QC table: {normalized}") from exc
+            if normalized not in self._subject_index:
+                raise QcIdentityError(
+                    f"Initial ezqcid is not in the QC table: {normalized}"
+                )
+            self._current_index = self._subject_index[normalized]
         self._working_module = configured_module
         self._load_current_rating()
 
@@ -109,6 +115,33 @@ class QcWorkflowService:
         if duplicates:
             raise QcIdentityError(f"QC subject table contains duplicate ezqcid: {duplicates}")
         return identities
+
+    def _validated_queue_summaries(
+        self,
+        summaries: Mapping[str, tuple[str, str]] | None,
+    ) -> dict[str, tuple[str, str]]:
+        if summaries is None:
+            return {}
+        if not isinstance(summaries, Mapping):
+            raise TypeError("QC queue summaries must be a mapping")
+        normalized: dict[str, tuple[str, str]] = {}
+        for raw_identity, raw_summary in summaries.items():
+            identity = self._normalize_identity(raw_identity)
+            if identity not in self._subject_index:
+                raise QcIdentityError(
+                    f"QC queue summary contains an unknown ezqcid: {identity}"
+                )
+            if not isinstance(raw_summary, (tuple, list)) or len(raw_summary) != 2:
+                raise TypeError("Each QC queue summary must contain score and tag text")
+            normalized[identity] = (
+                self._summary_text(raw_summary[0]),
+                self._summary_text(raw_summary[1]),
+            )
+        return normalized
+
+    @staticmethod
+    def _summary_text(value: Any) -> str:
+        return "" if value is None or pd.isna(value) else str(value).strip()
 
     @property
     def subject_ids(self) -> tuple[str, ...]:
@@ -140,6 +173,30 @@ class QcWorkflowService:
     @property
     def dirty(self) -> bool:
         return self._dirty
+
+    @staticmethod
+    def _module_summary(module: QCModule) -> tuple[str, str]:
+        scores = " / ".join(
+            str(score.value).strip()
+            for score in module.scores.values()
+            if score.value is not None and str(score.value).strip()
+        )
+        tags = "、".join(
+            str(tag.label).strip()
+            for tag in module.tags.values()
+            if tag.value and str(tag.label).strip()
+        )
+        return scores, tags
+
+    def queue_summary(self, ezqcid: str) -> tuple[str, str]:
+        """Return detached score/tag display text for one exact queue identity."""
+
+        identity = self._normalize_identity(ezqcid)
+        if identity not in self._subject_index:
+            raise QcIdentityError(f"Unknown QC ezqcid: {identity}")
+        if identity == self.current_ezqcid:
+            return self._module_summary(self._working_module)
+        return self._queue_summaries.get(identity, ("", ""))
 
     def _force_session_read_only(self, reason: str) -> None:
         if reason not in self._session_read_only_reasons:
@@ -305,6 +362,9 @@ class QcWorkflowService:
         except Exception:
             self._working_module.time = previous_time
             raise
+        self._queue_summaries[self.current_ezqcid] = self._module_summary(
+            self._working_module
+        )
         self._dirty = False
         if self._event_bus is not None:
             data = {
@@ -339,10 +399,9 @@ class QcWorkflowService:
         self._require_active()
         if isinstance(target, str):
             normalized = self._normalize_identity(target)
-            try:
-                target_index = self._subject_ids.index(normalized)
-            except ValueError as exc:
-                raise QcIdentityError(f"Unknown QC ezqcid: {normalized}") from exc
+            if normalized not in self._subject_index:
+                raise QcIdentityError(f"Unknown QC ezqcid: {normalized}")
+            target_index = self._subject_index[normalized]
         else:
             target_index = int(target)
             if target_index < 0 or target_index >= len(self._subject_ids):

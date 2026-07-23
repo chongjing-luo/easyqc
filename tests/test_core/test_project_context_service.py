@@ -143,6 +143,33 @@ def test_qc_factory_uses_snapshot_order_directory_and_emits_rating_event(tmp_pat
     }
 
 
+def test_qc_factory_projects_existing_score_and_tag_summaries_for_exact_queue(
+    tmp_path,
+) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    project = _add_project(services, tmp_path, "SAMPLE")
+    seed = QcWorkflowService(
+        _module_payload(),
+        _subjects(),
+        rating_dir=project.rating_dir / "AnatQC" / "rater1",
+        code_executor=services.code_executor,
+    )
+    seed.set_score("1", "Good")
+    seed.set_tag("1", True)
+    seed.save()
+    snapshot = services.project_context_service.snapshot()
+
+    workflow = services.project_context_service.create_qc_workflow(
+        snapshot,
+        module_name="AnatQC",
+        initial_ezqcid="SUB002",
+        navigation_ids=("SUB002", "SUB001"),
+    )
+
+    assert workflow.queue_summary("SUB002") == ("", "")
+    assert workflow.queue_summary("SUB001") == ("Good", "Motion")
+
+
 @pytest.mark.parametrize(
     "navigation_ids, message",
     [

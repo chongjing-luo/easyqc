@@ -70,14 +70,49 @@ class _FakeExecutor:
         self.close_calls += 1
 
 
-def _workflow(tmp_path: Path, *, module=None, executor=None) -> QcWorkflowService:
+def _workflow(
+    tmp_path: Path,
+    *,
+    module=None,
+    executor=None,
+    queue_summaries=None,
+) -> QcWorkflowService:
     return QcWorkflowService(
         module or _module(),
         _subjects(),
         rating_dir=tmp_path / "RatingFiles" / "AnatQC" / "rater1",
         constants={"project": "synthetic"},
         code_executor=executor or _FakeExecutor(),
+        queue_summaries=queue_summaries,
     )
+
+
+def test_queue_summary_combines_seeded_rows_with_live_draft_and_committed_save(
+    tmp_path,
+) -> None:
+    workflow = _workflow(
+        tmp_path,
+        queue_summaries={
+            "SUB001": ("Fair", ""),
+            "SUB002": ("Good", "Motion artifact"),
+        },
+    )
+
+    assert workflow.queue_summary("SUB001") == ("", "")
+    assert workflow.queue_summary("SUB002") == ("Good", "Motion artifact")
+    workflow.set_score("1", "Good")
+    workflow.set_tag("1", True)
+    assert workflow.queue_summary("SUB001") == ("Good", "Motion artifact")
+
+    workflow.save()
+    workflow.navigate_to("SUB002")
+
+    assert workflow.queue_summary("SUB001") == ("Good", "Motion artifact")
+    # Once selected, the live rating-file load is authoritative over the
+    # earlier detached aggregate snapshot.
+    assert workflow.queue_summary("SUB002") == ("", "")
+    with pytest.raises(QcIdentityError, match="Unknown QC ezqcid"):
+        workflow.queue_summary("FOREIGN")
 
 
 def test_viewer_plan_launch_navigation_and_close_use_code_executor(tmp_path) -> None:

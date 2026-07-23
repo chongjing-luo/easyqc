@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 import pandas as pd
+from pandas.api import types as ptypes
 
 from core.code_executor import CodeExecutor
 from core.configuration_service import ConfigurationError, ConfigurationService
@@ -327,6 +328,11 @@ class ProjectContextService:
             if snapshot.project_path is not None and rater
             else None
         )
+        queue_summaries = self._qc_queue_summaries(
+            snapshot,
+            module,
+            requested,
+        )
         return QcWorkflowService(
             module,
             ordered_subjects,
@@ -341,6 +347,94 @@ class ProjectContextService:
                 "project_name": snapshot.project_name,
                 "project_path": str(snapshot.project_path),
             },
+            queue_summaries=queue_summaries,
+        )
+
+    @classmethod
+    def _qc_queue_summaries(
+        cls,
+        snapshot: ProjectContextSnapshot,
+        module: QCModule,
+        identities: tuple[str, ...],
+    ) -> dict[str, tuple[str, str]]:
+        """Project accepted rating facts into compact queue display strings."""
+
+        rater = cls._normalize_identity(module.rater)
+        if not rater:
+            return {}
+        service = snapshot.table_view_service
+        available = {profile.name for profile in service.profiles}
+        prefix = f"{module.name}.{rater}."
+        score_columns = tuple(
+            column
+            for key in module.scores
+            for column in (f"{prefix}score{key}",)
+            if column in available
+        )
+        tag_columns = tuple(
+            (column, module.tags[key].label)
+            for key in module.tags
+            for column in (f"{prefix}tag{key}",)
+            if column in available
+        )
+        if not score_columns and not tag_columns:
+            return {}
+        selected_columns = (
+            "ezqcid",
+            *score_columns,
+            *(column for column, _label in tag_columns),
+        )
+        result = service.apply_state(
+            service.default_state(page_size=max(1, service.source_total))
+        )
+        frame = service.get_window(
+            result,
+            0,
+            max(1, service.source_total),
+            selected_columns,
+        ).dataframe
+        normalized_ids = frame["ezqcid"].map(cls._normalize_identity)
+        requested = set(identities)
+        keep = normalized_ids.isin(requested)
+        frame = frame.loc[keep].reset_index(drop=True)
+        normalized_ids = normalized_ids.loc[keep].reset_index(drop=True)
+        scores = pd.Series("", index=frame.index, dtype="string")
+        for column in score_columns:
+            values = frame[column].astype("string").fillna("").str.strip()
+            scores = cls._join_summary_values(scores, values, " / ")
+        tags = pd.Series("", index=frame.index, dtype="string")
+        for column, label in tag_columns:
+            values = pd.Series("", index=frame.index, dtype="string")
+            values.loc[cls._summary_tag_mask(frame[column])] = str(label).strip()
+            tags = cls._join_summary_values(tags, values, "、")
+        return {
+            identity: (str(score), str(tag))
+            for identity, score, tag in zip(normalized_ids, scores, tags)
+        }
+
+    @staticmethod
+    def _join_summary_values(
+        existing: pd.Series,
+        values: pd.Series,
+        separator: str,
+    ) -> pd.Series:
+        both = existing.ne("") & values.ne("")
+        combined = existing.where(values.eq(""), values)
+        combined.loc[both] = existing.loc[both] + separator + values.loc[both]
+        return combined
+
+    @staticmethod
+    def _summary_tag_mask(series: pd.Series) -> pd.Series:
+        if ptypes.is_bool_dtype(series.dtype):
+            return series.fillna(False).astype(bool)
+        if ptypes.is_numeric_dtype(series.dtype):
+            return series.fillna(0).ne(0)
+        return (
+            series.astype("string")
+            .fillna("")
+            .str.strip()
+            .str.casefold()
+            .isin({"true", "1", "yes"})
         )
 
 
