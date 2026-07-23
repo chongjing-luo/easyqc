@@ -4,10 +4,21 @@ import json
 from pathlib import Path
 
 import pandas as pd
-from PySide6.QtCore import QCoreApplication, QEvent, Qt
-from PySide6.QtWidgets import QScrollArea, QSplitter, QToolBar, QWidget
+from shiboken6 import isValid
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QCheckBox,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QTableView,
+    QWidget,
+)
 
 from core.qc_workflow_service import QcWorkflowService
+from gui_qt import qc_workspace as qc_workspace_module
 from gui_qt.qc_workspace import QtQcWorkspace
 
 
@@ -68,6 +79,242 @@ def _workflow(tmp_path: Path, *, module=None, executor=None, subjects=None):
     )
 
 
+def _controller_class():
+    controller_class = getattr(qc_workspace_module, "QtQcControllerWindow", None)
+    assert controller_class is not None, "compact top-level QC controller is missing"
+    return controller_class
+
+
+def test_compact_qc_controller_is_top_level_with_exact_table_and_action_order(
+    qtbot,
+    tmp_path,
+) -> None:
+    controller = _controller_class()(_workflow(tmp_path))
+    qtbot.addWidget(controller)
+    controller.resize(640, 760)
+    controller.show()
+    workspace = controller.workspace
+
+    assert isinstance(controller, QMainWindow)
+    assert controller.isWindow()
+    assert controller.parent() is None
+    assert controller.windowTitle() == "EasyQC"
+    assert controller.centralWidget() is workspace
+    assert isinstance(workspace.queue_table, QTableView)
+    assert workspace.queue_table.model() is workspace.queue_model
+    assert [
+        workspace.queue_model.headerData(column, Qt.Horizontal, Qt.DisplayRole)
+        for column in range(workspace.queue_model.columnCount())
+    ] == ["序号", "ezqcid", "评分", "标签"]
+    assert workspace.queue_table.editTriggers() == QAbstractItemView.NoEditTriggers
+    assert workspace.queue_table.selectionBehavior() == QAbstractItemView.SelectRows
+    assert workspace.queue_table.verticalScrollBarPolicy() == Qt.ScrollBarAlwaysOn
+    assert [control.text() for control in workspace.action_controls] == [
+        "只读",
+        "筛选名单",
+        "上一个",
+        "下一个",
+        "保存",
+        "保存并下一个",
+    ]
+    assert isinstance(workspace.action_controls[0], QCheckBox)
+    assert all(
+        isinstance(control, QPushButton) for control in workspace.action_controls[1:]
+    )
+    for removed_name in (
+        "module_label",
+        "subject_label",
+        "viewer_button",
+        "watch_badge",
+        "discard_button",
+    ):
+        assert not hasattr(workspace, removed_name)
+
+
+def test_qc_queue_model_keeps_100k_rows_virtual_and_filters_exact_tail_identity(
+    qtbot,
+    tmp_path,
+) -> None:
+    identities = [f"QC-{index:06d}" for index in range(100_000)]
+    workflow = _workflow(
+        tmp_path,
+        subjects=pd.DataFrame(
+            {
+                "ezqcid": identities,
+                "image": [f"image-{index}.nii" for index in range(100_000)],
+            }
+        ),
+    )
+    model_class = getattr(qc_workspace_module, "QtQcQueueModel", None)
+    assert model_class is not None
+    model = model_class(workflow)
+
+    assert model.rowCount() == 100_000
+    assert isinstance(model._visible_positions, range)
+    assert model.data(model.index(99_999, 1), Qt.DisplayRole) == "QC-099999"
+    assert model.set_filter("QC-099999") == 1
+    assert model.identity_at(0) == "QC-099999"
+
+
+def test_queue_double_click_opens_exact_identity_and_filter_controls_visible_queue(
+    qtbot,
+    tmp_path,
+) -> None:
+    executor = _FakeExecutor()
+    subjects = pd.DataFrame(
+        {
+            "ezqcid": ["A-001", "B-001", "B-002"],
+            "image": ["a.nii", "b1.nii", "b2.nii"],
+        }
+    )
+    controller = _controller_class()(
+        _workflow(tmp_path, executor=executor, subjects=subjects)
+    )
+    qtbot.addWidget(controller)
+    controller.show()
+    workspace = controller.workspace
+
+    workspace.queue_table.doubleClicked.emit(workspace.queue_model.index(2, 1))
+
+    assert workspace.workflow.current_ezqcid == "B-002"
+    assert executor.started[-1][0] == {0: "freeview b2.nii"}
+
+    assert workspace.set_queue_filter("B-")
+    assert workspace.queue_model.rowCount() == 2
+    assert [
+        workspace.queue_model.data(
+            workspace.queue_model.index(row, 1),
+            Qt.DisplayRole,
+        )
+        for row in range(2)
+    ] == ["B-001", "B-002"]
+    qtbot.mouseClick(workspace.previous_button, Qt.LeftButton)
+    assert workspace.workflow.current_ezqcid == "B-001"
+    assert executor.started[-1][0] == {0: "freeview b1.nii"}
+
+
+def test_dirty_draft_rejects_queue_filter_without_changing_visible_rows(
+    qtbot,
+    tmp_path,
+) -> None:
+    workspace = QtQcWorkspace(_workflow(tmp_path))
+    qtbot.addWidget(workspace)
+    qtbot.mouseClick(workspace.score_buttons["1"]["Good"], Qt.LeftButton)
+
+    assert not workspace.set_queue_filter("SUB002")
+    assert workspace.queue_model.rowCount() == 2
+    assert workspace.workflow.current_ezqcid == "SUB001"
+    assert workspace.workflow.dirty
+    assert "请先保存" in workspace.error_text
+
+
+def test_filtered_save_next_saves_current_then_opens_next_visible_identity(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    executor = _FakeExecutor()
+    subjects = pd.DataFrame(
+        {
+            "ezqcid": ["A-001", "B-001", "B-002"],
+            "image": ["a.nii", "b1.nii", "b2.nii"],
+        }
+    )
+    controller = _controller_class()(
+        _workflow(tmp_path, executor=executor, subjects=subjects)
+    )
+    qtbot.addWidget(controller)
+    workspace = controller.workspace
+    assert workspace.set_queue_filter("B-")
+    assert workspace.workflow.current_ezqcid == "B-001"
+    qtbot.mouseClick(workspace.score_buttons["1"]["Good"], Qt.LeftButton)
+    qtbot.mouseClick(workspace.save_next_button, Qt.LeftButton)
+
+    assert workspace.workflow.current_ezqcid == "B-002"
+    assert list((tmp_path / "ratings").glob("AnatQC._.B-001*.json"))
+    assert executor.started[-1][0] == {0: "freeview b2.nii"}
+
+    qtbot.mouseClick(workspace.score_buttons["1"]["Good"], Qt.LeftButton)
+    monkeypatch.setattr(
+        workspace.workflow,
+        "save",
+        lambda: (_ for _ in ()).throw(OSError("disk unavailable")),
+    )
+    qtbot.mouseClick(workspace.save_button, Qt.LeftButton)
+    assert workspace.workflow.current_ezqcid == "B-002"
+    assert "disk unavailable" in workspace.error_text
+
+
+def test_manual_and_core_read_only_use_the_single_top_control_but_keep_viewer(
+    qtbot,
+    tmp_path,
+) -> None:
+    executor = _FakeExecutor()
+    controller = _controller_class()(_workflow(tmp_path, executor=executor))
+    qtbot.addWidget(controller)
+    controller.show()
+    workspace = controller.workspace
+
+    workspace.read_only_box.click()
+    assert workspace.read_only_box.isChecked()
+    assert not workspace.score_buttons["1"]["Good"].isEnabled()
+    assert not workspace.tag_boxes["1"].isEnabled()
+    assert workspace.notes_edit.isReadOnly()
+    assert not workspace.save_button.isEnabled()
+    workspace.queue_table.doubleClicked.emit(workspace.queue_model.index(0, 1))
+    assert executor.started
+
+    workspace.read_only_box.click()
+    assert not workspace.read_only_box.isChecked()
+    assert workspace.score_buttons["1"]["Good"].isEnabled()
+
+    forced = _controller_class()(_workflow(tmp_path, module=_module(rater=None)))
+    qtbot.addWidget(forced)
+    assert forced.workspace.read_only_box.isChecked()
+    assert not forced.workspace.read_only_box.isEnabled()
+    assert len(
+        [
+            box
+            for box in forced.workspace.findChildren(QCheckBox)
+            if box.text() == "只读"
+        ]
+    ) == 1
+
+
+def test_dirty_controller_close_rejects_without_cleanup_then_accepts_once(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    executor = _FakeExecutor()
+    controller = _controller_class()(_workflow(tmp_path, executor=executor))
+    qtbot.addWidget(controller)
+    controller.show()
+    qtbot.mouseClick(
+        controller.workspace.score_buttons["1"]["Good"],
+        Qt.LeftButton,
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.No,
+    )
+
+    assert not controller.close()
+    assert controller.isVisible()
+    assert controller.workspace.workflow.dirty
+    assert executor.close_calls == 0
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.Yes,
+    )
+    assert controller.close()
+    assert not isValid(controller) or not controller.isVisible()
+    assert executor.close_calls == 1
+
+
 def test_qt_qc_editor_saves_full_draft_then_advances(qtbot, tmp_path) -> None:
     workflow = _workflow(tmp_path)
     workspace = QtQcWorkspace(workflow)
@@ -81,7 +328,8 @@ def test_qt_qc_editor_saves_full_draft_then_advances(qtbot, tmp_path) -> None:
 
     assert workflow.current_ezqcid == "SUB002"
     assert list((tmp_path / "ratings").glob("AnatQC._.SUB001*.json"))
-    assert "SUB002" in workspace.subject_label.text()
+    assert workspace.queue_model.current_visible_row() == 1
+    assert workspace.queue_table.currentIndex().row() == 1
     assert workspace.error_text == ""
 
 
@@ -91,10 +339,10 @@ def test_qt_failed_save_stays_on_current_subject_and_shows_error(qtbot, tmp_path
     qtbot.addWidget(workspace)
     qtbot.mouseClick(workspace.score_buttons["1"]["Good"], Qt.LeftButton)
 
-    def fail(_delta):
+    def fail():
         raise OSError("disk unavailable")
 
-    monkeypatch.setattr(workflow, "save_and_move", fail)
+    monkeypatch.setattr(workflow, "save", fail)
     qtbot.mouseClick(workspace.save_next_button, Qt.LeftButton)
 
     assert workflow.current_ezqcid == "SUB001"
@@ -115,10 +363,11 @@ def test_qt_watch_mode_disables_edits_and_save_but_keeps_viewer(qtbot, tmp_path)
     assert not workspace.tag_boxes["1"].isEnabled()
     assert workspace.notes_edit.isReadOnly()
     assert not workspace.save_button.isEnabled()
-    assert workspace.viewer_button.isEnabled()
-    assert "Read-only" in workspace.watch_badge.text()
+    assert workspace.read_only_box.isChecked()
+    assert not workspace.read_only_box.isEnabled()
+    assert "rater" in workspace.read_only_box.toolTip().lower()
 
-    qtbot.mouseClick(workspace.viewer_button, Qt.LeftButton)
+    workspace.queue_table.doubleClicked.emit(workspace.queue_model.index(0, 1))
     assert executor.started
 
 
@@ -140,7 +389,7 @@ def test_qt_qc_workspace_resizes_with_long_text_and_keyboard_actions(
             ],
         }
     )
-    workspace = QtQcWorkspace(
+    controller = _controller_class()(
         _workflow(
             tmp_path,
             module=module,
@@ -148,35 +397,28 @@ def test_qt_qc_workspace_resizes_with_long_text_and_keyboard_actions(
             subjects=subjects,
         )
     )
-    qtbot.addWidget(workspace)
-    workspace.resize(640, 480)
-    workspace.show()
-    workspace.activateWindow()
+    qtbot.addWidget(controller)
+    controller.resize(640, 560)
+    controller.show()
+    controller.activateWindow()
+    workspace = controller.workspace
 
-    splitter = workspace.findChild(QSplitter, "qcSplitter")
     editor_scroll = workspace.findChild(QScrollArea, "qcEditorScroll")
-    action_toolbar = workspace.findChild(QToolBar, "qcActionToolbar")
-    assert splitter is workspace.qc_splitter
-    assert not splitter.isCollapsible(0)
-    assert not splitter.isCollapsible(1)
     assert editor_scroll is workspace.editor_scroll
     assert editor_scroll.widgetResizable()
-    assert action_toolbar is workspace.action_toolbar
-    assert workspace.subject_list.maximumWidth() == QWidget().maximumWidth()
-    assert workspace.watch_badge.maximumWidth() == QWidget().maximumWidth()
-    assert workspace.module_label.wordWrap()
-    assert workspace.subject_label.wordWrap()
-    assert workspace.module_label.toolTip() == workspace.module_label.text()
-    assert workspace.subject_label.toolTip() == workspace.subject_label.text()
-    assert workspace.subject_list.item(0).toolTip().endswith(subjects.iloc[0]["ezqcid"])
+    assert workspace.queue_table.maximumWidth() == QWidget().maximumWidth()
+    assert workspace.queue_table.model().rowCount() == 2
+    assert workspace.queue_table.model().data(
+        workspace.queue_table.model().index(0, 1),
+        Qt.DisplayRole,
+    ) == subjects.iloc[0]["ezqcid"]
 
     actions = (
-        workspace.viewer_action,
         workspace.previous_action,
         workspace.next_action,
-        workspace.discard_action,
         workspace.save_action,
         workspace.save_next_action,
+        workspace.filter_action,
     )
     assert all(action.shortcut().toString() for action in actions)
     assert not workspace.save_action.isEnabled()
@@ -190,23 +432,10 @@ def test_qt_qc_workspace_resizes_with_long_text_and_keyboard_actions(
         Qt.KeyboardModifier.ControlModifier,
     )
     assert list((tmp_path / "ratings").glob("*.json")) == before
-    qtbot.keyClick(
-        workspace.notes_edit,
-        Qt.Key.Key_V,
-        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
-    )
+    workspace.queue_table.doubleClicked.emit(workspace.queue_model.index(0, 1))
     assert executor.started
-
-    expected_minimum = workspace._subject_list_accessible_width()
-    assert workspace.subject_list.minimumWidth() == expected_minimum
-    font = workspace.font()
-    font.setPointSize(font.pointSize() + 4)
-    workspace.setFont(font)
-    QCoreApplication.sendEvent(workspace, QEvent(QEvent.Type.FontChange))
-    assert (
-        workspace.subject_list.minimumWidth()
-        == workspace._subject_list_accessible_width()
-    )
+    assert all(control.isVisible() for control in workspace.action_controls)
+    assert controller.minimumSizeHint().width() <= 640
 
 
 def test_qt_schema_drift_shows_reused_legacy_score_then_restores_editing(
@@ -232,17 +461,17 @@ def test_qt_schema_drift_shows_reused_legacy_score_then_restores_editing(
     assert legacy_button.isVisible()
     assert legacy_button.isChecked()
     assert not legacy_button.isEnabled()
-    assert legacy_button.text() == "Accept (saved legacy value; not in current schema)"
+    assert legacy_button.text() == "Accept（旧评分值，不在当前选项中）"
     assert "Quality" in legacy_button.accessibleName()
     assert "Accept" in legacy_button.accessibleName()
     assert not workspace.score_buttons["1"][None].isChecked()
-    assert "schema" in workspace.watch_badge.text().lower()
+    assert "schema" in workspace.read_only_box.toolTip().lower()
     assert not workspace.score_buttons["1"]["Good"].isEnabled()
     assert not workspace.tag_boxes["1"].isEnabled()
     assert workspace.notes_edit.isReadOnly()
     assert not workspace.save_button.isEnabled()
     assert not workspace.save_next_button.isEnabled()
-    assert workspace.viewer_button.isEnabled()
+    assert workspace.queue_table.isEnabled()
     assert workspace.next_button.isEnabled()
 
     qtbot.mouseClick(workspace.next_button, Qt.LeftButton)
@@ -254,8 +483,8 @@ def test_qt_schema_drift_shows_reused_legacy_score_then_restores_editing(
     assert workspace.tag_boxes["1"].isEnabled()
     assert not workspace.notes_edit.isReadOnly()
     assert workspace.save_button.isEnabled()
-    assert workspace.viewer_button.isEnabled()
-    assert "Rating mode" in workspace.watch_badge.text()
+    assert workspace.queue_table.isEnabled()
+    assert not workspace.read_only_box.isChecked()
 
 
 def test_qt_module_watch_survives_schema_case_navigation(qtbot, tmp_path) -> None:
@@ -276,21 +505,21 @@ def test_qt_module_watch_survives_schema_case_navigation(qtbot, tmp_path) -> Non
 
     legacy_button = workspace._legacy_score_buttons["1"]
     assert legacy_button.isVisible()
-    assert "watch mode" in workspace.watch_badge.text().lower()
-    assert "schema" in workspace.watch_badge.text().lower()
+    assert "watch mode" in workspace.read_only_box.toolTip().lower()
+    assert "schema" in workspace.read_only_box.toolTip().lower()
 
     qtbot.mouseClick(workspace.next_button, Qt.LeftButton)
 
     assert workspace._legacy_score_buttons["1"] is legacy_button
     assert legacy_button.isHidden()
     assert workspace.score_buttons["1"][None].isChecked()
-    assert "watch mode" in workspace.watch_badge.text().lower()
-    assert "schema" not in workspace.watch_badge.text().lower()
+    assert "watch mode" in workspace.read_only_box.toolTip().lower()
+    assert "schema" not in workspace.read_only_box.toolTip().lower()
     assert not workspace.score_buttons["1"]["Good"].isEnabled()
     assert not workspace.tag_boxes["1"].isEnabled()
     assert workspace.notes_edit.isReadOnly()
     assert not workspace.save_button.isEnabled()
-    assert workspace.viewer_button.isEnabled()
+    assert workspace.queue_table.isEnabled()
 
 
 def test_qt_qc_workspace_close_cleans_viewer_processes(qtbot, tmp_path) -> None:
@@ -304,7 +533,10 @@ def test_qt_qc_workspace_close_cleans_viewer_processes(qtbot, tmp_path) -> None:
     assert executor.close_calls == 1
 
 
-def test_qt_qc_discard_restores_saved_state_and_emits_clean_draft(qtbot, tmp_path) -> None:
+def test_qt_qc_save_emits_clean_draft_without_a_visible_discard_control(
+    qtbot,
+    tmp_path,
+) -> None:
     workflow = _workflow(tmp_path)
     workspace = QtQcWorkspace(workflow)
     qtbot.addWidget(workspace)
@@ -313,9 +545,9 @@ def test_qt_qc_discard_restores_saved_state_and_emits_clean_draft(qtbot, tmp_pat
 
     qtbot.mouseClick(workspace.score_buttons["1"]["Good"], Qt.LeftButton)
     assert workflow.dirty
-    assert workspace.discard_button.isEnabled()
-    qtbot.mouseClick(workspace.discard_button, Qt.LeftButton)
+    assert not hasattr(workspace, "discard_button")
+    qtbot.mouseClick(workspace.save_button, Qt.LeftButton)
 
     assert not workflow.dirty
-    assert workflow.current_module.scores["1"].value is None
+    assert workflow.current_module.scores["1"].value == "Good"
     assert states[-1] is False

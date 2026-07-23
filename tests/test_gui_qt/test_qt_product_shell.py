@@ -3,6 +3,7 @@ from __future__ import annotations
 from threading import Event
 
 import pandas as pd
+from shiboken6 import isValid
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QLabel,
@@ -119,8 +120,8 @@ def test_qt_main_window_uses_six_direct_navigation_pages(qtbot, tmp_path) -> Non
     assert window.project_combo.currentText() == "SAMPLE"
     assert window.module_combo.currentData() == "AnatQC"
     assert window.table_workspace.result.matched_total == 3
-    assert window.qc_workspace is not None
-    assert window.qc_workspace.workflow.current_module.name == "AnatQC"
+    assert window.qc_workspace is None
+    assert getattr(window, "qc_controller", None) is None
     assert window.config_workspace.configuration is services.configuration_service
     assert _primary_navigation_labels(window) == [
         "项目选择",
@@ -172,12 +173,16 @@ def test_shell_uses_neutral_list_language_for_visible_context(qtbot, tmp_path) -
 
     visible_shell_text = " ".join(
         [
-            *(window.navigation.item(index).text() for index in range(window.navigation.count())),
+            *(
+                window.navigation.item(index).text()
+                for index in range(window.navigation.count())
+            ),
             window.shell_status_label.text(),
             window.shell_empty_label.text(),
-            window.qc_placeholder.text(),
         ]
     ).casefold()
+    assert not hasattr(window, "qc_placeholder")
+    assert not hasattr(window, "qc_page")
     assert "受试者" not in visible_shell_text
     assert "被试" not in visible_shell_text
     assert "变量设置" not in visible_shell_text
@@ -222,7 +227,7 @@ def test_pre_qc_list_has_no_qc_launch_action(qtbot, tmp_path) -> None:
 
     assert not table.open_qc_action.isVisible()
     assert table.open_qc_action not in table.action_toolbar.actions()
-    assert window.qc_workspace.workflow.current_ezqcid == "SUB001"
+    assert window.qc_workspace is None
 
 
 def test_module_rows_are_the_sole_visible_qc_launch_and_use_exact_module_name(
@@ -267,8 +272,36 @@ def test_module_rows_are_the_sole_visible_qc_launch_and_use_exact_module_name(
     )
 
     assert window.qc_workspace.workflow.current_module.name == "FuncQC"
+    assert window.qc_controller is not None
+    assert window.qc_controller.isWindow()
+    assert window.qc_controller.parent() is None
+    assert window.qc_controller.windowTitle() == "EasyQC"
+    assert window.qc_controller.centralWidget() is window.qc_workspace
+    assert window.qc_controller.isVisible()
     assert window.module_combo.currentData() == "FuncQC"
     assert window.config_workspace._selected_module_name == "FuncQC"
+
+
+def test_module_launch_replaces_exactly_one_top_level_controller(qtbot, tmp_path) -> None:
+    window, _services = _window(qtbot, tmp_path, second_module=True)
+    window.navigation.setCurrentRow(window.modules_page_index)
+    qtbot.mouseClick(
+        window.config_workspace.module_start_buttons["AnatQC"],
+        Qt.LeftButton,
+    )
+    first_controller = window.qc_controller
+    first_workflow = window.qc_workspace.workflow
+
+    qtbot.mouseClick(
+        window.config_workspace.module_start_buttons["FuncQC"],
+        Qt.LeftButton,
+    )
+
+    assert window.qc_controller is not first_controller
+    assert window.qc_workspace.workflow is not first_workflow
+    assert not isValid(first_controller) or not first_controller.isVisible()
+    assert window.qc_controller.isVisible()
+    assert window.findChildren(type(window.qc_controller)) == []
 
 
 def test_stale_table_callback_is_rejected_after_same_id_project_switch(qtbot, tmp_path) -> None:
@@ -284,11 +317,11 @@ def test_stale_table_callback_is_rejected_after_same_id_project_switch(qtbot, tm
 
     assert window.load_project("BETA")
     qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
-    current_workflow = window.qc_workspace.workflow
+    current_workflow = window.qc_workspace
     stale_callback("SUB001")
 
     assert window.current_context.project_name == "BETA"
-    assert window.qc_workspace.workflow is current_workflow
+    assert window.qc_workspace is current_workflow
     assert "stale" in window.shell_error_label.text().lower()
 
 
@@ -298,6 +331,11 @@ def test_failed_qc_replacement_keeps_old_workflow_then_success_closes_it(
     monkeypatch,
 ) -> None:
     window, services = _window(qtbot, tmp_path, second_module=True)
+    window.navigation.setCurrentRow(window.modules_page_index)
+    qtbot.mouseClick(
+        window.config_workspace.module_start_buttons["AnatQC"],
+        Qt.LeftButton,
+    )
     previous = window.qc_workspace.workflow
     close_calls = []
     monkeypatch.setattr(
@@ -338,6 +376,11 @@ def test_dirty_qc_disables_context_replacement_and_close_requires_confirmation(
     monkeypatch,
 ) -> None:
     window, _services = _window(qtbot, tmp_path)
+    window.navigation.setCurrentRow(window.modules_page_index)
+    qtbot.mouseClick(
+        window.config_workspace.module_start_buttons["AnatQC"],
+        Qt.LeftButton,
+    )
     qtbot.mouseClick(window.qc_workspace.score_buttons["1"]["Good"], Qt.LeftButton)
 
     assert window.qc_workspace.workflow.dirty
@@ -348,10 +391,44 @@ def test_dirty_qc_disables_context_replacement_and_close_requires_confirmation(
     assert not window.close()
     assert window.isVisible()
 
-    qtbot.mouseClick(window.qc_workspace.discard_button, Qt.LeftButton)
+    qtbot.mouseClick(window.qc_workspace.save_button, Qt.LeftButton)
     assert not window.qc_workspace.workflow.dirty
+    qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
     assert window.project_combo.isEnabled()
     assert window.config_workspace.isEnabled()
+
+
+def test_main_close_accepts_dirty_draft_once_and_closes_controller_resources(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    window, services = _window(qtbot, tmp_path)
+    window.navigation.setCurrentRow(window.modules_page_index)
+    qtbot.mouseClick(
+        window.config_workspace.module_start_buttons["AnatQC"],
+        Qt.LeftButton,
+    )
+    controller = window.qc_controller
+    close_calls = []
+    monkeypatch.setattr(
+        services.code_executor,
+        "close_current_processes",
+        lambda: close_calls.append(True),
+    )
+    qtbot.mouseClick(window.qc_workspace.score_buttons["1"]["Good"], Qt.LeftButton)
+    questions = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: questions.append((args, kwargs)) or QMessageBox.Yes,
+    )
+
+    assert window.close()
+
+    assert len(questions) == 1
+    assert close_calls == [True]
+    assert not isValid(controller) or not controller.isVisible()
 
 
 def test_rating_save_refreshes_table_and_preserves_view_state_and_qc_session(
@@ -359,6 +436,11 @@ def test_rating_save_refreshes_table_and_preserves_view_state_and_qc_session(
     tmp_path,
 ) -> None:
     window, _services = _window(qtbot, tmp_path)
+    window.navigation.setCurrentRow(window.modules_page_index)
+    qtbot.mouseClick(
+        window.config_workspace.module_start_buttons["AnatQC"],
+        Qt.LeftButton,
+    )
     table = window.table_workspace
     assert table.apply_sort_rules((SortRule("site", ascending=False),))
     assert table.find_identity_exact("SUB001")

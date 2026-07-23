@@ -32,7 +32,7 @@ from core.project_context_service import (
 from core.qc_workflow_service import QcWorkflowService
 from core.table_view_service import TableViewService
 from gui_qt.project_config_workspace import QtProjectConfigWorkspace
-from gui_qt.qc_workspace import QtQcWorkspace
+from gui_qt.qc_workspace import QtQcControllerWindow, QtQcWorkspace
 from gui_qt.table_workspace import QtTableWorkspace
 from gui_qt.task_runner import RevisionedTaskController
 
@@ -90,6 +90,7 @@ class QtMainWindow(QMainWindow):
             table_view_service=TableViewService(initial_source),
         )
         self.qc_workspace: QtQcWorkspace | None = None
+        self.qc_controller: QtQcControllerWindow | None = None
 
         self.setObjectName("qtPreviewWindow")
         self.setAccessibleName(
@@ -272,20 +273,6 @@ class QtMainWindow(QMainWindow):
         self.config_tab_index = self.project_page_index
         layout.addWidget(self.workspace_stack, 1)
 
-        # The old embedded QC host remains hidden until GUI-R6 replaces it with
-        # the approved separate compact controller window.
-        self.qc_page = QWidget(central)
-        self.qc_page.setObjectName("internalQcHost")
-        self.qc_page.hide()
-        self.qc_layout = QVBoxLayout(self.qc_page)
-        self.qc_layout.setContentsMargins(0, 0, 0, 0)
-        self.qc_placeholder = QLabel(
-            "Load a project with list entries and a QC module to begin review.",
-            self.qc_page,
-        )
-        self.qc_placeholder.setObjectName("qcEmptyState")
-        self.qc_placeholder.setWordWrap(True)
-        self.qc_layout.addWidget(self.qc_placeholder)
         self.setCentralWidget(central)
 
         self.reload_action = QAction("刷新项目", self)
@@ -462,21 +449,10 @@ class QtMainWindow(QMainWindow):
 
         if not snapshot.has_project or snapshot.subjects.empty or not snapshot.modules:
             self._clear_qc_workspace()
-        elif not (preserve_qc and same_project and self.qc_workspace is not None):
-            module_name = str(self.module_combo.currentData() or "")
-            initial = str(snapshot.subjects.iloc[0]["ezqcid"])
-            try:
-                workflow = self.context_service.create_qc_workflow(
-                    snapshot,
-                    module_name=module_name,
-                    initial_ezqcid=initial,
-                    navigation_ids=tuple(snapshot.subjects["ezqcid"].astype(str)),
-                )
-            except Exception as exc:
-                self._clear_qc_workspace()
-                self._set_error(f"QC workspace unavailable: {exc}")
-            else:
-                self._install_qc_workspace(workflow, module_name)
+        elif not (preserve_qc and same_project and self.qc_controller is not None):
+            # Opening a project only prepares configuration. QC starts solely
+            # from a module-row action and therefore never appears implicitly.
+            self._clear_qc_workspace()
         self.shell_empty_label.setVisible(not snapshot.has_project)
         self._update_context_controls()
 
@@ -640,27 +616,44 @@ class QtMainWindow(QMainWindow):
         workflow: QcWorkflowService,
         module_name: str,
     ) -> None:
-        replacement = QtQcWorkspace(workflow, parent=self.qc_page)
-        replacement.draftStateChanged.connect(self._on_qc_draft_changed)
-        previous = self.qc_workspace
+        replacement = QtQcControllerWindow(workflow)
+        replacement.workspace.draftStateChanged.connect(self._on_qc_draft_changed)
+        replacement.closed.connect(
+            lambda controller=replacement: self._qc_controller_closed(controller)
+        )
+        previous = self.qc_controller
         if previous is not None:
             previous.close()
-            previous.setParent(None)
-            previous.deleteLater()
-        self.qc_placeholder.hide()
-        self.qc_workspace = replacement
-        self.qc_layout.addWidget(replacement)
+        self.qc_controller = replacement
+        self.qc_workspace = replacement.workspace
         self._active_module_name = module_name
         self._on_qc_draft_changed(workflow.dirty)
+        replacement.show()
+        replacement.raise_()
+        replacement.activateWindow()
 
-    def _clear_qc_workspace(self) -> None:
-        if self.qc_workspace is not None:
-            self.qc_workspace.close()
-            self.qc_workspace.setParent(None)
-            self.qc_workspace.deleteLater()
-            self.qc_workspace = None
+    def _qc_controller_closed(self, controller: QtQcControllerWindow) -> None:
+        if self.qc_controller is not controller:
+            return
+        self.qc_controller = None
+        self.qc_workspace = None
         self._active_module_name = ""
-        self.qc_placeholder.show()
+        self._update_context_controls()
+
+    def _clear_qc_workspace(self, *, discard_draft: bool = False) -> bool:
+        controller = self.qc_controller
+        if controller is not None:
+            closed = (
+                controller.close_discarding_draft()
+                if discard_draft
+                else controller.close()
+            )
+            if not closed:
+                return False
+        self.qc_controller = None
+        self.qc_workspace = None
+        self._active_module_name = ""
+        return True
 
     @Slot(bool)
     def _on_qc_draft_changed(self, _dirty: bool) -> None:
@@ -723,8 +716,7 @@ class QtMainWindow(QMainWindow):
         self.context_task_controller.cancel()
         self.table_workspace.close()
         self.config_workspace.close()
-        if self.qc_workspace is not None:
-            self.qc_workspace.close()
+        self._clear_qc_workspace(discard_draft=True)
         super().closeEvent(event)
 
 
