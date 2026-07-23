@@ -127,4 +127,3 @@ Tests must cover:
 - rejection of duplicate names and unsafe expressions without writes;
 - refresh of the live table after the subjects-changed event;
 - existing Qt unit suite and full repository suite.
-
