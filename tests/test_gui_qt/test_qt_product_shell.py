@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QMessageBox,
+    QPushButton,
     QStackedWidget,
     QTabWidget,
     QToolBar,
@@ -224,6 +225,52 @@ def test_pre_qc_list_has_no_qc_launch_action(qtbot, tmp_path) -> None:
     assert window.qc_workspace.workflow.current_ezqcid == "SUB001"
 
 
+def test_module_rows_are_the_sole_visible_qc_launch_and_use_exact_module_name(
+    qtbot,
+    tmp_path,
+) -> None:
+    window, _services = _window(qtbot, tmp_path, second_module=True)
+    window.navigation.setCurrentRow(window.modules_page_index)
+    qtbot.waitUntil(window.modules_page.isVisible)
+    qtbot.waitUntil(
+        lambda: all(
+            button.isVisible()
+            for button in window.config_workspace.module_start_buttons.values()
+        )
+    )
+
+    visible_launch_buttons = [
+        button
+        for button in window.findChildren(QPushButton)
+        if button.isVisible() and button.text() == "启动质控"
+    ]
+    assert set(visible_launch_buttons) == set(
+        window.config_workspace.module_start_buttons.values()
+    )
+    assert len(visible_launch_buttons) == 2
+    assert all(
+        any(
+            row_widget is not None and row_widget.isAncestorOf(button)
+            for row in range(window.config_workspace.module_list.count())
+            for row_widget in [
+                window.config_workspace.module_list.itemWidget(
+                    window.config_workspace.module_list.item(row)
+                )
+            ]
+        )
+        for button in visible_launch_buttons
+    )
+
+    qtbot.mouseClick(
+        window.config_workspace.module_start_buttons["FuncQC"],
+        Qt.LeftButton,
+    )
+
+    assert window.qc_workspace.workflow.current_module.name == "FuncQC"
+    assert window.module_combo.currentData() == "FuncQC"
+    assert window.config_workspace._selected_module_name == "FuncQC"
+
+
 def test_stale_table_callback_is_rejected_after_same_id_project_switch(qtbot, tmp_path) -> None:
     services = build_app_services(tmp_path / "projects.json")
     _add_project(services, tmp_path, "ALPHA", prefix="alpha/")
@@ -266,14 +313,21 @@ def test_failed_qc_replacement_keeps_old_workflow_then_success_closes_it(
         return real_factory(*args, **kwargs)
 
     monkeypatch.setattr(services.project_context_service, "create_qc_workflow", fail_func)
-    window.module_combo.setCurrentIndex(window.module_combo.findData("FuncQC"))
+    window.navigation.setCurrentRow(window.modules_page_index)
+    qtbot.mouseClick(
+        window.config_workspace.module_start_buttons["FuncQC"],
+        Qt.LeftButton,
+    )
 
     assert window.qc_workspace.workflow is previous
     assert close_calls == []
     assert "replacement failed" in window.shell_error_label.text()
 
     monkeypatch.setattr(services.project_context_service, "create_qc_workflow", real_factory)
-    window.module_combo.setCurrentIndex(window.module_combo.findData("FuncQC"))
+    qtbot.mouseClick(
+        window.config_workspace.module_start_buttons["FuncQC"],
+        Qt.LeftButton,
+    )
     assert window.qc_workspace.workflow is not previous
     assert close_calls == [True]
 

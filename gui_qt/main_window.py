@@ -180,6 +180,7 @@ class QtMainWindow(QMainWindow):
             parent=self.project_page,
             auto_refresh=False,
             project_loader=self.load_project,
+            module_launcher=self.start_qc_module,
         )
         project_layout.addWidget(self.config_workspace, 1)
         self.project_combo = self.config_workspace.project_combo
@@ -230,6 +231,7 @@ class QtMainWindow(QMainWindow):
         modules_layout = QVBoxLayout(self.modules_page)
         modules_layout.setContentsMargins(18, 16, 18, 16)
         modules_layout.addWidget(self.config_workspace.modules_tab)
+        self.config_workspace.modules_tab.show()
         self.module_combo = QComboBox(self.modules_page)
         self.module_combo.setObjectName("internalModuleSelector")
         self.module_combo.setAccessibleName("当前质控模块")
@@ -537,36 +539,63 @@ class QtMainWindow(QMainWindow):
             "项目选择" if not name else f"项目选择，当前项目 {name}",
         )
 
+    def start_qc_module(self, module_name: str) -> bool:
+        """Install the exact requested module through the existing QC factory."""
+
+        requested = str(module_name).strip()
+        if self._injected_preview or self.context_task_controller.busy:
+            self._set_error("当前状态无法启动质控")
+            return False
+        if not self.current_context.has_project:
+            self._set_error("请先打开项目")
+            return False
+        if self.current_context.subjects.empty:
+            self._set_error("质控前名单为空")
+            return False
+        module_names = {module.name for module in self.current_context.modules}
+        if requested not in module_names:
+            self._set_error(f"质控模块不存在: {requested}")
+            return False
+        workflow = self.active_workflow
+        if workflow is not None and workflow.dirty:
+            self._set_error("请先保存或放弃当前质控修改")
+            return False
+        identities = tuple(self.current_context.subjects["ezqcid"].astype(str))
+        initial = (
+            workflow.current_ezqcid
+            if workflow is not None and workflow.current_ezqcid in set(identities)
+            else identities[0]
+        )
+        try:
+            replacement = self.context_service.create_qc_workflow(
+                self.current_context,
+                module_name=requested,
+                initial_ezqcid=initial,
+                navigation_ids=identities,
+            )
+        except Exception as exc:
+            self._set_error(str(exc))
+            return False
+        self._install_qc_workspace(replacement, requested)
+        self._updating_controls = True
+        try:
+            self.module_combo.setCurrentIndex(
+                self.module_combo.findData(requested)
+            )
+        finally:
+            self._updating_controls = False
+        self.shell_status_label.setText(f"已启动质控：{requested}")
+        self._set_error("")
+        return True
+
     def _module_selected(self, _index: int) -> None:
         if self._updating_controls or not self.current_context.has_project:
             return
         module_name = str(self.module_combo.currentData() or "")
         if not module_name or module_name == self._active_module_name:
             return
-        workflow = self.active_workflow
-        if workflow is not None and workflow.dirty:
-            self._set_error("Save or discard the current QC draft before changing module")
+        if not self.start_qc_module(module_name):
             self._restore_active_module_selector()
-            return
-        initial = (
-            workflow.current_ezqcid
-            if workflow is not None
-            and workflow.current_ezqcid in set(self.current_context.subjects["ezqcid"].astype(str))
-            else str(self.current_context.subjects.iloc[0]["ezqcid"])
-        )
-        try:
-            replacement = self.context_service.create_qc_workflow(
-                self.current_context,
-                module_name=module_name,
-                initial_ezqcid=initial,
-                navigation_ids=tuple(self.current_context.subjects["ezqcid"].astype(str)),
-            )
-        except Exception as exc:
-            self._set_error(str(exc))
-            self._restore_active_module_selector()
-            return
-        self._install_qc_workspace(replacement, module_name)
-        self._set_error("")
 
     def _restore_active_module_selector(self) -> None:
         self._updating_controls = True

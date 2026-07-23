@@ -4,13 +4,15 @@ from threading import Event, get_ident
 
 import pandas as pd
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QFontDatabase
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QFileDialog,
     QHeaderView,
     QLabel,
+    QPlainTextEdit,
+    QPushButton,
     QScrollArea,
     QSplitter,
     QToolBar,
@@ -24,14 +26,18 @@ from core.table_service import TableService
 from gui_qt.project_config_workspace import QtProjectConfigWorkspace
 
 
-def _workspace(qtbot, tmp_path):
+def _workspace(qtbot, tmp_path, *, module_launcher=None):
     config = ConfigurationService(
         ProjectService(tmp_path / "projects.json"),
         TableService(),
     )
     config.create_project("SAMPLE", tmp_path)
     config.replace_subjects(pd.DataFrame({"ezqcid": ["SUB001", "SUB002"], "site": ["A", "B"]}))
-    workspace = QtProjectConfigWorkspace(config)
+    workspace = (
+        QtProjectConfigWorkspace(config)
+        if module_launcher is None
+        else QtProjectConfigWorkspace(config, module_launcher=module_launcher)
+    )
     qtbot.addWidget(workspace)
     qtbot.waitUntil(lambda: not workspace.io_task_controller.busy, timeout=2000)
     return workspace, config
@@ -260,6 +266,107 @@ def test_qt_module_form_adds_and_reorders_without_json_editor(qtbot, tmp_path) -
     assert not hasattr(workspace, "json_editor")
 
 
+def test_module_list_header_owns_right_side_new_import_and_each_row_launches_exact_name(
+    qtbot,
+    tmp_path,
+) -> None:
+    launched = []
+    workspace, _config = _workspace(
+        qtbot,
+        tmp_path,
+        module_launcher=lambda name: launched.append(name) or True,
+    )
+    assert workspace.add_module("AnatQC", "Anatomical QC")
+    workspace.resize(640, 560)
+    workspace.show()
+    workspace.tabs.setCurrentWidget(workspace.modules_tab)
+
+    header_layout = workspace.module_list_header.layout()
+    assert header_layout.indexOf(workspace.module_list_title) >= 0
+    assert header_layout.indexOf(workspace.module_list_toolbar) > header_layout.indexOf(
+        workspace.module_list_title
+    )
+    assert workspace.module_list_title.text() == "模块列表"
+    assert workspace.new_module_action.text() == "新建模块"
+    assert workspace.import_module_action.text() == "导入模块"
+    assert workspace.new_module_action in workspace.module_list_toolbar.actions()
+    assert workspace.import_module_action in workspace.module_list_toolbar.actions()
+    assert workspace.new_module_action not in workspace.module_actions_toolbar.actions()
+    assert workspace.import_module_action not in workspace.module_actions_toolbar.actions()
+    assert workspace.new_module_button.isVisible()
+    assert workspace.import_module_button.isVisible()
+
+    assert set(workspace.module_start_buttons) == {"example", "AnatQC"}
+    button = workspace.module_start_buttons["AnatQC"]
+    assert isinstance(button, QPushButton)
+    assert button.text() == "启动质控"
+    matching_items = [
+        workspace.module_list.item(row)
+        for row in range(workspace.module_list.count())
+        if workspace.module_list.item(row).data(Qt.UserRole) == "AnatQC"
+    ]
+    assert len(matching_items) == 1
+    row_widget = workspace.module_list.itemWidget(matching_items[0])
+    assert row_widget is not None and row_widget.isAncestorOf(button)
+
+    qtbot.mouseClick(button, Qt.LeftButton)
+
+    assert launched == ["AnatQC"]
+    assert workspace._selected_module_name == "AnatQC"
+    assert workspace.module_list.currentItem().data(Qt.UserRole) == "AnatQC"
+
+
+def test_module_footer_order_and_final_viewer_editor_support_long_commands(
+    qtbot,
+    tmp_path,
+) -> None:
+    workspace, _config = _workspace(qtbot, tmp_path)
+    workspace.resize(640, 560)
+    workspace.show()
+    workspace.tabs.setCurrentWidget(workspace.modules_tab)
+
+    footer_actions = [
+        action.text()
+        for action in workspace.module_actions_toolbar.actions()
+        if action.text()
+    ]
+    assert footer_actions == ["删除模块", "导出模块", "放弃更改", "保存模块"]
+    assert workspace.module_actions_toolbar.widgetForAction(
+        workspace.delete_module_action
+    ).x() < workspace.module_actions_toolbar.widgetForAction(
+        workspace.export_module_action
+    ).x()
+    assert workspace.module_actions_toolbar.widgetForAction(
+        workspace.discard_module_action
+    ).x() < workspace.module_actions_toolbar.widgetForAction(
+        workspace.save_module_action
+    ).x()
+
+    assert isinstance(workspace.module_code, QPlainTextEdit)
+    assert workspace.module_code.lineWrapMode() == QPlainTextEdit.LineWrapMode.NoWrap
+    assert workspace.module_code.horizontalScrollBarPolicy() == Qt.ScrollBarAsNeeded
+    assert workspace.module_code.verticalScrollBarPolicy() == Qt.ScrollBarAsNeeded
+    assert workspace.module_code.font().family() == QFontDatabase.systemFont(
+        QFontDatabase.SystemFont.FixedFont
+    ).family()
+    assert "ezqcid" in workspace.module_code.placeholderText()
+    editor_layout = workspace.module_editor_scroll.widget().layout()
+    assert editor_layout.indexOf(workspace.module_viewer_section) > editor_layout.indexOf(
+        workspace.module_row_actions_toolbar
+    )
+    assert editor_layout.indexOf(workspace.module_actions_toolbar) > editor_layout.indexOf(
+        workspace.module_viewer_section
+    )
+
+    workspace.module_code.setPlainText(
+        "viewer --input {image} --title {ezqcid} " + "--very-long-option value " * 30
+    )
+    qtbot.waitUntil(
+        lambda: workspace.module_code.horizontalScrollBar().maximum() > 0,
+        timeout=2000,
+    )
+
+
 def test_qt_configuration_uses_responsive_toolbars_splitter_and_long_tooltips(
     qtbot,
     tmp_path,
@@ -337,7 +444,10 @@ def test_qt_configuration_uses_responsive_toolbars_splitter_and_long_tooltips(
     workspace.tabs.setCurrentWidget(workspace.modules_tab)
     workspace.resize(480, 520)
     qtbot.waitUntil(lambda: workspace.width() == 480)
-    extension = module_toolbar.findChild(QToolButton, "qt_toolbar_ext_button")
+    extension = workspace.module_list_toolbar.findChild(
+        QToolButton,
+        "qt_toolbar_ext_button",
+    )
     assert extension is not None and extension.isVisible()
 
 
