@@ -11,7 +11,7 @@ from core.table_transform import (
     TableTransformError,
     legacy_select_filter_to_operations,
 )
-from core.table_view_service import TableViewService
+from core.table_view_service import TableViewError, TableViewService
 from models.table_view_state import (
     FilterCondition,
     FilterExpression,
@@ -98,15 +98,41 @@ def resolve_module_filter_identities(
 
     if not isinstance(subjects, pd.DataFrame):
         raise TypeError("module filter subjects must be a pandas DataFrame")
-    service = TableViewService(subjects)
+    if subjects.columns.has_duplicates:
+        duplicates = subjects.columns[subjects.columns.duplicated()].tolist()
+        raise TableViewError(f"表格包含重复列名: {duplicates}")
+
+    projected_columns = _module_filter_columns(subjects, expression)
+    service = TableViewService(subjects.loc[:, projected_columns])
     state = service.default_state(
         page_size=max(1, service.source_total)
     ).with_filter(expression)
     result = service.apply_state(state)
-    return tuple(
-        service.validate_qc_identity(result, position)
-        for position in range(result.matched_total)
-    )
+    return service.validate_qc_identities(result)
+
+
+def _module_filter_columns(
+    subjects: pd.DataFrame,
+    expression: FilterExpression,
+) -> tuple[str, ...]:
+    """Return available identity/filter columns without validating the rule."""
+
+    if not isinstance(expression, FilterExpression):
+        return tuple(subjects.columns)
+
+    requested = ["ezqcid"]
+    for group in expression.groups:
+        if not isinstance(group, FilterGroup):
+            return tuple(subjects.columns)
+        for condition in group.conditions:
+            if not isinstance(condition, FilterCondition):
+                return tuple(subjects.columns)
+            if (
+                isinstance(condition.column, str)
+                and condition.column not in requested
+            ):
+                requested.append(condition.column)
+    return tuple(column for column in requested if column in subjects.columns)
 
 
 __all__ = [

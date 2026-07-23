@@ -6,6 +6,7 @@ created only after the complete ordered position result and counts exist.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import replace
 from typing import Any
 
@@ -60,7 +61,10 @@ class TableViewService:
         self._distinct_value_limit = distinct_value_limit
         self._profiles = self._profile_columns()
         self._profile_by_name = {profile.name: profile for profile in self._profiles}
-        self._identity_positions = self._build_identity_positions()
+        self._ezqcid_identities = self._normalized_source_identities("ezqcid")
+        self._identity_positions = self._build_identity_positions(
+            self._ezqcid_identities
+        )
         self._identity_counts = {
             identity: 1 if isinstance(positions, int) else len(positions)
             for identity, positions in self._identity_positions.items()
@@ -268,8 +272,12 @@ class TableViewService:
         if result_position < 0 or result_position >= result.matched_total:
             raise QcIdentityError("所选记录位置已失效，请重新选择")
         source_position = int(result.source_positions[result_position])
-        identity = self._normalize_identity(
-            self._source[id_column].iloc[source_position]
+        identity = (
+            self._ezqcid_identities[source_position]
+            if id_column == "ezqcid"
+            else self._normalize_identity(
+                self._source[id_column].iloc[source_position]
+            )
         )
         if not identity:
             raise QcIdentityError(f"所选记录的 {id_column} 为空，无法打开 QC")
@@ -284,6 +292,54 @@ class TableViewService:
         if identity_count != 1:
             raise QcIdentityError(f"{id_column} '{identity}' 在源表中不唯一，无法安全打开 QC")
         return identity
+
+    def validate_qc_identities(
+        self,
+        result: TableViewResult,
+        id_column: str = "ezqcid",
+    ) -> tuple[str, ...]:
+        """Return all result identities after one batch contract check.
+
+        The result order is preserved. Blank values and identities duplicated
+        anywhere in the source raise the same visible errors as the single-row
+        validator. The source and result are never mutated.
+        """
+
+        self._validate_result(result)
+        if id_column not in self._source.columns:
+            raise QcIdentityError(f"表格缺少 QC 身份列 '{id_column}'")
+
+        source_identities = (
+            self._ezqcid_identities
+            if id_column == "ezqcid"
+            else self._normalized_source_identities(id_column)
+        )
+        identities = tuple(
+            source_identities[int(position)]
+            for position in result.source_positions
+        )
+        blank = next((identity for identity in identities if not identity), None)
+        if blank is not None:
+            raise QcIdentityError(f"所选记录的 {id_column} 为空，无法打开 QC")
+
+        counts = (
+            self._identity_counts
+            if id_column == "ezqcid"
+            else Counter(
+                identity
+                for identity in source_identities
+                if identity
+            )
+        )
+        duplicate = next(
+            (identity for identity in identities if counts.get(identity, 0) != 1),
+            None,
+        )
+        if duplicate is not None:
+            raise QcIdentityError(
+                f"{id_column} '{duplicate}' 在源表中不唯一，无法安全打开 QC"
+            )
+        return identities
 
     def _validate_result(self, result: TableViewResult) -> None:
         if not isinstance(result, TableViewResult):
@@ -532,10 +588,18 @@ class TableViewService:
             name = f"_{name}"
         return name
 
-    def _build_identity_positions(self) -> dict[str, int | tuple[int, ...]]:
-        if "ezqcid" not in self._source.columns:
-            return {}
-        identities = [self._normalize_identity(value) for value in self._source["ezqcid"]]
+    def _normalized_source_identities(self, id_column: str) -> tuple[str, ...]:
+        if id_column not in self._source.columns:
+            return ()
+        return tuple(
+            self._normalize_identity(value)
+            for value in self._source[id_column]
+        )
+
+    @staticmethod
+    def _build_identity_positions(
+        identities: tuple[str, ...],
+    ) -> dict[str, int | tuple[int, ...]]:
         collected: dict[str, list[int]] = {}
         for source_position, identity in enumerate(identities):
             if identity:

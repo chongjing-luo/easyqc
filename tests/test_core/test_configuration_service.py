@@ -408,6 +408,23 @@ def test_module_filter_resolution_matches_table_positions_in_source_order() -> N
     ) == ()
 
 
+def test_module_filter_does_not_profile_unreferenced_complete_list_columns() -> None:
+    subjects = pd.DataFrame(
+        {
+            "ezqcid": ["SUB001", "SUB002", "SUB003"],
+            "site": ["A", "B", "A"],
+            "unused_object_payload": [["not"], ["hashable"], ["values"]],
+        }
+    )
+    original = subjects.copy(deep=True)
+
+    assert resolve_module_filter_identities(
+        subjects,
+        _filter_expression("site", "==", "A"),
+    ) == ("SUB001", "SUB003")
+    pd.testing.assert_frame_equal(subjects, original)
+
+
 def test_save_module_filters_are_independent_and_clear_only_selected_legacy(
     tmp_path,
 ) -> None:

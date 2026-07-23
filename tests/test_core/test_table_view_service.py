@@ -239,6 +239,57 @@ def test_qc_identity_requires_nonblank_unique_ezqcid() -> None:
         blank_service.validate_qc_identity(blank_result, 0)
 
 
+def test_batch_qc_identity_validation_preserves_order_and_errors() -> None:
+    service = TableViewService(_source())
+    result = service.apply_state(
+        service.default_state().with_sort_rules(
+            (SortRule(column="age", ascending=True),)
+        )
+    )
+
+    assert service.validate_qc_identities(result) == (
+        "SUB003",
+        "SUB001",
+        "SUB002",
+        "SUB004",
+    )
+
+    duplicate_service = TableViewService(
+        pd.DataFrame({"ezqcid": ["SUB001", "SUB001"]})
+    )
+    duplicate_result = duplicate_service.apply_state(
+        duplicate_service.default_state()
+    )
+    with pytest.raises(QcIdentityError, match="不唯一"):
+        duplicate_service.validate_qc_identities(duplicate_result)
+
+    blank_service = TableViewService(pd.DataFrame({"ezqcid": ["SUB001", " "]}))
+    blank_result = blank_service.apply_state(blank_service.default_state())
+    with pytest.raises(QcIdentityError, match="为空"):
+        blank_service.validate_qc_identities(blank_result)
+
+    alternate_service = TableViewService(
+        pd.DataFrame(
+            {
+                "ezqcid": ["SUB001", "SUB002"],
+                "image_id": [" IMG001 ", "IMG002"],
+            }
+        )
+    )
+    alternate_result = alternate_service.apply_state(
+        alternate_service.default_state()
+    )
+    assert alternate_service.validate_qc_identities(
+        alternate_result,
+        id_column="image_id",
+    ) == ("IMG001", "IMG002")
+    with pytest.raises(QcIdentityError, match="缺少"):
+        alternate_service.validate_qc_identities(
+            alternate_result,
+            id_column="missing",
+        )
+
+
 def test_source_dataframe_is_not_mutated_by_view_operations() -> None:
     source = _source()
     original = source.copy(deep=True)
