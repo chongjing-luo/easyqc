@@ -478,6 +478,32 @@ def test_save_module_filters_are_independent_and_clear_only_selected_legacy(
     assert persisted["qcmodule"] == projects.settings["qcmodule"]
 
 
+def test_save_module_filter_can_defer_events_until_gui_thread_publication(
+    tmp_path,
+) -> None:
+    service, projects = _service(tmp_path)
+    service.replace_subjects(_subjects(), notify=False)
+    events = []
+    projects.event_bus.subscribe(EventType.SETTINGS_SAVED, events.append)
+    projects.event_bus.subscribe(EventType.MODULES_CHANGED, events.append)
+
+    matches = service.save_module_filter(
+        "example",
+        _filter_expression("site", "==", "A"),
+        notify=False,
+    )
+
+    assert matches == ("SUB001",)
+    assert events == []
+
+    service.publish_modules_changed()
+
+    assert [event.type for event in events] == [
+        EventType.SETTINGS_SAVED,
+        EventType.MODULES_CHANGED,
+    ]
+
+
 @pytest.mark.parametrize(
     "expression",
     [

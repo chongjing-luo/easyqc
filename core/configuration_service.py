@@ -442,6 +442,8 @@ class ConfigurationService:
         self,
         module_name: str,
         expression: FilterExpression,
+        *,
+        notify: bool = True,
     ) -> tuple[str, ...]:
         """Validate and atomically save only one module's structured filter."""
 
@@ -474,7 +476,7 @@ class ConfigurationService:
         selected = matches[0]
         selected["qc_filter"] = serialized
         selected["select_filter"] = None
-        self.project_service.commit_settings(candidate)
+        self.project_service.commit_settings(candidate, notify=notify)
         return identities
 
     def remove_module(self, name: str) -> None:

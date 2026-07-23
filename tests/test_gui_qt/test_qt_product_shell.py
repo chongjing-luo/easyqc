@@ -513,6 +513,29 @@ def test_direct_configuration_pages_have_no_visible_nested_tabs(qtbot, tmp_path)
         assert content.size().height() > 0
 
 
+def test_direct_module_page_keeps_module_filter_transaction_reachable(
+    qtbot,
+    tmp_path,
+) -> None:
+    window, _services = _window(qtbot, tmp_path)
+    workspace = window.config_workspace
+    window.resize(720, 560)
+    window.navigation.setCurrentRow(window.modules_page_index)
+    qtbot.waitUntil(window.modules_page.isVisible)
+    qtbot.waitUntil(
+        lambda: not workspace.module_filter_task_controller.busy,
+        timeout=3000,
+    )
+    workspace.module_editor_scroll.ensureWidgetVisible(
+        workspace.clear_module_filter_button
+    )
+
+    assert workspace.module_filter_section.isVisibleTo(window.modules_page)
+    assert workspace.module_filter_summary.text() == "全部名单"
+    assert workspace.set_module_filter_button.isVisibleTo(window.modules_page)
+    assert workspace.clear_module_filter_button.isVisibleTo(window.modules_page)
+
+
 def test_shell_uses_neutral_list_language_for_visible_context(qtbot, tmp_path) -> None:
     window, _services = _window(qtbot, tmp_path)
 
