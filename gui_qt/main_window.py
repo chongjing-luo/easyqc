@@ -1320,6 +1320,8 @@ class QtMainWindow(QMainWindow):
         ):
             message = "质控名单筛选事务正在完成，请稍候"
             self._set_error(message)
+            if self.config_workspace.module_filter_write_busy:
+                self.config_workspace.show_module_filter_error(message)
             if self.qc_workspace is not None:
                 self.qc_workspace.show_filter_error(message)
             event.ignore()

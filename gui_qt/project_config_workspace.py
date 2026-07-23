@@ -913,6 +913,11 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_filter_error_label.setText(message)
         self.module_filter_error_label.setVisible(bool(message))
 
+    def show_module_filter_error(self, message: str) -> None:
+        """Present module-filter feedback in the module page's visible region."""
+
+        self._set_module_filter_error(str(message))
+
     def _set_module_filter_summary(
         self,
         expression: FilterExpression,

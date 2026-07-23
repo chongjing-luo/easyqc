@@ -1002,6 +1002,12 @@ def test_main_close_is_blocked_while_module_filter_save_is_running(
     first_close = window.close()
     visible_after_first_close = window.isVisible()
     close_feedback = window.shell_error_label.text()
+    module_close_feedback = (
+        window.config_workspace.module_filter_error_label.text()
+    )
+    module_close_feedback_is_visible = (
+        window.config_workspace.module_filter_error_label.isVisibleTo(window)
+    )
     save_release.set()
     qtbot.waitUntil(save_finished.is_set, timeout=3000)
     qtbot.waitUntil(
@@ -1012,6 +1018,8 @@ def test_main_close_is_blocked_while_module_filter_save_is_running(
     assert first_close is False
     assert visible_after_first_close
     assert close_feedback == "质控名单筛选事务正在完成，请稍候"
+    assert module_close_feedback == "质控名单筛选事务正在完成，请稍候"
+    assert module_close_feedback_is_visible
     assert services.configuration_service.modules()[0].qc_filter == (
         filter_expression_to_json_object(expression)
     )
