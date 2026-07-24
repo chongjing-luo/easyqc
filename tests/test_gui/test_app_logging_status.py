@@ -47,8 +47,12 @@ def test_tk_startup_warning_schedules_exactly_one_toolkit_dialog(monkeypatch) ->
     ]
 
 
-def test_default_tk_app_consumes_current_logging_status_once(monkeypatch) -> None:
+def test_default_tk_app_consumes_current_logging_status_once(
+    monkeypatch,
+    tmp_path,
+) -> None:
     root = FakeRoot()
+    registry_path = tmp_path / "projects.json"
     expected_services = SimpleNamespace(
         project_service=object(),
         rating_service=object(),
@@ -64,12 +68,12 @@ def test_default_tk_app_consumes_current_logging_status_once(monkeypatch) -> Non
         assert services is expected_services
         return main_window
 
+    def build_services(actual_path):
+        assert actual_path == registry_path
+        return expected_services
+
     monkeypatch.setattr(app_module.tk, "Tk", lambda: root)
-    monkeypatch.setattr(
-        app_module,
-        "build_app_services",
-        lambda _path: expected_services,
-    )
+    monkeypatch.setattr(app_module, "build_app_services", build_services)
     monkeypatch.setattr(app_module, "LegacyEasyQCApp", build_legacy_window)
     monkeypatch.setattr(
         app_module,
@@ -82,7 +86,7 @@ def test_default_tk_app_consumes_current_logging_status_once(monkeypatch) -> Non
         lambda actual_root, message: scheduled.append((actual_root, message)),
     )
 
-    application = app_module.EasyQCApp()
+    application = app_module.EasyQCApp(registry_path)
 
     assert application.root is root
     assert application.main_window is main_window

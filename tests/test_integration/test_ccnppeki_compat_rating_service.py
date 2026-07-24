@@ -1,22 +1,14 @@
+"""Hermetic integration coverage for the copied CCNPPEKI compatibility fixture."""
+
 import json
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import pandas.testing as pdt
-import pytest
-
 from core.cli_service import resolve_qcpage_launch
 from core.rating_service import RatingService
 from models.project import Project
-
-
-def _real_project_dir() -> Path:
-    project_root = Path(__file__).resolve().parents[3]
-    project_dir = project_root / "easyqc_CCNPPEKI"
-    if not project_dir.exists():
-        pytest.skip("easyqc_CCNPPEKI fixture project is not available")
-    return project_dir
 
 
 def _normalize_legacy_qctable_value(value: Any, *, filepath_column: bool = False) -> str:
@@ -43,9 +35,11 @@ def _normalize_legacy_qctable(df: pd.DataFrame) -> pd.DataFrame:
     return normalized
 
 
-def test_rating_service_loads_real_ccnppeki_rating_files() -> None:
-    project_dir = _real_project_dir()
-    service = RatingService(Project("CCNPPEKI", project_dir))
+def test_rating_service_loads_copied_ccnppeki_compat_rating_files(
+    ccnppeki_compat_project_dir: Path,
+) -> None:
+    project_dir = ccnppeki_compat_project_dir
+    service = RatingService(Project("CCNPPEKI_COMPAT", project_dir))
     sample = (
         project_dir
         / "RatingFiles"
@@ -58,7 +52,7 @@ def test_rating_service_loads_real_ccnppeki_rating_files() -> None:
     ratings = service.load_all_ratings()
     rating = service.load_rating(sample)
 
-    assert len(files) > 1000
+    assert len(files) == 10
     assert len(ratings) == len(files)
     assert service.validate_rating_file(sample)
     assert rating.module_name == "AnatRestAll"
@@ -69,9 +63,11 @@ def test_rating_service_loads_real_ccnppeki_rating_files() -> None:
     assert "皮层重建" in rating.notes
 
 
-def test_rating_service_aggregates_real_ccnppeki_project_to_wide_table() -> None:
-    project_dir = _real_project_dir()
-    service = RatingService(Project("CCNPPEKI", project_dir))
+def test_rating_service_aggregates_copied_ccnppeki_compat_project_to_wide_table(
+    ccnppeki_compat_project_dir: Path,
+) -> None:
+    project_dir = ccnppeki_compat_project_dir
+    service = RatingService(Project("CCNPPEKI_COMPAT", project_dir))
     subjects = pd.read_csv(project_dir / "Table" / "ezqc_all.csv")
 
     result = service.aggregate_to_wide(service.load_all_ratings(), subjects)
@@ -84,20 +80,15 @@ def test_rating_service_aggregates_real_ccnppeki_project_to_wide_table() -> None
     assert "openHCP_DIR.lcj.tag1" in result.columns
 
 
-def test_rating_service_rebuilds_real_ccnppeki_qctable_snapshot() -> None:
-    """Rebuild the QC table from real ratings and compare to the on-disk snapshot.
+def test_rating_service_rebuilds_copied_ccnppeki_qctable_snapshot_without_writes(
+    ccnppeki_compat_project_dir: Path,
+) -> None:
+    """Rebuild against a temporary copy and compare without updating fixtures."""
 
-    If the aggregation result changed (e.g. after a P3-A/P0-C fix that changes
-    how identities merge), the snapshot is auto-updated rather than failing —
-    the snapshot is a derived artifact, not source-of-truth. The test still
-    verifies the service produces a valid, well-formed qctable.
-    """
-    project_dir = _real_project_dir()
+    project_dir = ccnppeki_compat_project_dir
     expected_path = project_dir / "Table" / "ezqc_qctable.csv"
-    if not expected_path.exists():
-        pytest.skip("real CCNPPEKI qctable snapshot is not available")
 
-    service = RatingService(Project("CCNPPEKI", project_dir))
+    service = RatingService(Project("CCNPPEKI_COMPAT", project_dir))
     subjects = pd.read_csv(project_dir / "Table" / "ezqc_all.csv")
 
     actual = service.load_legacy_state(subjects).qctable
@@ -108,12 +99,6 @@ def test_rating_service_rebuilds_real_ccnppeki_qctable_snapshot() -> None:
 
     expected = pd.read_csv(expected_path)
 
-    if actual.shape != expected.shape or actual.columns.tolist() != expected.columns.tolist():
-        # Aggregation result changed (fix/upgrade). Update the snapshot so it
-        # stays in sync; the test passes because the service output is valid.
-        actual.to_csv(expected_path, index=False, encoding="utf-8")
-        return
-
     pdt.assert_frame_equal(
         _normalize_legacy_qctable(actual),
         _normalize_legacy_qctable(expected),
@@ -121,16 +106,24 @@ def test_rating_service_rebuilds_real_ccnppeki_qctable_snapshot() -> None:
     )
 
 
-def test_cli_launch_context_resolves_real_ccnppeki_project(tmp_path) -> None:
-    project_dir = _real_project_dir()
+def test_cli_launch_context_resolves_copied_ccnppeki_project(
+    tmp_path: Path,
+    ccnppeki_compat_project_dir: Path,
+) -> None:
+    project_dir = ccnppeki_compat_project_dir
     registry_path = tmp_path / "projects.json"
     registry_path.write_text(
-        json.dumps({"projects": {"CCNPPEKI": str(project_dir)}, "last_project": "CCNPPEKI"}),
+        json.dumps(
+            {
+                "projects": {"CCNPPEKI_COMPAT": str(project_dir)},
+                "last_project": "CCNPPEKI_COMPAT",
+            }
+        ),
         encoding="utf-8",
     )
 
     context = resolve_qcpage_launch(
-        "CCNPPEKI",
+        "CCNPPEKI_COMPAT",
         "AnatRestAll",
         "rf",
         "CCNPPEK0001_01_rest01",
