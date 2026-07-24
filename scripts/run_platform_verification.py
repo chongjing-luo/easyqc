@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import os
 from pathlib import Path, PurePosixPath
 import subprocess
 import sys
@@ -48,6 +49,7 @@ _RESERVED_PATHS = {
     "verification-run.json",
 }
 _DIAGNOSTIC_TAIL_BYTES = 64 * 1024
+_GITHUB_ANNOTATION_SOURCE_CHARS = 2000
 
 
 def _read_authority(path: Path, parser: object, label: str) -> object:
@@ -99,6 +101,28 @@ def _diagnostic_report_path(report_path: str, stream_name: str) -> str:
     return (report.parent / f"{report.stem}.{stream_name}.log").as_posix()
 
 
+def _github_command_escape(value: str) -> str:
+    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _emit_github_failure_annotation(
+    check_name: str,
+    stream_name: str,
+    data: bytes,
+) -> None:
+    if os.environ.get("GITHUB_ACTIONS", "").lower() != "true":
+        return
+    text = data.decode("utf-8", errors="replace")
+    if len(text) > _GITHUB_ANNOTATION_SOURCE_CHARS:
+        text = "[truncated]\n" + text[-_GITHUB_ANNOTATION_SOURCE_CHARS:]
+    title = f"EasyQC {check_name} {stream_name} failed"
+    print(
+        f"::error title={_github_command_escape(title)}::"
+        f"{_github_command_escape(text)}",
+        file=sys.stderr,
+    )
+
+
 def _retain_and_surface_failure_stream(
     *,
     check_name: str,
@@ -122,6 +146,7 @@ def _retain_and_surface_failure_stream(
     print(data.decode("utf-8", errors="replace"), file=sys.stderr, end="")
     if not data.endswith(b"\n"):
         print(file=sys.stderr)
+    _emit_github_failure_annotation(check_name, stream_name, data)
     return RawEvidenceArtifactV1(path=relative_path, classification="log")
 
 

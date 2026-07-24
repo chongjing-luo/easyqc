@@ -135,10 +135,15 @@ def _run_script(
     tmp_path: Path,
     name: str,
     *arguments: str,
+    github_actions: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment["EASYQC_LOG_DIR"] = str(tmp_path / "logs")
     environment["HOME"] = str(tmp_path / "fake-home")
+    if github_actions:
+        environment["GITHUB_ACTIONS"] = "true"
+    else:
+        environment.pop("GITHUB_ACTIONS", None)
     return subprocess.run(
         [sys.executable, str(easyqc_root / "scripts" / name), *arguments],
         cwd=tmp_path,
@@ -263,6 +268,7 @@ def test_automated_runner_retains_failed_attempt_and_rejects_overwrite(
     )
 
     assert completed.returncode == 1, completed.stderr
+    assert "::error" not in completed.stderr
     run_path = attempt_root / "verification-run.json"
     run = VerificationRunV1.from_canonical_bytes(run_path.read_bytes())
     assert run.status == "FAIL"
@@ -317,8 +323,8 @@ def test_automated_runner_retains_and_surfaces_bounded_failure_output(
                         "-c",
                         (
                             "import sys;"
-                            "sys.stdout.write('o'*70000+'VISIBLE-STDOUT-MARKER\\n');"
-                            "sys.stderr.write('e'*70000+'VISIBLE-STDERR-MARKER\\n');"
+                            "sys.stdout.write('o'*70000+'VISIBLE%STDOUT-MARKER\\n');"
+                            "sys.stderr.write('e'*70000+'VISIBLE%STDERR-MARKER\\n');"
                             "raise SystemExit(9)"
                         ),
                     ],
@@ -342,11 +348,27 @@ def test_automated_runner_retains_and_surfaces_bounded_failure_output(
         str(plan_path),
         "--attempt-root",
         str(attempt_root),
+        github_actions=True,
     )
 
     assert completed.returncode == 1
-    assert "VISIBLE-STDOUT-MARKER" in completed.stderr
-    assert "VISIBLE-STDERR-MARKER" in completed.stderr
+    assert "VISIBLE%STDOUT-MARKER" in completed.stderr
+    assert "VISIBLE%STDERR-MARKER" in completed.stderr
+    annotations = [
+        line for line in completed.stderr.splitlines() if line.startswith("::error ")
+    ]
+    assert len(annotations) == 2
+    assert any(
+        "title=EasyQC diagnostic-suite stdout failed::" in line
+        and "VISIBLE%25STDOUT-MARKER%0A" in line
+        for line in annotations
+    )
+    assert any(
+        "title=EasyQC diagnostic-suite stderr failed::" in line
+        and "VISIBLE%25STDERR-MARKER%0A" in line
+        for line in annotations
+    )
+    assert all(len(line) <= 6200 for line in annotations)
     stdout_path = attempt_root / "reports" / "diagnostic-suite.stdout.log"
     stderr_path = attempt_root / "reports" / "diagnostic-suite.stderr.log"
     assert stdout_path.stat().st_size == 64 * 1024
@@ -354,10 +376,10 @@ def test_automated_runner_retains_and_surfaces_bounded_failure_output(
     assert stdout_path.read_text(encoding="utf-8").startswith("[truncated")
     assert stderr_path.read_text(encoding="utf-8").startswith("[truncated")
     assert stdout_path.read_text(encoding="utf-8").endswith(
-        "VISIBLE-STDOUT-MARKER\n"
+        "VISIBLE%STDOUT-MARKER\n"
     )
     assert stderr_path.read_text(encoding="utf-8").endswith(
-        "VISIBLE-STDERR-MARKER\n"
+        "VISIBLE%STDERR-MARKER\n"
     )
     raw = RawVerificationResultV1.from_canonical_bytes(
         (attempt_root / "raw-verification-result.json").read_bytes()
