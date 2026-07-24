@@ -7,8 +7,9 @@ import pytest
 
 from core.app_services import build_app_services
 from core.project_context_service import ProjectContextError
-from core.qc_workflow_service import QcWorkflowService
+from core.qc_workflow_service import QcReadOnlyError, QcWorkflowService
 from core.event_bus import EventType
+from models.qc_row_context import QcRowContext
 from models.table_view_state import (
     FilterCondition,
     FilterExpression,
@@ -387,3 +388,147 @@ def test_failed_filter_save_preserves_detached_context(
         snapshot,
         "AnatQC",
     ) == ("SUB001", "SUB002", "SUB003")
+
+
+def test_qc_row_context_respects_each_module_queue_and_exact_snapshot_records(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    project = _add_project(
+        services,
+        tmp_path,
+        "SAMPLE",
+        second_module=True,
+    )
+    services.configuration_service.save_module_filter(
+        "AnatQC",
+        _filter_expression("site", "==", "A"),
+    )
+    seed = QcWorkflowService(
+        _module_payload(),
+        _subjects(),
+        rating_dir=project.rating_dir / "AnatQC" / "rater1",
+        code_executor=services.code_executor,
+    )
+    seed.set_score("1", "Good")
+    seed.save()
+    snapshot = services.project_context_service.snapshot()
+
+    def unexpected_scan(_self):
+        raise AssertionError("right-click facts must not scan rating files")
+
+    monkeypatch.setattr(
+        type(services.rating_service),
+        "scan_rating_files",
+        unexpected_scan,
+    )
+    first = services.project_context_service.qc_row_context(
+        snapshot,
+        "SUB001",
+    )
+    second = services.project_context_service.qc_row_context(
+        snapshot,
+        "SUB002",
+    )
+
+    assert isinstance(first, QcRowContext)
+    assert [(entry.module_name, entry.enabled) for entry in first.modules] == [
+        ("AnatQC", True),
+        ("FuncQC", True),
+    ]
+    assert [(entry.module_name, entry.rater) for entry in first.records] == [
+        ("AnatQC", "rater1")
+    ]
+    assert [(entry.module_name, entry.enabled) for entry in second.modules] == [
+        ("AnatQC", False),
+        ("FuncQC", True),
+    ]
+    assert "独立质控名单" in second.modules[0].disabled_reason
+    assert second.records == ()
+
+
+def test_historical_record_workflow_uses_saved_schema_and_is_forced_read_only(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    project = _add_project(services, tmp_path, "SAMPLE")
+    seed = QcWorkflowService(
+        _module_payload(),
+        _subjects(),
+        rating_dir=project.rating_dir / "AnatQC" / "rater1",
+        code_executor=services.code_executor,
+    )
+    seed.set_score("1", "Good")
+    seed.set_notes("saved note")
+    seed.save()
+
+    changed = _module_payload()
+    changed["scores"]["1"]["label"] = "Changed quality"
+    changed["scores"]["1"]["num"] = "No,Yes"
+    changed["scores"]["1"]["num_"] = "No,Yes"
+    services.configuration_service.save_module(
+        changed,
+        original_name="AnatQC",
+    )
+    snapshot = services.project_context_service.snapshot()
+    context = services.project_context_service.qc_row_context(
+        snapshot,
+        "SUB001",
+    )
+    record = context.records[0]
+
+    def unexpected_find(*_args, **_kwargs):
+        raise AssertionError("historical workflow must use snapshot payload")
+
+    monkeypatch.setattr(
+        services.rating_service,
+        "find_rating_files_in_rater_dir",
+        unexpected_find,
+    )
+    workflow = services.project_context_service.create_qc_record_workflow(
+        snapshot,
+        ezqcid=record.ezqcid,
+        module_name=record.module_name,
+        rater=record.rater,
+    )
+
+    assert workflow.subject_ids == ("SUB001",)
+    assert workflow.current_ezqcid == "SUB001"
+    assert workflow.watch_mode
+    assert "Historical" in workflow.read_only_reason
+    assert workflow.current_module.scores["1"].label == "Quality"
+    assert workflow.current_module.scores["1"].allowed_values == [
+        "Poor",
+        "Fair",
+        "Good",
+    ]
+    assert workflow.current_module.scores["1"].value == "Good"
+    assert workflow.current_module.notes == "saved note"
+    with pytest.raises(QcReadOnlyError):
+        workflow.set_score("1", "Fair")
+
+
+def test_qc_row_context_and_record_factory_reject_stale_or_unknown_facts(
+    tmp_path,
+) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    _add_project(services, tmp_path, "ALPHA")
+    stale = services.project_context_service.snapshot()
+    _add_project(services, tmp_path, "BETA")
+    services.project_context_service.snapshot()
+
+    with pytest.raises(ProjectContextError, match="stale"):
+        services.project_context_service.qc_row_context(stale, "SUB001")
+
+    current = services.project_context_service.snapshot()
+    with pytest.raises(ProjectContextError, match="not in"):
+        services.project_context_service.qc_row_context(current, "UNKNOWN")
+    with pytest.raises(ProjectContextError, match="not found"):
+        services.project_context_service.create_qc_record_workflow(
+            current,
+            ezqcid="SUB001",
+            module_name="AnatQC",
+            rater="missing",
+        )

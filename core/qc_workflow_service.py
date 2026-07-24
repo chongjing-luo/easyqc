@@ -53,9 +53,15 @@ class QcWorkflowService:
         event_bus: EventBus | None = None,
         event_context: Mapping[str, Any] | None = None,
         queue_summaries: Mapping[str, tuple[str, str]] | None = None,
+        historical_rating_payload: Mapping[str, Any] | None = None,
     ) -> None:
         if not isinstance(subjects, pd.DataFrame):
             raise TypeError("QC subjects must be a pandas DataFrame")
+        if historical_rating_payload is not None and not isinstance(
+            historical_rating_payload,
+            Mapping,
+        ):
+            raise TypeError("Historical rating payload must be a mapping")
         self._module_template = (
             module.to_legacy_dict() if isinstance(module, QCModule) else deepcopy(module)
         )
@@ -71,6 +77,11 @@ class QcWorkflowService:
         self._event_bus = event_bus
         self._event_context = dict(event_context or {})
         self._queue_summaries = self._validated_queue_summaries(queue_summaries)
+        self._historical_rating_payload = (
+            deepcopy(dict(historical_rating_payload))
+            if historical_rating_payload is not None
+            else None
+        )
         self._session_read_only_reasons: list[str] = []
         self._case_read_only_reasons: list[str] = []
         self._dirty = False
@@ -82,6 +93,25 @@ class QcWorkflowService:
             self._force_session_read_only("Module is configured for watch mode")
         if not rater:
             self._force_session_read_only("Rater is not configured")
+        if self._historical_rating_payload is not None:
+            historical = Rating.from_legacy_dict(
+                deepcopy(self._historical_rating_payload)
+            )
+            if (
+                historical.module_name != configured_module.name
+                or historical.rater != rater
+            ):
+                raise QcIdentityError(
+                    "Historical rating does not match the workflow module/rater"
+                )
+            if (
+                len(self._subject_ids) != 1
+                or historical.ezqcid != self._subject_ids[0]
+            ):
+                raise QcIdentityError(
+                    "Historical rating workflow requires its one exact ezqcid"
+                )
+            self._force_session_read_only("Historical rating record")
         if not self._subject_ids:
             raise QcIdentityError("QC requires at least one subject")
         if initial_ezqcid is None:
@@ -227,8 +257,13 @@ class QcWorkflowService:
         module = self._fresh_working_module()
         case_reasons: list[str] = []
         rater = self._normalize_identity(module.rater)
-        if not rater or self._rating_dir is None:
+        historical_payload = self._historical_rating_payload
+        if historical_payload is not None:
             files = []
+            rating_payload = deepcopy(historical_payload)
+        elif not rater or self._rating_dir is None:
+            files = []
+            rating_payload = None
         else:
             files = self._rating_store.find_rating_files_in_rater_dir(
                 self._rating_dir,
@@ -236,20 +271,22 @@ class QcWorkflowService:
                 self.current_ezqcid,
                 rater,
             )
+            rating_payload = None
 
         if files:
             if len(files) > 1:
                 case_reasons.append(
                     f"Multiple rating files exist for {self.current_ezqcid}"
                 )
-            rating = self._rating_store.load_legacy_rating_file(files[0])
-            issues = self._compatibility_issues(rating, module)
+            rating_payload = self._rating_store.load_legacy_rating_file(files[0])
+            issues = self._compatibility_issues(rating_payload, module)
             if issues:
                 case_reasons.append(
                     "Rating schema differs from the current module: "
                     + ", ".join(issues)
                 )
-            Rating.from_legacy_dict(rating).apply_to_module(module)
+        if rating_payload is not None:
+            Rating.from_legacy_dict(rating_payload).apply_to_module(module)
 
         self._working_module = module
         self._case_read_only_reasons = case_reasons

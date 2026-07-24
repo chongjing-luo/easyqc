@@ -25,6 +25,12 @@ from core.project_service import PreparedProjectLoad
 from core.table_service import TABLE_ALL
 from core.table_view_service import TableViewService
 from models.qcmodule import QCModule
+from models.qc_row_context import (
+    QcModuleMenuEntry,
+    QcRecordMenuEntry,
+    QcRowContext,
+)
+from models.rating import Rating
 
 
 class ProjectContextError(RuntimeError):
@@ -42,6 +48,7 @@ class ProjectContextSnapshot:
     subjects: pd.DataFrame
     constants: dict[str, Any]
     modules: tuple[QCModule, ...]
+    ratings: tuple[Rating, ...]
     table_view_service: TableViewService
 
     @property
@@ -58,6 +65,7 @@ class PreparedProjectContext:
     subjects: pd.DataFrame
     constants: dict[str, Any]
     modules: tuple[QCModule, ...]
+    ratings: tuple[Rating, ...]
     table_view_service: TableViewService
 
 
@@ -120,6 +128,7 @@ class ProjectContextService:
             subjects=subjects,
             constants={},
             modules=(),
+            ratings=(),
             table_view_service=TableViewService(subjects),
         )
 
@@ -158,6 +167,7 @@ class ProjectContextService:
                 subjects=prepared.subjects.copy(deep=True),
                 constants={},
                 modules=(),
+                ratings=(),
                 table_view_service=prepared.table_view_service,
             )
 
@@ -178,6 +188,7 @@ class ProjectContextService:
             subjects=prepared.subjects.copy(deep=True),
             constants=deepcopy(prepared.constants),
             modules=tuple(deepcopy(prepared.modules)),
+            ratings=tuple(deepcopy(prepared.ratings)),
             table_view_service=prepared.table_view_service,
         )
 
@@ -206,6 +217,7 @@ class ProjectContextService:
             subjects=subjects,
             constants=deepcopy(constants),
             modules=typed_modules,
+            ratings=tuple(deepcopy(loaded_ratings.ratings)),
             table_view_service=TableViewService(table_source),
         )
 
@@ -280,6 +292,150 @@ class ProjectContextService:
             or current_identity != self._identity
         ):
             raise ProjectContextError("Project context is stale; reload the current project view")
+
+    def qc_row_context(
+        self,
+        snapshot: ProjectContextSnapshot,
+        ezqcid: str,
+    ) -> QcRowContext:
+        """Resolve snapshot-backed module and rating facts for one exact row."""
+
+        self._validate_current_snapshot(snapshot)
+        identity = self._normalize_identity(ezqcid)
+        subject_ids = tuple(
+            self._normalize_identity(value) for value in snapshot.subjects["ezqcid"]
+        )
+        if not identity or identity not in subject_ids:
+            raise ProjectContextError(
+                f"QC row ezqcid is not in the current project: {identity}"
+            )
+
+        module_entries = []
+        module_order = {
+            module.name: index for index, module in enumerate(snapshot.modules)
+        }
+        module_labels = {
+            module.name: str(module.label or module.name).strip()
+            for module in snapshot.modules
+        }
+        for module in snapshot.modules:
+            queue = self.resolve_module_queue(snapshot, module.name)
+            enabled = identity in queue
+            module_entries.append(
+                QcModuleMenuEntry(
+                    module_name=module.name,
+                    label=str(module.label or module.name),
+                    enabled=enabled,
+                    disabled_reason=(
+                        ""
+                        if enabled
+                        else "该条目不在此模块的独立质控名单中"
+                    ),
+                    read_only=bool(module.watch_mode or not self._normalize_identity(module.rater)),
+                )
+            )
+
+        record_entries = []
+        for rating in snapshot.ratings:
+            if self._normalize_identity(rating.ezqcid) != identity:
+                continue
+            payload = rating.to_legacy_dict()
+            module_name = self._normalize_identity(rating.module_name)
+            rater = self._normalize_identity(rating.rater)
+            record_entries.append(
+                QcRecordMenuEntry(
+                    ezqcid=identity,
+                    module_name=module_name,
+                    module_label=str(
+                        payload.get("label")
+                        or module_labels.get(module_name)
+                        or module_name
+                    ),
+                    rater=rater,
+                    recorded_at=rating.time,
+                )
+            )
+        record_entries.sort(
+            key=lambda entry: (
+                module_order.get(entry.module_name, len(module_order)),
+                entry.module_name.casefold(),
+                entry.rater.casefold(),
+            )
+        )
+        try:
+            return QcRowContext(
+                ezqcid=identity,
+                modules=tuple(module_entries),
+                records=tuple(record_entries),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ProjectContextError(f"Invalid QC row context: {exc}") from exc
+
+    def create_qc_record_workflow(
+        self,
+        snapshot: ProjectContextSnapshot,
+        *,
+        ezqcid: str,
+        module_name: str,
+        rater: str,
+    ) -> QcWorkflowService:
+        """Create a forced-read-only workflow from one accepted rating payload."""
+
+        self._validate_current_snapshot(snapshot)
+        identity = self._normalize_identity(ezqcid)
+        module_key = self._normalize_identity(module_name)
+        rater_key = self._normalize_identity(rater)
+        matches = [
+            rating
+            for rating in snapshot.ratings
+            if (
+                self._normalize_identity(rating.ezqcid),
+                self._normalize_identity(rating.module_name),
+                self._normalize_identity(rating.rater),
+            )
+            == (identity, module_key, rater_key)
+        ]
+        if not matches:
+            raise ProjectContextError(
+                "Historical QC record was not found in the current snapshot"
+            )
+        if len(matches) > 1:
+            raise ProjectContextError(
+                "Historical QC record is ambiguous in the current snapshot"
+            )
+
+        matching_rows = snapshot.subjects.loc[
+            snapshot.subjects["ezqcid"].map(self._normalize_identity).eq(identity)
+        ]
+        if len(matching_rows) != 1:
+            raise ProjectContextError(
+                f"Historical QC ezqcid is not in the current project: {identity}"
+            )
+        payload = deepcopy(matches[0].to_legacy_dict())
+        if (
+            self._normalize_identity(payload.get("ezqcid")) != identity
+            or self._normalize_identity(payload.get("name")) != module_key
+            or self._normalize_identity(payload.get("rater")) != rater_key
+        ):
+            raise ProjectContextError(
+                "Historical QC payload does not match its snapshot identity"
+            )
+        return QcWorkflowService(
+            payload,
+            matching_rows.reset_index(drop=True),
+            rating_dir=None,
+            constants=snapshot.constants,
+            rating_service=self.rating_service,
+            code_executor=self.code_executor,
+            initial_ezqcid=identity,
+            event_bus=self.event_bus,
+            event_context={
+                "context_revision": snapshot.context_revision,
+                "project_name": snapshot.project_name,
+                "project_path": str(snapshot.project_path),
+            },
+            historical_rating_payload=payload,
+        )
 
     def create_qc_workflow(
         self,

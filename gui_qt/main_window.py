@@ -156,6 +156,7 @@ class QtMainWindow(QMainWindow):
             subjects=pd.DataFrame(columns=["ezqcid"]),
             constants={},
             modules=(),
+            ratings=(),
             table_view_service=TableViewService(initial_source),
         )
         self.qc_workspace: QtQcWorkspace | None = None
