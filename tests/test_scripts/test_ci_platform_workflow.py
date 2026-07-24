@@ -513,9 +513,30 @@ def test_uv_identity_parser_accepts_official_target_qualified_output() -> None:
     assert module._parse_uv_version(
         "uv 0.11.29 (x86_64-unknown-linux-gnu)"
     ) == "0.11.29"
+    assert module._parse_uv_version(
+        "uv 0.11.29 (53b0f5d92 2023-10-19 aarch64-apple-darwin)"
+    ) == "0.11.29"
     assert module._parse_uv_version("uv 0.11.29") == "0.11.29"
     with pytest.raises(module.CiPreparationError, match="uv version output"):
         module._parse_uv_version("uv latest untrusted trailing text")
+    with pytest.raises(module.CiPreparationError, match="uv version output"):
+        module._parse_uv_version(
+            "uv 0.11.29 (not-hex 2023-10-19 aarch64-apple-darwin)"
+        )
+    with pytest.raises(module.CiPreparationError, match="uv version output"):
+        module._parse_uv_version(
+            "uv 0.11.29 (53b0f5d92 2023-1-19 aarch64-apple-darwin)"
+        )
+    with pytest.raises(module.CiPreparationError, match="uv version output"):
+        module._parse_uv_version("uv 0.11.29 (not-a-target)")
+    with pytest.raises(module.CiPreparationError, match="uv version output"):
+        module._parse_uv_version(
+            "uv 0.11.29 (53b0f5d92 2023-10-19 aarch64-apple-darwin) extra"
+        )
+    with pytest.raises(module.CiPreparationError, match="uv version output"):
+        module._parse_uv_version(
+            "uv 0.11.29 (aarch64-apple-darwin)\nuv 0.11.29"
+        )
 
 
 def test_source_identity_probe_does_not_hide_untracked_files(

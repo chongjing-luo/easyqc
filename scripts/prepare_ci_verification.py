@@ -48,7 +48,11 @@ _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _UV_VERSION_OUTPUT_PATTERN = re.compile(
     r"^uv (?P<version>[0-9][A-Za-z0-9.+-]*)"
-    r"(?: \([A-Za-z0-9_.+-]+\))?$"
+    r"(?: \((?:"
+    r"[0-9a-f]{7,40} "
+    r"\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]) "
+    r")?(?:x86_64-unknown-linux-gnu|x86_64-pc-windows-msvc|"
+    r"aarch64-apple-darwin)\))?$"
 )
 _LOCK_PIN_PATTERN = re.compile(
     r"(?m)^(?P<name>[A-Za-z0-9][A-Za-z0-9_.-]*)=="
