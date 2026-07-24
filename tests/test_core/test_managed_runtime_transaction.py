@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
+import shlex
+import sys
 import venv
 
 import pytest
@@ -20,11 +21,30 @@ from core.managed_runtime import (
     rollback,
     verify_artifact_set,
 )
-from models.managed_runtime import ActivationPointerV1, ReleaseManifestV1
+from models.managed_runtime import (
+    ActivationPointerV1,
+    ReleaseManifestV1,
+    RuntimeTargetV1,
+)
 
 
 MIB = 1024 * 1024
-TARGET_ID = "ubuntu-22.04-x86_64"
+
+
+def _native_target() -> RuntimeTargetV1:
+    if sys.platform == "win32":
+        return RuntimeTargetV1("windows", "11", "x86_64")
+    if sys.platform == "darwin":
+        return RuntimeTargetV1("macos", "13", "arm64")
+    if sys.platform.startswith("linux"):
+        return RuntimeTargetV1("linux", "22.04", "x86_64")
+    raise RuntimeError(
+        "managed-runtime transaction fixture requires a supported host"
+    )
+
+
+TARGET = _native_target()
+TARGET_ID = TARGET.target_id
 
 
 def _sha256(data: bytes) -> str:
@@ -33,8 +53,9 @@ def _sha256(data: bytes) -> str:
 
 def _write_artifacts(root: Path, version: str) -> ReleaseManifestV1:
     root.mkdir(parents=True)
+    uv_filename = "uv.exe" if TARGET.os == "windows" else "uv"
     payloads = {
-        "uv": f"uv-{version}".encode(),
+        uv_filename: f"uv-{version}".encode(),
         "python.tar.zst": f"python-{version}".encode(),
         "easyqc-source.tar.gz": f"source-{version}".encode(),
         "requirements.lock": f"lock-{version}".encode(),
@@ -56,13 +77,9 @@ def _write_artifacts(root: Path, version: str) -> ReleaseManifestV1:
     return ReleaseManifestV1.from_json_object(
         {
             "schema_version": 1,
-            "release_id": f"easyqc-{version}-linux",
+            "release_id": f"easyqc-{version}-{TARGET.os}",
             "channel": "candidate",
-            "target": {
-                "os": "linux",
-                "os_minimum": "22.04",
-                "arch": "x86_64",
-            },
+            "target": TARGET.to_json_object(),
             "easyqc": {
                 "version": version,
                 "source_filename": "easyqc-source.tar.gz",
@@ -71,14 +88,18 @@ def _write_artifacts(root: Path, version: str) -> ReleaseManifestV1:
             },
             "uv": {
                 "version": "0.11.29",
-                "filename": "uv",
-                "size_bytes": len(payloads["uv"]),
-                "sha256": _sha256(payloads["uv"]),
+                "filename": uv_filename,
+                "size_bytes": len(payloads[uv_filename]),
+                "sha256": _sha256(payloads[uv_filename]),
             },
             "python": {
                 "version": "3.13.13",
                 "build": "20260720",
-                "key": "cpython-3.13.13-linux-x86_64-gnu",
+                "key": {
+                    "linux": "cpython-3.13.13-linux-x86_64-gnu",
+                    "windows": "cpython-3.13.13-windows-x86_64-none",
+                    "macos": "cpython-3.13.13-darwin-aarch64-none",
+                }[TARGET.os],
                 "filename": "python.tar.zst",
                 "size_bytes": len(payloads["python.tar.zst"]),
                 "sha256": _sha256(payloads["python.tar.zst"]),
@@ -122,8 +143,22 @@ class FakeUvAdapter:
     def materialize(self, request: MaterializationRequest) -> MaterializationResult:
         self.calls.append(request)
         environment = request.version_root / "env"
-        venv.EnvBuilder(with_pip=False, symlinks=False).create(environment)
-        python = environment / "bin" / "python"
+        if request.manifest.target.os == "macos":
+            python = environment / "bin" / "python"
+            python.parent.mkdir(parents=True)
+            native_python = shlex.quote(str(Path(sys.executable).resolve()))
+            python.write_text(
+                f'#!/bin/sh\nexec {native_python} "$@"\n',
+                encoding="utf-8",
+            )
+            python.chmod(0o755)
+        else:
+            venv.EnvBuilder(with_pip=False, symlinks=False).create(environment)
+            python = (
+                environment / "Scripts" / "python.exe"
+                if request.manifest.target.os == "windows"
+                else environment / "bin" / "python"
+            )
         app = request.version_root / "app"
         app.mkdir()
         entrypoint = app / request.manifest.easyqc.entrypoint
@@ -201,12 +236,13 @@ def test_artifact_verification_rejects_symlink_and_wrong_target(tmp_path: Path) 
 
     with pytest.raises(ManagedRuntimeError, match="target"):
         verify_artifact_set(
-            replace(
-                manifest,
-                target=replace(manifest.target, os_minimum="24.04"),
-            ),
+            manifest,
             artifact_root,
-            expected_target_id=TARGET_ID,
+            expected_target_id=(
+                "ubuntu-24.04-x86_64"
+                if TARGET.os == "linux"
+                else "ubuntu-22.04-x86_64"
+            ),
         )
 
 

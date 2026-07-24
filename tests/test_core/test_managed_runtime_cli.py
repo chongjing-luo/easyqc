@@ -31,7 +31,19 @@ from models.managed_runtime import ReleaseManifestV1, RuntimeTargetV1
 
 
 MIB = 1024 * 1024
-TARGET = RuntimeTargetV1("linux", "22.04", "x86_64")
+
+
+def _native_target() -> RuntimeTargetV1:
+    if sys.platform == "win32":
+        return RuntimeTargetV1("windows", "11", "x86_64")
+    if sys.platform == "darwin":
+        return RuntimeTargetV1("macos", "13", "arm64")
+    if sys.platform.startswith("linux"):
+        return RuntimeTargetV1("linux", "22.04", "x86_64")
+    raise RuntimeError("managed-runtime CLI fixture requires a supported host")
+
+
+TARGET = _native_target()
 
 
 def _sha256(data: bytes) -> str:
@@ -45,8 +57,9 @@ def _payload(
     channel: str = "stable",
 ) -> ReleaseManifestV1:
     root.mkdir(parents=True)
+    uv_filename = "uv.exe" if TARGET.os == "windows" else "uv"
     files = {
-        "uv": b"uv",
+        uv_filename: b"uv",
         "python.tar.gz": b"python",
         "easyqc-source.tar.gz": f"source-{version}".encode(),
         "requirements.lock": b"lock",
@@ -67,7 +80,7 @@ def _payload(
     manifest = ReleaseManifestV1.from_json_object(
         {
             "schema_version": 1,
-            "release_id": f"easyqc-{version}-stable-linux",
+            "release_id": f"easyqc-{version}-stable-{TARGET.os}",
             "channel": channel,
             "target": TARGET.to_json_object(),
             "easyqc": {
@@ -78,14 +91,18 @@ def _payload(
             },
             "uv": {
                 "version": "0.11.29",
-                "filename": "uv",
-                "size_bytes": len(files["uv"]),
-                "sha256": _sha256(files["uv"]),
+                "filename": uv_filename,
+                "size_bytes": len(files[uv_filename]),
+                "sha256": _sha256(files[uv_filename]),
             },
             "python": {
                 "version": "3.13.13",
                 "build": "20260720",
-                "key": "cpython-3.13.13-linux-x86_64-gnu",
+                "key": {
+                    "linux": "cpython-3.13.13-linux-x86_64-gnu",
+                    "windows": "cpython-3.13.13-windows-x86_64-none",
+                    "macos": "cpython-3.13.13-darwin-aarch64-none",
+                }[TARGET.os],
                 "filename": "python.tar.gz",
                 "size_bytes": len(files["python.tar.gz"]),
                 "sha256": _sha256(files["python.tar.gz"]),
@@ -113,12 +130,19 @@ def _payload(
 
 class FakeStableAdapter:
     def materialize(self, request: MaterializationRequest) -> MaterializationResult:
-        runtime_python = request.version_root / "runtime/python"
-        runtime_python.parent.mkdir()
-        shutil.copy2(Path(sys.executable).resolve(), runtime_python)
-        environment_python = request.version_root / "env/bin/python"
-        environment_python.parent.mkdir(parents=True)
-        environment_python.symlink_to(runtime_python)
+        if request.manifest.target.os == "windows":
+            environment_python = (
+                request.version_root / "env" / "Scripts" / "python.exe"
+            )
+            environment_python.parent.mkdir(parents=True)
+            shutil.copy2(Path(sys.executable).resolve(), environment_python)
+        else:
+            runtime_python = request.version_root / "runtime/python"
+            runtime_python.parent.mkdir()
+            shutil.copy2(Path(sys.executable).resolve(), runtime_python)
+            environment_python = request.version_root / "env/bin/python"
+            environment_python.parent.mkdir(parents=True)
+            environment_python.symlink_to(runtime_python)
         app_root = request.version_root / "app"
         app_root.mkdir()
         entrypoint = app_root / "easyqc.py"
@@ -166,7 +190,44 @@ class QueueSmoke:
         )
 
 
+class MemoryWindowsPathAdapter:
+    def __init__(self) -> None:
+        self.value = ""
+
+    def read_path(self, scope: str) -> str:
+        assert scope in {"user", "system"}
+        return self.value
+
+    def write_path(self, scope: str, value: str) -> None:
+        assert scope in {"user", "system"}
+        self.value = value
+
+
 def _passing_snapshot() -> HostPreflightSnapshot:
+    if TARGET.os == "windows":
+        return HostPreflightSnapshot(
+            os_name="windows",
+            os_version="11",
+            distribution_id=None,
+            arch="x86_64",
+            available_free_bytes=2 * 1024 * MIB,
+            root_writable=True,
+            privileged=False,
+            root_is_safe=True,
+            available_native_libraries=(),
+        )
+    if TARGET.os == "macos":
+        return HostPreflightSnapshot(
+            os_name="macos",
+            os_version="13",
+            distribution_id=None,
+            arch="arm64",
+            available_free_bytes=2 * 1024 * MIB,
+            root_writable=True,
+            privileged=False,
+            root_is_safe=True,
+            available_native_libraries=(),
+        )
     return HostPreflightSnapshot(
         os_name="linux",
         os_version="22.04",
@@ -188,6 +249,10 @@ def _context(
     snapshot: HostPreflightSnapshot | None = None,
     scope: str = "user",
 ) -> InstallerContext:
+    windows_path_adapter = (
+        MemoryWindowsPathAdapter() if TARGET.os == "windows" else None
+    )
+
     def paths(target: RuntimeTargetV1, requested_scope: str) -> ManagedRuntimePaths:
         assert target == TARGET
         assert requested_scope == scope
@@ -213,6 +278,7 @@ def _context(
         smoke_runner=smoke,
         posix_exposure_root=exposure_root,
         environment_path=f"/usr/bin:{exposure_root}",
+        windows_path_adapter=windows_path_adapter,
     )
 
 
