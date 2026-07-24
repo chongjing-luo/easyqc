@@ -12,6 +12,7 @@ from core.module_filter import resolve_module_filter_identities
 from core.project_service import ProjectService
 from core.table_service import TableService
 from core.table_view_service import TableViewService
+from models.column_recipe import ColumnRecipe, RecipeStep, RecipeValue
 from models.table_view_state import (
     FilterCondition,
     FilterExpression,
@@ -72,18 +73,40 @@ def test_project_and_subject_configuration_use_temporary_atomic_files(tmp_path) 
     assert (projects.current_project.table_dir / "ezqc_all.csv").exists()
 
 
-def test_derive_subject_column_persists_values_once_and_publishes_change(tmp_path) -> None:
+def test_derive_subject_column_persists_values_once_and_publishes_change(
+    tmp_path,
+    monkeypatch,
+) -> None:
     service, projects = _service(tmp_path)
     service.replace_subjects(_subjects(), notify=False)
+    save_calls = []
+    original_save = service.table_service.save_table
+
+    def tracked_save(*args, **kwargs):
+        save_calls.append((args, kwargs))
+        return original_save(*args, **kwargs)
+
+    monkeypatch.setattr(service.table_service, "save_table", tracked_save)
     events = []
     service.project_service.event_bus.subscribe(
         EventType.SUBJECTS_CHANGED,
         events.append,
     )
+    recipe = ColumnRecipe(
+        name="age_next",
+        source_column="age",
+        steps=(
+            RecipeStep.create(
+                "add",
+                value=RecipeValue.literal(1),
+            ),
+        ),
+    )
 
-    result = service.derive_subject_column("age_next", "age + 1")
+    result = service.derive_subject_column(recipe)
 
     assert result == "age_next"
+    assert len(save_calls) == 1
     assert service.subjects()["age_next"].tolist() == [30, 32]
     assert events and events[-1].source == "ConfigurationService"
     csv_text = (
@@ -94,19 +117,34 @@ def test_derive_subject_column_persists_values_once_and_publishes_change(tmp_pat
 
 
 @pytest.mark.parametrize(
-    ("name", "expression", "match"),
+    ("recipe", "match"),
     [
-        ("age", "age + 1", "已存在"),
-        ("unsafe", "__import__('os')", "白名单"),
-        ("ezqcid", "age + 1", "已存在"),
-        ("class", "age + 1", "有效字段名"),
-        (None, "age + 1", "必须是文本"),
+        (
+            ColumnRecipe(name="age", source_column="age", steps=()),
+            "已存在",
+        ),
+        (
+            ColumnRecipe(
+                name="unsafe",
+                source_column="age",
+                steps=(RecipeStep.create("python", code="open('/tmp/x', 'w')"),),
+            ),
+            "不支持的新增列操作",
+        ),
+        (
+            ColumnRecipe(name="ezqcid", source_column="age", steps=()),
+            "ezqcid",
+        ),
+        (
+            ColumnRecipe(name="class", source_column="age", steps=()),
+            "有效字段名",
+        ),
+        (None, "ColumnRecipe"),
     ],
 )
 def test_derive_subject_column_rejects_invalid_request_without_writing(
     tmp_path,
-    name,
-    expression,
+    recipe,
     match,
 ) -> None:
     service, projects = _service(tmp_path)
@@ -115,10 +153,43 @@ def test_derive_subject_column_rejects_invalid_request_without_writing(
     before = table_path.read_bytes()
 
     with pytest.raises(ConfigurationError, match=match):
-        service.derive_subject_column(name, expression)
+        service.derive_subject_column(recipe)
 
     assert table_path.read_bytes() == before
     pd.testing.assert_frame_equal(service.subjects(), _subjects())
+
+
+def test_derive_subject_column_failed_row_policy_keeps_csv_byte_identical(
+    tmp_path,
+) -> None:
+    service, projects = _service(tmp_path)
+    service.replace_subjects(
+        pd.DataFrame(
+            {
+                "ezqcid": ["SUB001", "SUB002"],
+                "label": ["site_SUB001", "SUB002"],
+            }
+        ),
+        notify=False,
+    )
+    table_path = projects.current_project.table_dir / "ezqc_all.csv"
+    before = table_path.read_bytes()
+    recipe = ColumnRecipe(
+        name="identifier",
+        source_column="label",
+        steps=(
+            RecipeStep.create(
+                "split_take",
+                delimiter="_",
+                index=1,
+            ),
+        ),
+    )
+
+    with pytest.raises(ConfigurationError, match=r"第 1 步.*1 行"):
+        service.derive_subject_column(recipe)
+
+    assert table_path.read_bytes() == before
 
 
 @pytest.mark.parametrize(

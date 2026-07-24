@@ -22,6 +22,7 @@ from core.project_service import (
 from core.table_service import TABLE_ALL, TableService
 from core.table_transform import TableTransformEngine
 from core.table_view_service import TableViewError
+from models.column_recipe import ColumnRecipe
 from models.project import Project
 from models.qcmodule import QCModule, Score, Tag
 from models.table_view_state import (
@@ -254,34 +255,24 @@ class ConfigurationService:
 
     def derive_subject_column(
         self,
-        name: str,
-        expression: str,
+        recipe: ColumnRecipe,
         *,
         notify: bool = True,
     ) -> str:
-        """Calculate and atomically persist one ordinary subject-table column."""
+        """Calculate and atomically persist one typed derived-column recipe."""
 
-        if not isinstance(name, str):
-            raise ConfigurationError("新增列名必须是文本")
-        if not isinstance(expression, str):
-            raise ConfigurationError("新增列表达式必须是文本")
-        column_name = name.strip()
-        formula = expression.strip()
-        if not column_name:
-            raise ConfigurationError("新增列名不能为空")
+        if not isinstance(recipe, ColumnRecipe):
+            raise ConfigurationError("新增列请求必须是 ColumnRecipe")
+        column_name = recipe.name.strip()
+        if column_name != recipe.name:
+            raise ConfigurationError("新增列名不能包含首尾空格")
         if not column_name.isidentifier() or keyword.iskeyword(column_name):
             raise ConfigurationError("新增列名必须是不含空格或标点的有效字段名")
-        if not formula:
-            raise ConfigurationError("新增列表达式不能为空")
         frame = self.subjects()
         if column_name in frame.columns:
             raise ConfigurationError(f"列已存在: {column_name}")
         try:
-            frame = TableTransformEngine().derive_column(
-                frame,
-                column_name,
-                formula,
-            )
+            frame = TableTransformEngine().derive_column_from_recipe(frame, recipe)
             frame = self._validated_subjects(frame)
         except (ArithmeticError, TypeError, ValueError) as exc:
             raise ConfigurationError(str(exc)) from exc
