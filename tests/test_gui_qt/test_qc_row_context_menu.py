@@ -46,6 +46,37 @@ def _context(identity: str) -> QcRowContext:
     )
 
 
+def test_qc_row_context_detaches_mutable_input_sequences() -> None:
+    modules = [
+        QcModuleMenuEntry(
+            module_name="AnatQC",
+            label="Anatomical quality",
+            enabled=True,
+        )
+    ]
+    records = [
+        QcRecordMenuEntry(
+            ezqcid="SUB001",
+            module_name="AnatQC",
+            module_label="Anatomical quality",
+            rater="rater1",
+        )
+    ]
+
+    context = QcRowContext(
+        ezqcid="SUB001",
+        modules=modules,
+        records=records,
+    )
+    modules.clear()
+    records.clear()
+
+    assert isinstance(context.modules, tuple)
+    assert isinstance(context.records, tuple)
+    assert len(context.modules) == 1
+    assert len(context.records) == 1
+
+
 def test_shared_qc_row_menu_renders_disabled_modules_and_typed_record_actions(
     qtbot,
 ) -> None:

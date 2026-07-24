@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import MappingProxyType
 
 import pandas as pd
 from PySide6.QtCore import QSize, Qt, Signal, Slot
@@ -162,6 +163,7 @@ class QtMainWindow(QMainWindow):
             constants={},
             modules=(),
             ratings=(),
+            rating_positions_by_ezqcid=MappingProxyType({}),
             table_view_service=TableViewService(initial_source),
         )
         self.qc_workspace: QtQcWorkspace | None = None
@@ -919,6 +921,8 @@ class QtMainWindow(QMainWindow):
         module_name: str,
         current_identity: str,
         expression: FilterExpression | None = None,
+        *,
+        require_current_identity: bool = False,
     ) -> tuple[str, int, tuple[str, ...], QcWorkflowService]:
         """Worker-side construction of one exact, nonempty QC workflow."""
 
@@ -942,9 +946,14 @@ class QtMainWindow(QMainWindow):
             raise ProjectContextError(
                 f"QC module filter matches no subjects: {module_name}"
             )
+        identity_set = set(identities)
+        if require_current_identity and current_identity not in identity_set:
+            raise ProjectContextError(
+                f"QC row ezqcid is not in the module queue: {current_identity}"
+            )
         initial = (
             current_identity
-            if current_identity in set(identities)
+            if current_identity in identity_set
             else identities[0]
         )
         workflow = self.context_service.create_qc_workflow(
@@ -1272,7 +1281,12 @@ class QtMainWindow(QMainWindow):
         )
         return False
 
-    def start_qc_module(self, module_name: str) -> bool:
+    def start_qc_module(
+        self,
+        module_name: str,
+        *,
+        initial_ezqcid: str | None = None,
+    ) -> bool:
         """Install the exact requested module through the existing QC factory."""
 
         requested = str(module_name).strip()
@@ -1295,8 +1309,10 @@ class QtMainWindow(QMainWindow):
         if self.qc_filter_task_controller.busy:
             return self._reject_qc_launch("另一项质控名单任务仍在运行")
         snapshot = self.current_context
-        current_identity = (
-            workflow.current_ezqcid if workflow is not None else ""
+        preferred_identity = (
+            str(initial_ezqcid).strip()
+            if initial_ezqcid is not None
+            else (workflow.current_ezqcid if workflow is not None else "")
         )
         self._qc_filter_revision += 1
         revision = self._qc_filter_revision
@@ -1312,7 +1328,8 @@ class QtMainWindow(QMainWindow):
             return self._prepare_qc_workflow_candidate(
                 snapshot,
                 requested,
-                current_identity,
+                preferred_identity,
+                require_current_identity=initial_ezqcid is not None,
             )
 
         self.qc_filter_task_controller.submit(revision, prepare_launch)
@@ -1386,20 +1403,13 @@ class QtMainWindow(QMainWindow):
         if context_revision != self.current_context.context_revision:
             self._set_error("该表格操作属于已失效的项目上下文")
             return
-        if self.active_workflow is not None and self.active_workflow.dirty:
-            self._set_error("请先保存或放弃当前质控修改，再打开其他名单")
+        if not entry.enabled:
+            self._set_error(entry.disabled_reason or "该条目不在所选模块质控名单中")
             return
-        try:
-            replacement = self.context_service.create_qc_workflow(
-                self.current_context,
-                module_name=entry.module_name,
-                initial_ezqcid=identity,
-            )
-        except Exception as exc:
-            self._set_error(str(exc).strip() or type(exc).__name__)
-            return
-        self._install_qc_workspace(replacement, entry.module_name)
-        self._set_error("")
+        self.start_qc_module(
+            entry.module_name,
+            initial_ezqcid=identity,
+        )
 
     def _open_qc_row_record(
         self,

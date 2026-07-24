@@ -80,18 +80,22 @@ class QcRowContext:
     def __post_init__(self) -> None:
         identity = _required_text(self.ezqcid, "ezqcid")
         object.__setattr__(self, "ezqcid", identity)
-        if any(not isinstance(entry, QcModuleMenuEntry) for entry in self.modules):
+        modules = tuple(self.modules)
+        records = tuple(self.records)
+        if any(not isinstance(entry, QcModuleMenuEntry) for entry in modules):
             raise TypeError("质控模块菜单必须由 QcModuleMenuEntry 组成")
-        if any(not isinstance(entry, QcRecordMenuEntry) for entry in self.records):
+        if any(not isinstance(entry, QcRecordMenuEntry) for entry in records):
             raise TypeError("质控记录菜单必须由 QcRecordMenuEntry 组成")
-        if any(entry.ezqcid != identity for entry in self.records):
+        if any(entry.ezqcid != identity for entry in records):
             raise ValueError("质控记录与右键行 ezqcid 不一致")
-        module_names = [entry.module_name for entry in self.modules]
+        module_names = [entry.module_name for entry in modules]
         if len(module_names) != len(set(module_names)):
             raise ValueError("质控模块菜单包含重复模块")
-        record_keys = [entry.key for entry in self.records]
+        record_keys = [entry.key for entry in records]
         if len(record_keys) != len(set(record_keys)):
             raise ValueError("质控记录菜单包含重复记录")
+        object.__setattr__(self, "modules", modules)
+        object.__setattr__(self, "records", records)
 
 
 __all__ = [

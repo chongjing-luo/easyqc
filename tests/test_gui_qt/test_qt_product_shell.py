@@ -672,6 +672,14 @@ def test_row_context_menus_cover_pre_qc_results_and_active_qc_queue(
     assert results_menu is not None
     assert results_menu.module_actions["FuncQC"].isEnabled()
     results_menu.module_actions["FuncQC"].trigger()
+    qtbot.waitUntil(
+        lambda: (
+            not window.qc_filter_task_controller.busy
+            and window.active_workflow is not None
+            and window.active_workflow.current_module.name == "FuncQC"
+        ),
+        timeout=3000,
+    )
 
     assert window.qc_controller is not None
     assert window.active_workflow.current_module.name == "FuncQC"
@@ -731,6 +739,14 @@ def test_row_record_action_is_read_only_and_dirty_draft_blocks_replacement(
     window.table_workspace.active_row_context_menu.module_actions[
         "AnatQC"
     ].trigger()
+    qtbot.waitUntil(
+        lambda: (
+            not window.qc_filter_task_controller.busy
+            and window.active_workflow is not None
+            and not window.active_workflow.watch_mode
+        ),
+        timeout=3000,
+    )
     qtbot.mouseClick(window.qc_workspace.score_buttons["1"]["Fair"], Qt.LeftButton)
     assert window.active_workflow.dirty
     current_controller = window.qc_controller

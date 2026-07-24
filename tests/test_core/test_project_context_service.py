@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 
 import pandas as pd
 import pytest
 
+import core.project_context_service as project_context_module
 from core.app_services import build_app_services
 from core.project_context_service import ProjectContextError
 from core.qc_workflow_service import QcReadOnlyError, QcWorkflowService
@@ -446,6 +448,71 @@ def test_qc_row_context_respects_each_module_queue_and_exact_snapshot_records(
     ]
     assert "独立质控名单" in second.modules[0].disabled_reason
     assert second.records == ()
+
+
+def test_qc_row_context_evaluates_filters_against_only_the_clicked_row(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    _add_project(services, tmp_path, "SAMPLE", second_module=True)
+    snapshot = services.project_context_service.snapshot()
+    observed_sizes = []
+    original = project_context_module.resolve_module_filter_identities
+
+    def observe(subjects, expression):
+        observed_sizes.append(len(subjects))
+        return original(subjects, expression)
+
+    monkeypatch.setattr(
+        project_context_module,
+        "resolve_module_filter_identities",
+        observe,
+    )
+
+    context = services.project_context_service.qc_row_context(snapshot, "SUB002")
+
+    assert len(context.modules) == 2
+    assert observed_sizes == [1, 1]
+
+
+def test_qc_row_context_and_record_workflow_use_the_snapshot_rating_index(
+    tmp_path,
+) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    project = _add_project(services, tmp_path, "SAMPLE")
+    seed = QcWorkflowService(
+        _module_payload(),
+        _subjects(),
+        rating_dir=project.rating_dir / "AnatQC" / "rater1",
+        code_executor=services.code_executor,
+    )
+    seed.set_score("1", "Good")
+    seed.save()
+    snapshot = services.project_context_service.snapshot()
+
+    class IndexedOnlyRatings(tuple):
+        def __iter__(self):
+            raise AssertionError("row actions must not scan every snapshot rating")
+
+    indexed_snapshot = replace(
+        snapshot,
+        ratings=IndexedOnlyRatings(snapshot.ratings),
+    )
+    context = services.project_context_service.qc_row_context(
+        indexed_snapshot,
+        "SUB001",
+    )
+    record = context.records[0]
+    workflow = services.project_context_service.create_qc_record_workflow(
+        indexed_snapshot,
+        ezqcid=record.ezqcid,
+        module_name=record.module_name,
+        rater=record.rater,
+    )
+
+    assert record.key == ("SUB001", "AnatQC", "rater1")
+    assert workflow.current_module.scores["1"].value == "Good"
 
 
 def test_historical_record_workflow_uses_saved_schema_and_is_forced_read_only(

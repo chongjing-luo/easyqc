@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import operator as scalar_operator
 import re
 from functools import reduce
 from typing import Any, Callable
@@ -586,6 +587,7 @@ class TableTransformEngine:
         }
         if operator not in allowed:
             raise TableTransformError(f"不支持的条件操作符: {operator}")
+        invalid = _false_mask(current.index)
         if operator in {"is_missing", "not_missing"}:
             if "compare_to" in step.parameters:
                 raise TableTransformError(f"条件 {operator} 不接受 compare_to")
@@ -596,11 +598,11 @@ class TableTransformEngine:
             if "compare_to" not in step.parameters:
                 raise TableTransformError(f"条件 {operator} 缺少 compare_to")
             compare_to = self._resolve_recipe_value(df, current, step, "compare_to")
-            mask = self._conditional_mask(current, compare_to, operator)
+            mask, invalid = self._conditional_mask(current, compare_to, operator)
         mask = pd.Series(mask, index=current.index).fillna(False).astype(bool)
         when_true = self._resolve_recipe_value(df, current, step, "when_true")
         when_false = self._resolve_recipe_value(df, current, step, "when_false")
-        return when_true.where(mask, when_false), _false_mask(current.index)
+        return when_true.where(mask, when_false), invalid
 
     def _numeric_binary(
         self,
@@ -625,7 +627,7 @@ class TableTransformEngine:
         current: pd.Series,
         compare_to: pd.Series,
         operator: str,
-    ) -> pd.Series:
+    ) -> tuple[pd.Series, pd.Series]:
         comparisons = {
             "eq": pd.Series.eq,
             "ne": pd.Series.ne,
@@ -637,38 +639,71 @@ class TableTransformEngine:
         if operator in comparisons:
             valid = current.notna() & compare_to.notna()
             result = _false_mask(current.index)
+            invalid = _false_mask(current.index)
             positions = valid.to_numpy().nonzero()[0]
             if len(positions):
-                compared = comparisons[operator](
-                    current.iloc[positions],
-                    compare_to.iloc[positions],
-                )
-                result.iloc[positions] = compared.to_numpy(dtype=bool)
-            return result
+                try:
+                    compared = comparisons[operator](
+                        current.iloc[positions],
+                        compare_to.iloc[positions],
+                    )
+                    result.iloc[positions] = compared.to_numpy(dtype=bool)
+                except (ArithmeticError, TypeError, ValueError):
+                    scalar_comparisons = {
+                        "eq": scalar_operator.eq,
+                        "ne": scalar_operator.ne,
+                        "gt": scalar_operator.gt,
+                        "ge": scalar_operator.ge,
+                        "lt": scalar_operator.lt,
+                        "le": scalar_operator.le,
+                    }
+                    compare = scalar_comparisons[operator]
+                    for position in positions:
+                        try:
+                            result.iloc[position] = bool(
+                                compare(
+                                    current.iloc[position],
+                                    compare_to.iloc[position],
+                                )
+                            )
+                        except (ArithmeticError, TypeError, ValueError):
+                            invalid.iloc[position] = True
+            return result, invalid
         left = _string_series(current)
         right = _string_series(compare_to)
         if operator == "contains":
-            return pd.Series(
-                [
-                    False if pd.isna(lval) or pd.isna(rval) else rval in lval
-                    for lval, rval in zip(left.array, right.array)
-                ],
-                index=current.index,
+            return (
+                pd.Series(
+                    [
+                        False if pd.isna(lval) or pd.isna(rval) else rval in lval
+                        for lval, rval in zip(left.array, right.array)
+                    ],
+                    index=current.index,
+                ),
+                _false_mask(current.index),
             )
         if operator == "starts_with":
-            return pd.Series(
+            return (
+                pd.Series(
+                    [
+                        False
+                        if pd.isna(lval) or pd.isna(rval)
+                        else lval.startswith(rval)
+                        for lval, rval in zip(left.array, right.array)
+                    ],
+                    index=current.index,
+                ),
+                _false_mask(current.index),
+            )
+        return (
+            pd.Series(
                 [
-                    False if pd.isna(lval) or pd.isna(rval) else lval.startswith(rval)
+                    False if pd.isna(lval) or pd.isna(rval) else lval.endswith(rval)
                     for lval, rval in zip(left.array, right.array)
                 ],
                 index=current.index,
-            )
-        return pd.Series(
-            [
-                False if pd.isna(lval) or pd.isna(rval) else lval.endswith(rval)
-                for lval, rval in zip(left.array, right.array)
-            ],
-            index=current.index,
+            ),
+            _false_mask(current.index),
         )
 
     def _resolve_recipe_value(

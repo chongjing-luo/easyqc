@@ -161,6 +161,65 @@ def test_recipe_error_policy_is_explicit_and_step_specific() -> None:
     assert keep_result["identifier"].tolist() == ["SUB001", "SUB002"]
 
 
+def test_conditional_error_policy_handles_only_incompatible_rows() -> None:
+    source = pd.DataFrame(
+        {
+            "ezqcid": ["ROW1", "ROW2"],
+            "mixed": pd.Series([3, "bad"], dtype=object),
+        }
+    )
+    step_parameters = {
+        "operator": "gt",
+        "compare_to": RecipeValue.literal(2),
+        "when_true": RecipeValue.literal("high"),
+        "when_false": RecipeValue.literal("low"),
+    }
+    engine = TableTransformEngine()
+
+    with pytest.raises(TableTransformError, match=r"第 1 步.*1 行"):
+        engine.derive_column_from_recipe(
+            source,
+            ColumnRecipe(
+                name="status",
+                source_column="mixed",
+                steps=(_step("conditional", **step_parameters),),
+            ),
+        )
+
+    blanked = engine.derive_column_from_recipe(
+        source,
+        ColumnRecipe(
+            name="status",
+            source_column="mixed",
+            steps=(
+                _step(
+                    "conditional",
+                    on_error="blank",
+                    **step_parameters,
+                ),
+            ),
+        ),
+    )
+    kept = engine.derive_column_from_recipe(
+        source,
+        ColumnRecipe(
+            name="status",
+            source_column="mixed",
+            steps=(
+                _step(
+                    "conditional",
+                    on_error="keep",
+                    **step_parameters,
+                ),
+            ),
+        ),
+    )
+
+    assert blanked["status"].iloc[0] == "high"
+    assert pd.isna(blanked["status"].iloc[1])
+    assert kept["status"].tolist() == ["high", "bad"]
+
+
 @pytest.mark.parametrize(
     ("recipe", "match"),
     [
