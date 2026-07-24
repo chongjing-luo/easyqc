@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
@@ -311,6 +312,14 @@ def test_automated_runner_retains_and_surfaces_bounded_failure_output(
     request_path = tmp_path / "request-diagnostics.json"
     plan_path = tmp_path / "plan-diagnostics.json"
     attempt_root = tmp_path / "attempt-diagnostics"
+    stdout_failures = "".join(
+        f"FAILED tests/test_stdout_{index}.py::test_case_{index} - assertion\n"
+        for index in range(10)
+    )
+    stderr_failures = "".join(
+        f"FAILED tests/test_stderr_{index}.py::test_case_{index} - assertion\n"
+        for index in range(10)
+    )
     plan = AutomatedCheckPlanV1.from_json_object(
         {
             "schema_version": 1,
@@ -324,10 +333,10 @@ def test_automated_runner_retains_and_surfaces_bounded_failure_output(
                         (
                             "import sys;"
                             "sys.stdout.write("
-                            "'o'*65000+'EARLY%STDOUT-FAILURE\\n'+"
+                            f"'o'*65000+'\\n'+{stdout_failures!r}+"
                             "'o'*5000+'VISIBLE%STDOUT-MARKER\\n');"
                             "sys.stderr.write("
-                            "'e'*65000+'EARLY%STDERR-FAILURE\\n'+"
+                            f"'e'*65000+'\\n'+{stderr_failures!r}+"
                             "'e'*5000+'VISIBLE%STDERR-MARKER\\n');"
                             "raise SystemExit(9)"
                         ),
@@ -361,20 +370,34 @@ def test_automated_runner_retains_and_surfaces_bounded_failure_output(
     annotations = [
         line for line in completed.stderr.splitlines() if line.startswith("::error ")
     ]
-    assert len(annotations) == 2
+    assert len(annotations) >= 4
+    stdout_inventory = "".join(
+        line
+        for line in annotations
+        if "title=EasyQC diagnostic-suite stdout failed tests " in line
+    )
+    stderr_inventory = "".join(
+        line
+        for line in annotations
+        if "title=EasyQC diagnostic-suite stderr failed tests " in line
+    )
+    assert "tests/test_stdout_0.py::test_case_0" in stdout_inventory
+    assert "tests/test_stdout_9.py::test_case_9" in stdout_inventory
+    assert "tests/test_stderr_0.py::test_case_0" in stderr_inventory
+    assert "tests/test_stderr_9.py::test_case_9" in stderr_inventory
+    assert stdout_inventory.count("tests/test_stdout_0.py::test_case_0") == 1
+    assert stderr_inventory.count("tests/test_stderr_0.py::test_case_0") == 1
     assert any(
-        "title=EasyQC diagnostic-suite stdout failed::" in line
+        "title=EasyQC diagnostic-suite stdout diagnostic tail::" in line
         and "VISIBLE%25STDOUT-MARKER%0A" in line
-        and "EARLY%25STDOUT-FAILURE%0A" in line
         for line in annotations
     )
     assert any(
-        "title=EasyQC diagnostic-suite stderr failed::" in line
+        "title=EasyQC diagnostic-suite stderr diagnostic tail::" in line
         and "VISIBLE%25STDERR-MARKER%0A" in line
-        and "EARLY%25STDERR-FAILURE%0A" in line
         for line in annotations
     )
-    assert all(len(line) <= 24200 for line in annotations)
+    assert all(len(line) <= 11200 for line in annotations)
     stdout_path = attempt_root / "reports" / "diagnostic-suite.stdout.log"
     stderr_path = attempt_root / "reports" / "diagnostic-suite.stderr.log"
     assert stdout_path.stat().st_size == 64 * 1024
@@ -396,6 +419,32 @@ def test_automated_runner_retains_and_surfaces_bounded_failure_output(
         ("reports/diagnostic-suite.stdout.log", "log"),
         ("reports/diagnostic-suite.stderr.log", "log"),
     }
+
+
+def test_github_failure_inventory_chunks_preserve_every_test_identifier() -> None:
+    module = importlib.import_module("scripts.run_platform_verification")
+    identifiers = [
+        f"tests/test_platform_{index}.py::test_case_{index}"
+        for index in range(100)
+    ]
+    data = "".join(
+        f"FAILED {identifier} - assertion\n" for identifier in identifiers
+    ).encode()
+    data += f"FAILED {identifiers[0]} - duplicate assertion\n".encode()
+    data += b"x" * 5000 + b"FINAL-MARKER\n"
+
+    payloads = module._github_failure_annotation_payloads(data)
+
+    inventories = [
+        message for kind, message in payloads if kind.startswith("failed tests ")
+    ]
+    tails = [message for kind, message in payloads if kind == "diagnostic tail"]
+    assert len(inventories) >= 2
+    combined = "\n".join(inventories)
+    assert all(combined.count(identifier) == 1 for identifier in identifiers)
+    assert len(tails) == 1
+    assert tails[0].endswith("FINAL-MARKER\n")
+    assert all(len(message) <= 3800 for _kind, message in payloads)
 
 
 def test_automated_runner_hashes_large_child_streams_without_embedding_them(

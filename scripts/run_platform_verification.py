@@ -49,7 +49,7 @@ _RESERVED_PATHS = {
     "verification-run.json",
 }
 _DIAGNOSTIC_TAIL_BYTES = 64 * 1024
-_GITHUB_ANNOTATION_SOURCE_CHARS = 8000
+_GITHUB_ANNOTATION_MESSAGE_CHARS = 3500
 
 
 def _read_authority(path: Path, parser: object, label: str) -> object:
@@ -105,6 +105,54 @@ def _github_command_escape(value: str) -> str:
     return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
+def _github_failure_annotation_payloads(
+    data: bytes,
+) -> tuple[tuple[str, str], ...]:
+    text = data.decode("utf-8", errors="replace")
+    identifiers: list[str] = []
+    seen: set[str] = set()
+    for line in text.splitlines():
+        if not line.startswith("FAILED "):
+            continue
+        identifier, separator, _summary = line[len("FAILED ") :].partition(" - ")
+        identifier = identifier.strip()
+        if not separator or not identifier or identifier in seen:
+            continue
+        seen.add(identifier)
+        identifiers.append(identifier)
+
+    inventory_chunks: list[str] = []
+    current: list[str] = []
+    current_chars = 0
+    for identifier in identifiers:
+        separator_chars = 1 if current else 0
+        if (
+            current
+            and current_chars + separator_chars + len(identifier)
+            > _GITHUB_ANNOTATION_MESSAGE_CHARS
+        ):
+            inventory_chunks.append("\n".join(current))
+            current = []
+            current_chars = 0
+            separator_chars = 0
+        current.append(identifier)
+        current_chars += separator_chars + len(identifier)
+    if current:
+        inventory_chunks.append("\n".join(current))
+
+    payloads = [
+        (f"failed tests {index}/{len(inventory_chunks)}", message)
+        for index, message in enumerate(inventory_chunks, start=1)
+    ]
+    if len(text) > _GITHUB_ANNOTATION_MESSAGE_CHARS:
+        marker = "[truncated]\n"
+        text = marker + text[
+            -(_GITHUB_ANNOTATION_MESSAGE_CHARS - len(marker)) :
+        ]
+    payloads.append(("diagnostic tail", text))
+    return tuple(payloads)
+
+
 def _emit_github_failure_annotation(
     check_name: str,
     stream_name: str,
@@ -112,15 +160,13 @@ def _emit_github_failure_annotation(
 ) -> None:
     if os.environ.get("GITHUB_ACTIONS", "").lower() != "true":
         return
-    text = data.decode("utf-8", errors="replace")
-    if len(text) > _GITHUB_ANNOTATION_SOURCE_CHARS:
-        text = "[truncated]\n" + text[-_GITHUB_ANNOTATION_SOURCE_CHARS:]
-    title = f"EasyQC {check_name} {stream_name} failed"
-    print(
-        f"::error title={_github_command_escape(title)}::"
-        f"{_github_command_escape(text)}",
-        file=sys.stderr,
-    )
+    for kind, message in _github_failure_annotation_payloads(data):
+        title = f"EasyQC {check_name} {stream_name} {kind}"
+        print(
+            f"::error title={_github_command_escape(title)}::"
+            f"{_github_command_escape(message)}",
+            file=sys.stderr,
+        )
 
 
 def _retain_and_surface_failure_stream(
