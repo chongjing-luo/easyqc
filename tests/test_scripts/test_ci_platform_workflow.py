@@ -46,10 +46,6 @@ EXPECTED_ACTIONS = {
         "11d5960a326750d5838078e36cf38b85af677262",
     ),
     (
-        "actions/setup-python",
-        "a26af69be951a213d495a4c3e4e4022e16d87065",
-    ),
-    (
         "astral-sh/setup-uv",
         "d0cc045d04ccac9d8b7881df0226f9e82c39688e",
     ),
@@ -251,10 +247,13 @@ def test_workflow_pins_actions_runtime_permissions_and_failure_artifacts(
     assert "workflow_dispatch:" in text
     assert 'python-version: "3.10.17"' in text
     assert 'version: "0.11.29"' in text
+    assert "activate-environment: true" in text
     assert "enable-cache: false" in text
     assert "persist-credentials: false" in text
-    assert "uv pip sync --system --require-hashes" in text
-    assert "uv pip check --system" in text
+    assert "actions/setup-python" not in text
+    assert "uv pip sync --require-hashes" in text
+    assert "uv pip check" in text
+    assert "--system" not in text
     assert "if: ${{ always() }}" in text
     assert "if-no-files-found: error" in text
     assert "retention-days: 30" in text
