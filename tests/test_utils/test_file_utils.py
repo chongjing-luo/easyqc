@@ -80,6 +80,15 @@ def test_atomic_write_produces_complete_new_content_and_no_partial_file(tmp_path
     assert [p.name for p in tmp_path.iterdir()] == ["settings.json"]
 
 
+def test_atomic_write_preserves_caller_newline_bytes(tmp_path) -> None:
+    path = tmp_path / "canonical.json"
+    content = '{"line_feed":"a\\nb","literal_crlf":"a\\r\\nb"}\n'
+
+    FileUtils.atomic_write(path, content)
+
+    assert path.read_bytes() == content.encode("utf-8")
+
+
 def test_atomic_write_never_leaves_truncated_file_on_failure(tmp_path) -> None:
     """AC-6: if os.replace fails (simulating crash/power-loss at the rename
     step), the target file must be either the pre-save content or absent —

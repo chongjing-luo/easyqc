@@ -63,7 +63,7 @@ class FileUtils:
         temp_path = path.with_name(f".{path.name}.tmp.{os.getpid()}")
 
         try:
-            with open(temp_path, 'w', encoding=encoding) as f:
+            with open(temp_path, 'w', encoding=encoding, newline='') as f:
                 f.write(content)
                 f.flush()
                 os.fsync(f.fileno())
