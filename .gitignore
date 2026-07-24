@@ -31,6 +31,7 @@ projects.json
 *.json.bak
 settings.json
 settings*.json
+!tests/fixtures/ccnppeki_compat/easyqc_CCNPPEKI_COMPAT/settings_CCNPPEKI_COMPAT.json
 code.template
 qcmodule_*.json
 

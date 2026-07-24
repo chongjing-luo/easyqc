@@ -180,11 +180,6 @@ def easyqc_root() -> Path:
 
 
 @pytest.fixture
-def legacy_easyqc_root(easyqc_root: Path) -> Path:
-    return easyqc_root.parent / "easyqc_back"
-
-
-@pytest.fixture
 def fixtures_dir(easyqc_root: Path) -> Path:
     return easyqc_root / "tests" / "fixtures"
 
