@@ -764,6 +764,12 @@ def _utc_now() -> str:
     )
 
 
+def _console_safe(value: str) -> str:
+    """Render one diagnostic value without depending on console encoding."""
+
+    return value.encode("ascii", errors="backslashreplace").decode("ascii")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", type=Path, required=True)
@@ -777,7 +783,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "PASS: replacement first throughput "
         f"release={summary['release_id']} "
         f"decision={summary['decision']} "
-        f"output={args.output_root.resolve()}"
+        f"output={_console_safe(os.fspath(args.output_root.resolve()))}"
     )
     return 0
 

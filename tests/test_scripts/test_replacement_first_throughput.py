@@ -21,6 +21,7 @@ from models.platform_verification import (
 )
 from scripts.run_replacement_first_throughput import (
     FirstThroughputError,
+    _console_safe,
     _python_relative_path,
     _synthetic_host_profile,
     _write_synthetic_payload,
@@ -99,6 +100,13 @@ def test_synthetic_host_profile_binds_target_row_identity_and_layout(
 def test_synthetic_host_profile_rejects_unknown_host() -> None:
     with pytest.raises(FirstThroughputError, match="unsupported synthetic host"):
         _synthetic_host_profile("plan9")
+
+
+def test_console_safe_escapes_non_ascii_diagnostic_text() -> None:
+    rendered = _console_safe(r"C:\质控 output")
+
+    assert rendered == r"C:\\u8d28\u63a7 output"
+    assert rendered.encode("cp1252", errors="strict")
 
 
 @pytest.mark.parametrize("host_platform", ("linux", "win32", "darwin"))
@@ -186,6 +194,7 @@ def test_integrated_command_emits_rereadable_bound_authority(
     decision = ReleaseDecisionV1.from_canonical_bytes(decision_path.read_bytes())
     report = json.loads(report_path.read_text(encoding="utf-8"))
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    expected_v2_release_id = f"easyqc-2.0.0-{profile.release_suffix}"
 
     assert manifest.sha256 == receipt.manifest_sha256 == run.release.manifest_sha256
     assert manifest.release_id == receipt.release_id == pointer.active_release_id
@@ -215,11 +224,13 @@ def test_integrated_command_emits_rereadable_bound_authority(
     assert pointer.generation == 3
     assert report["runtime"]["failed_update_pointer_preserved"] is True
     assert report["runtime"]["failed_stage_receipt_absent"] is True
-    assert report["runtime"]["updated_active_release_id"] == "easyqc-2.0.0-linux"
+    assert report["runtime"]["updated_active_release_id"] == expected_v2_release_id
     assert report["runtime"]["rollback_active_release_id"] == manifest.release_id
     assert report["runtime"]["launched_version"] == "1.0.0"
     failed_stages = tuple(
-        (runtime_root / "versions").glob(".staging-easyqc-2.0.0-linux-*")
+        (runtime_root / "versions").glob(
+            f".staging-{expected_v2_release_id}-*"
+        )
     )
     assert len(failed_stages) == 1
     assert not (failed_stages[0] / "install-receipt.json").exists()
