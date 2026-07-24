@@ -49,7 +49,7 @@ _RESERVED_PATHS = {
     "verification-run.json",
 }
 _DIAGNOSTIC_TAIL_BYTES = 64 * 1024
-_GITHUB_ANNOTATION_SOURCE_CHARS = 2000
+_GITHUB_ANNOTATION_SOURCE_CHARS = 8000
 
 
 def _read_authority(path: Path, parser: object, label: str) -> object:

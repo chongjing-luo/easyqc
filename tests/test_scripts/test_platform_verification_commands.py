@@ -323,8 +323,12 @@ def test_automated_runner_retains_and_surfaces_bounded_failure_output(
                         "-c",
                         (
                             "import sys;"
-                            "sys.stdout.write('o'*70000+'VISIBLE%STDOUT-MARKER\\n');"
-                            "sys.stderr.write('e'*70000+'VISIBLE%STDERR-MARKER\\n');"
+                            "sys.stdout.write("
+                            "'o'*65000+'EARLY%STDOUT-FAILURE\\n'+"
+                            "'o'*5000+'VISIBLE%STDOUT-MARKER\\n');"
+                            "sys.stderr.write("
+                            "'e'*65000+'EARLY%STDERR-FAILURE\\n'+"
+                            "'e'*5000+'VISIBLE%STDERR-MARKER\\n');"
                             "raise SystemExit(9)"
                         ),
                     ],
@@ -361,14 +365,16 @@ def test_automated_runner_retains_and_surfaces_bounded_failure_output(
     assert any(
         "title=EasyQC diagnostic-suite stdout failed::" in line
         and "VISIBLE%25STDOUT-MARKER%0A" in line
+        and "EARLY%25STDOUT-FAILURE%0A" in line
         for line in annotations
     )
     assert any(
         "title=EasyQC diagnostic-suite stderr failed::" in line
         and "VISIBLE%25STDERR-MARKER%0A" in line
+        and "EARLY%25STDERR-FAILURE%0A" in line
         for line in annotations
     )
-    assert all(len(line) <= 6200 for line in annotations)
+    assert all(len(line) <= 24200 for line in annotations)
     stdout_path = attempt_root / "reports" / "diagnostic-suite.stdout.log"
     stderr_path = attempt_root / "reports" / "diagnostic-suite.stderr.log"
     assert stdout_path.stat().st_size == 64 * 1024
