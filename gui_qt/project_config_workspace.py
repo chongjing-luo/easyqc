@@ -159,6 +159,9 @@ class QtProjectConfigWorkspace(QWidget):
         self.project_toolbar.setMovable(False)
         self.project_toolbar.setFloatable(False)
         self.project_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.project_toolbar.setStyleSheet(
+            "QToolButton { padding-left: 2px; padding-right: 2px; }"
+        )
         self.new_project_action, self.new_project_button = self._add_toolbar_action(
             self.project_toolbar,
             "新建项目",
