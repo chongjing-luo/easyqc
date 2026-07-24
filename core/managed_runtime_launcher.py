@@ -771,9 +771,11 @@ def _write_new_bytes(path: Path, content: bytes, *, mode: int, label: str) -> No
     )
     descriptor: int | None = None
     try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        flags |= getattr(os, "O_BINARY", 0)
         descriptor = os.open(
             temporary,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            flags,
             mode,
         )
         offset = 0

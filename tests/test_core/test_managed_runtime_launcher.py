@@ -10,6 +10,7 @@ import sys
 
 import pytest
 
+import core.managed_runtime_launcher as launcher_module
 from core.managed_runtime import (
     ManagedRuntimeError,
     MaterializationRequest,
@@ -454,3 +455,49 @@ def test_windows_launcher_contract_and_path_transition_are_deterministic() -> No
     repeated = next_windows_path(update.current, r"c:\program files\easyqc\BIN")
     assert repeated.current == update.current
     assert repeated.changed is False
+
+
+def test_new_file_writer_preserves_bytes_when_windows_text_mode_is_simulated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary_flag = 1 << 29
+    binary_descriptors: set[int] = set()
+    original_open = launcher_module.os.open
+    original_write = launcher_module.os.write
+
+    def simulated_windows_open(
+        path: str | bytes | Path,
+        flags: int,
+        mode: int = 0o777,
+    ) -> int:
+        binary = bool(flags & binary_flag)
+        descriptor = original_open(path, flags & ~binary_flag, mode)
+        if binary:
+            binary_descriptors.add(descriptor)
+        return descriptor
+
+    def simulated_windows_write(descriptor: int, content: bytes) -> int:
+        if descriptor not in binary_descriptors:
+            content = content.replace(b"\n", b"\r\n")
+        return original_write(descriptor, content)
+
+    monkeypatch.setattr(
+        launcher_module.os,
+        "O_BINARY",
+        binary_flag,
+        raising=False,
+    )
+    monkeypatch.setattr(launcher_module.os, "open", simulated_windows_open)
+    monkeypatch.setattr(launcher_module.os, "write", simulated_windows_write)
+    destination = tmp_path / "scope-state.json"
+    expected = b'{"line":"one\\ntwo"}\nliteral-crlf\r\n'
+
+    launcher_module._write_new_bytes(
+        destination,
+        expected,
+        mode=0o600,
+        label="scope state",
+    )
+
+    assert destination.read_bytes() == expected
