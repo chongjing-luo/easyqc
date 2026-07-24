@@ -2,16 +2,37 @@ from __future__ import annotations
 
 import re
 from functools import reduce
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
 from core.expression_parser import ExpressionError, ExpressionParser
+from models.column_recipe import ColumnRecipe, RecipeStep, RecipeValue
 from utils.logger import log_warning
 
 
 class TableTransformError(ValueError):
     """Raised when a table transform operation is invalid."""
+
+
+_RecipeOperation = Callable[
+    [pd.DataFrame, pd.Series, RecipeStep],
+    tuple[pd.Series, pd.Series],
+]
+
+
+def _string_series(series: pd.Series) -> pd.Series:
+    """Convert non-missing values to strings without turning nulls into text."""
+
+    return series.astype("string")
+
+
+def _false_mask(index: pd.Index) -> pd.Series:
+    return pd.Series(False, index=index, dtype=bool)
+
+
+def _broadcast(value: object, index: pd.Index) -> pd.Series:
+    return pd.Series([value] * len(index), index=index, dtype=object)
 
 
 _LEGACY_SELECT_RE = re.compile(
@@ -88,6 +109,39 @@ def _legacy_literal_to_value(value: str) -> Any:
 class TableTransformEngine:
     ALLOWED_MERGE_HOW = {"left", "right", "inner", "outer"}
     ALLOWED_AGGREGATIONS = {"count", "mean", "sum", "min", "max"}
+    RECIPE_PARAMETER_SCHEMA = {
+        "trim": (frozenset(), frozenset()),
+        "lower": (frozenset(), frozenset()),
+        "upper": (frozenset(), frozenset()),
+        "title": (frozenset(), frozenset()),
+        "length": (frozenset(), frozenset()),
+        "replace_literal": (frozenset({"old", "new"}), frozenset()),
+        "remove_prefix": (frozenset({"prefix"}), frozenset()),
+        "remove_suffix": (frozenset({"suffix"}), frozenset()),
+        "slice": (frozenset(), frozenset({"start", "end"})),
+        "split_take": (frozenset({"delimiter", "index"}), frozenset()),
+        "before": (frozenset({"delimiter"}), frozenset()),
+        "after": (frozenset({"delimiter"}), frozenset()),
+        "between": (frozenset({"start", "end"}), frozenset()),
+        "path_name": (frozenset(), frozenset()),
+        "path_parent": (frozenset(), frozenset()),
+        "path_suffix": (frozenset(), frozenset()),
+        "path_stem": (frozenset(), frozenset()),
+        "prepend": (frozenset({"value"}), frozenset()),
+        "append": (frozenset({"value"}), frozenset()),
+        "to_number": (frozenset(), frozenset()),
+        "add": (frozenset({"value"}), frozenset()),
+        "subtract": (frozenset({"value"}), frozenset()),
+        "multiply": (frozenset({"value"}), frozenset()),
+        "divide": (frozenset({"value"}), frozenset()),
+        "absolute": (frozenset(), frozenset()),
+        "round": (frozenset(), frozenset({"digits"})),
+        "fill_missing": (frozenset({"value"}), frozenset()),
+        "conditional": (
+            frozenset({"operator", "when_true", "when_false"}),
+            frozenset({"compare_to"}),
+        ),
+    }
 
     def __init__(
         self,
@@ -193,6 +247,473 @@ class TableTransformEngine:
         result = df.copy()
         result[name] = self.expression_parser.evaluate(expression, result)
         return result
+
+    def derive_column_from_recipe(
+        self,
+        df: pd.DataFrame,
+        recipe: ColumnRecipe,
+    ) -> pd.DataFrame:
+        """Return a detached table with one safe, row-aligned derived column.
+
+        The operation has no side effects. Structural or row-level failures are
+        reported as ``TableTransformError`` and never execute user-provided
+        Python, SQL, regular expressions, shell commands, or file access.
+        """
+
+        if not isinstance(df, pd.DataFrame):
+            raise TableTransformError("新增列来源必须是表格")
+        if not isinstance(recipe, ColumnRecipe):
+            raise TableTransformError("新增列请求必须是 ColumnRecipe")
+        if recipe.name == "ezqcid":
+            raise TableTransformError("不能改写关键列 ezqcid")
+        if recipe.name in df.columns:
+            raise TableTransformError(f"新列已存在: {recipe.name}")
+        if recipe.source_column not in df.columns:
+            raise TableTransformError(f"未知来源列: {recipe.source_column}")
+
+        current = df[recipe.source_column].copy()
+        original_index = df.index.copy()
+        for step_number, step in enumerate(recipe.steps, start=1):
+            self._validate_recipe_step(step, step_number)
+            step_input = current.copy()
+            try:
+                transformed, invalid = self._execute_recipe_step(df, current, step)
+            except TableTransformError:
+                raise
+            except Exception as exc:
+                raise TableTransformError(
+                    f"第 {step_number} 步“{step.operation}”执行失败: {exc}"
+                ) from exc
+
+            if not isinstance(transformed, pd.Series) or len(transformed) != len(df):
+                raise TableTransformError(
+                    f"第 {step_number} 步“{step.operation}”没有返回逐行结果"
+                )
+            if not transformed.index.equals(original_index):
+                raise TableTransformError(
+                    f"第 {step_number} 步“{step.operation}”改变了行索引"
+                )
+            invalid = pd.Series(invalid, index=original_index).fillna(True).astype(bool)
+            invalid_count = int(invalid.sum())
+            if invalid_count:
+                if step.on_error == "fail":
+                    raise TableTransformError(
+                        f"第 {step_number} 步“{step.operation}”有 "
+                        f"{invalid_count} 行无法处理"
+                    )
+                transformed = transformed.copy()
+                if step.on_error == "blank":
+                    transformed.loc[invalid] = pd.NA
+                else:
+                    transformed.loc[invalid] = step_input.loc[invalid]
+            current = transformed
+
+        if len(current) != len(df) or not current.index.equals(original_index):
+            raise TableTransformError("新增列结果与原表行数或顺序不一致")
+        result = df.copy()
+        result[recipe.name] = current
+        return result
+
+    def _validate_recipe_step(self, step: RecipeStep, step_number: int) -> None:
+        if not isinstance(step, RecipeStep):
+            raise TableTransformError(f"第 {step_number} 步不是有效的转换步骤")
+        schema = self.RECIPE_PARAMETER_SCHEMA.get(step.operation)
+        if schema is None:
+            raise TableTransformError(f"不支持的新增列操作: {step.operation}")
+        required, optional = schema
+        supplied = set(step.parameters)
+        missing = sorted(required - supplied)
+        unknown = sorted(supplied - required - optional)
+        if missing:
+            raise TableTransformError(
+                f"第 {step_number} 步“{step.operation}”缺少参数: {missing}"
+            )
+        if unknown:
+            raise TableTransformError(
+                f"第 {step_number} 步“{step.operation}”包含未知参数: {unknown}"
+            )
+
+    def _execute_recipe_step(
+        self,
+        df: pd.DataFrame,
+        current: pd.Series,
+        step: RecipeStep,
+    ) -> tuple[pd.Series, pd.Series]:
+        operation = getattr(self, f"_recipe_{step.operation}", None)
+        if operation is None:
+            raise TableTransformError(f"不支持的新增列操作: {step.operation}")
+        return operation(df, current, step)
+
+    def _recipe_trim(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df, step
+        return _string_series(current).str.strip(), _false_mask(current.index)
+
+    def _recipe_lower(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df, step
+        return _string_series(current).str.lower(), _false_mask(current.index)
+
+    def _recipe_upper(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df, step
+        return _string_series(current).str.upper(), _false_mask(current.index)
+
+    def _recipe_title(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df, step
+        return _string_series(current).str.title(), _false_mask(current.index)
+
+    def _recipe_length(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df, step
+        return _string_series(current).str.len(), _false_mask(current.index)
+
+    def _recipe_replace_literal(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df
+        old = self._text_parameter(step, "old", allow_empty=False)
+        new = self._text_parameter(step, "new", allow_empty=True)
+        return (
+            _string_series(current).str.replace(old, new, regex=False),
+            _false_mask(current.index),
+        )
+
+    def _recipe_remove_prefix(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df
+        prefix = self._text_parameter(step, "prefix", allow_empty=False)
+        values = _string_series(current)
+        matches = values.str.startswith(prefix, na=False)
+        return values.where(~matches, values.str.slice(start=len(prefix))), _false_mask(current.index)
+
+    def _recipe_remove_suffix(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df
+        suffix = self._text_parameter(step, "suffix", allow_empty=False)
+        values = _string_series(current)
+        matches = values.str.endswith(suffix, na=False)
+        return values.where(~matches, values.str.slice(stop=-len(suffix))), _false_mask(current.index)
+
+    def _recipe_slice(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df
+        start = self._optional_int_parameter(step, "start")
+        end = self._optional_int_parameter(step, "end")
+        return _string_series(current).str.slice(start=start, stop=end), _false_mask(current.index)
+
+    def _recipe_split_take(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df
+        delimiter = self._text_parameter(step, "delimiter", allow_empty=False)
+        index = self._int_parameter(step, "index")
+        values = _string_series(current)
+        transformed = values.str.split(delimiter, regex=False).str[index]
+        invalid = values.notna() & transformed.isna()
+        return transformed, invalid
+
+    def _recipe_before(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df
+        delimiter = self._text_parameter(step, "delimiter", allow_empty=False)
+        values = _string_series(current)
+        present = values.str.contains(delimiter, regex=False, na=False)
+        transformed = values.str.split(delimiter, n=1, regex=False).str[0]
+        return transformed, values.notna() & ~present
+
+    def _recipe_after(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df
+        delimiter = self._text_parameter(step, "delimiter", allow_empty=False)
+        values = _string_series(current)
+        present = values.str.contains(delimiter, regex=False, na=False)
+        transformed = values.str.split(delimiter, n=1, regex=False).str[1]
+        return transformed, values.notna() & ~present
+
+    def _recipe_between(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df
+        start = self._text_parameter(step, "start", allow_empty=False)
+        end = self._text_parameter(step, "end", allow_empty=False)
+        values = _string_series(current)
+        after_start = values.str.split(start, n=1, regex=False).str[1]
+        transformed = after_start.str.split(end, n=1, regex=False).str[0]
+        start_present = values.str.contains(start, regex=False, na=False)
+        end_present = after_start.str.contains(end, regex=False, na=False)
+        invalid = values.notna() & ~(start_present & end_present)
+        return transformed, invalid
+
+    def _recipe_path_name(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df, step
+        normalized = _string_series(current).str.replace("\\", "/", regex=False)
+        return normalized.str.rsplit("/", n=1).str[-1], _false_mask(current.index)
+
+    def _recipe_path_parent(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df, step
+        normalized = _string_series(current).str.replace("\\", "/", regex=False)
+        has_parent = normalized.str.contains("/", regex=False, na=False)
+        parent = normalized.str.rsplit("/", n=1).str[0].where(has_parent, "")
+        return parent, _false_mask(current.index)
+
+    def _recipe_path_suffix(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df, step
+        name, _ = self._recipe_path_name(
+            pd.DataFrame(index=current.index),
+            current,
+            RecipeStep.create("path_name"),
+        )
+        parts = name.str.rpartition(".")
+        has_suffix = parts[0].ne("") & parts[1].eq(".") & parts[2].ne("")
+        suffix = ("." + parts[2]).where(has_suffix, "")
+        return suffix, _false_mask(current.index)
+
+    def _recipe_path_stem(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df, step
+        name, _ = self._recipe_path_name(
+            pd.DataFrame(index=current.index),
+            current,
+            RecipeStep.create("path_name"),
+        )
+        parts = name.str.rpartition(".")
+        has_suffix = parts[0].ne("") & parts[1].eq(".") & parts[2].ne("")
+        return name.where(~has_suffix, parts[0]), _false_mask(current.index)
+
+    def _recipe_prepend(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        operand = self._resolve_recipe_value(df, current, step, "value")
+        return _string_series(operand) + _string_series(current), _false_mask(current.index)
+
+    def _recipe_append(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        operand = self._resolve_recipe_value(df, current, step, "value")
+        return _string_series(current) + _string_series(operand), _false_mask(current.index)
+
+    def _recipe_to_number(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df, step
+        transformed = pd.to_numeric(current, errors="coerce")
+        return transformed, current.notna() & transformed.isna()
+
+    def _recipe_add(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        return self._numeric_binary(df, current, step, lambda left, right: left + right)
+
+    def _recipe_subtract(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        return self._numeric_binary(df, current, step, lambda left, right: left - right)
+
+    def _recipe_multiply(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        return self._numeric_binary(df, current, step, lambda left, right: left * right)
+
+    def _recipe_divide(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        return self._numeric_binary(
+            df,
+            current,
+            step,
+            lambda left, right: left / right,
+            reject_zero=True,
+        )
+
+    def _recipe_absolute(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df, step
+        numeric = pd.to_numeric(current, errors="coerce")
+        return numeric.abs(), current.notna() & numeric.isna()
+
+    def _recipe_round(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        del df
+        digits = self._optional_int_parameter(step, "digits")
+        if digits is None:
+            digits = 0
+        numeric = pd.to_numeric(current, errors="coerce")
+        return numeric.round(digits), current.notna() & numeric.isna()
+
+    def _recipe_fill_missing(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        value = self._resolve_recipe_value(df, current, step, "value")
+        return current.where(current.notna(), value), _false_mask(current.index)
+
+    def _recipe_conditional(
+        self, df: pd.DataFrame, current: pd.Series, step: RecipeStep
+    ) -> tuple[pd.Series, pd.Series]:
+        operator = self._text_parameter(step, "operator", allow_empty=False)
+        allowed = {
+            "eq",
+            "ne",
+            "gt",
+            "ge",
+            "lt",
+            "le",
+            "contains",
+            "starts_with",
+            "ends_with",
+            "is_missing",
+            "not_missing",
+        }
+        if operator not in allowed:
+            raise TableTransformError(f"不支持的条件操作符: {operator}")
+        if operator in {"is_missing", "not_missing"}:
+            if "compare_to" in step.parameters:
+                raise TableTransformError(f"条件 {operator} 不接受 compare_to")
+            mask = current.isna()
+            if operator == "not_missing":
+                mask = ~mask
+        else:
+            if "compare_to" not in step.parameters:
+                raise TableTransformError(f"条件 {operator} 缺少 compare_to")
+            compare_to = self._resolve_recipe_value(df, current, step, "compare_to")
+            mask = self._conditional_mask(current, compare_to, operator)
+        mask = pd.Series(mask, index=current.index).fillna(False).astype(bool)
+        when_true = self._resolve_recipe_value(df, current, step, "when_true")
+        when_false = self._resolve_recipe_value(df, current, step, "when_false")
+        return when_true.where(mask, when_false), _false_mask(current.index)
+
+    def _numeric_binary(
+        self,
+        df: pd.DataFrame,
+        current: pd.Series,
+        step: RecipeStep,
+        operation: Callable[[pd.Series, pd.Series], pd.Series],
+        *,
+        reject_zero: bool = False,
+    ) -> tuple[pd.Series, pd.Series]:
+        operand = self._resolve_recipe_value(df, current, step, "value")
+        left = pd.to_numeric(current, errors="coerce")
+        right = pd.to_numeric(operand, errors="coerce")
+        invalid = (current.notna() & left.isna()) | (operand.notna() & right.isna())
+        if reject_zero:
+            invalid |= right.eq(0) & left.notna()
+            right = right.mask(right.eq(0))
+        return operation(left, right), invalid
+
+    def _conditional_mask(
+        self,
+        current: pd.Series,
+        compare_to: pd.Series,
+        operator: str,
+    ) -> pd.Series:
+        comparisons = {
+            "eq": pd.Series.eq,
+            "ne": pd.Series.ne,
+            "gt": pd.Series.gt,
+            "ge": pd.Series.ge,
+            "lt": pd.Series.lt,
+            "le": pd.Series.le,
+        }
+        if operator in comparisons:
+            valid = current.notna() & compare_to.notna()
+            result = _false_mask(current.index)
+            positions = valid.to_numpy().nonzero()[0]
+            if len(positions):
+                compared = comparisons[operator](
+                    current.iloc[positions],
+                    compare_to.iloc[positions],
+                )
+                result.iloc[positions] = compared.to_numpy(dtype=bool)
+            return result
+        left = _string_series(current)
+        right = _string_series(compare_to)
+        if operator == "contains":
+            return pd.Series(
+                [
+                    False if pd.isna(lval) or pd.isna(rval) else rval in lval
+                    for lval, rval in zip(left.array, right.array)
+                ],
+                index=current.index,
+            )
+        if operator == "starts_with":
+            return pd.Series(
+                [
+                    False if pd.isna(lval) or pd.isna(rval) else lval.startswith(rval)
+                    for lval, rval in zip(left.array, right.array)
+                ],
+                index=current.index,
+            )
+        return pd.Series(
+            [
+                False if pd.isna(lval) or pd.isna(rval) else lval.endswith(rval)
+                for lval, rval in zip(left.array, right.array)
+            ],
+            index=current.index,
+        )
+
+    def _resolve_recipe_value(
+        self,
+        df: pd.DataFrame,
+        current: pd.Series,
+        step: RecipeStep,
+        parameter: str,
+    ) -> pd.Series:
+        value = step.parameters.get(parameter)
+        if not isinstance(value, RecipeValue):
+            raise TableTransformError(f"参数 {parameter} 必须选择当前值、列或固定值")
+        if value.kind == "current":
+            return current.copy()
+        if value.kind == "column":
+            column = str(value.value)
+            if column not in df.columns:
+                raise TableTransformError(f"未知引用列: {column}")
+            return df[column].copy()
+        return _broadcast(value.value, current.index)
+
+    def _text_parameter(
+        self,
+        step: RecipeStep,
+        name: str,
+        *,
+        allow_empty: bool,
+    ) -> str:
+        value = step.parameters.get(name)
+        if not isinstance(value, str):
+            raise TableTransformError(f"参数 {name} 必须是文本")
+        if not allow_empty and not value:
+            raise TableTransformError(f"参数 {name} 不能为空")
+        return value
+
+    def _int_parameter(self, step: RecipeStep, name: str) -> int:
+        value = step.parameters.get(name)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TableTransformError(f"参数 {name} 必须是整数")
+        return value
+
+    def _optional_int_parameter(self, step: RecipeStep, name: str) -> int | None:
+        if name not in step.parameters or step.parameters[name] is None:
+            return None
+        return self._int_parameter(step, name)
 
     def rename_columns(self, df: pd.DataFrame, mapping: dict[str, str]) -> pd.DataFrame:
         self._require_columns(df, list(mapping.keys()))
