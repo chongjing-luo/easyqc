@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import os
+import platform
 import subprocess
 import sys
 
@@ -25,7 +26,7 @@ def test_installer_script_exposes_only_the_approved_commands() -> None:
     assert process.stderr == ""
 
 
-def test_installer_status_process_emits_one_json_object(
+def test_installer_status_process_obeys_native_support_boundary(
     tmp_path: Path,
 ) -> None:
     project_root = Path(__file__).resolve().parents[2]
@@ -52,6 +53,18 @@ def test_installer_status_process_emits_one_json_object(
         encoding="utf-8",
         check=False,
     )
+
+    if sys.platform == "win32" and platform.release() != "11":
+        assert process.returncode == 1
+        assert process.stdout == ""
+        assert process.stderr.startswith(
+            "easyqc-install: error: managed runtime supports "
+            "Windows 11 x86_64 only; "
+        )
+        assert f"observed Windows {platform.release()} " in process.stderr
+        assert process.stderr.count("\n") == 1
+        assert list(tmp_path.iterdir()) == []
+        return
 
     assert process.returncode == 0
     assert process.stdout.startswith("{")
