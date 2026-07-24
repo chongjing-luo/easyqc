@@ -271,6 +271,9 @@ def test_workflow_routes_three_reports_through_existing_runner(
     assert "--attempt-root" in text
     assert "QT_QPA_PLATFORM: offscreen" in text
     assert "EASYQC_LOG_DIR:" in text
+    assert text.count(
+        "${{ runner.temp }}/easyqc-logs-${{ matrix.row_id }}"
+    ) == 3
     assert "EASYQC_CI_RELEASE_ID: ${{ inputs.release_id }}" in text
     assert "EASYQC_CI_MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}" in text
 
@@ -524,3 +527,131 @@ def test_source_identity_probe_does_not_hide_untracked_files(
 
     assert '"--untracked-files=all"' in source
     assert '"--untracked-files=no"' not in source
+
+
+def test_preparation_failure_emits_safe_annotation_and_uploadable_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _preparation_module()
+    diagnostic_root = tmp_path / "ci-logs"
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    monkeypatch.setenv("GITHUB_SHA", "a" * 40)
+    monkeypatch.setenv("EASYQC_LOG_DIR", str(diagnostic_root))
+    monkeypatch.setattr(
+        module,
+        "inspect_ci_environment",
+        lambda environ: (_ for _ in ()).throw(
+            module.CiPreparationError("bad % identity\r\nsecond line")
+        ),
+    )
+
+    result = module.main(
+        [
+            "--matrix-row-id",
+            "ci-windows-2022-x86_64",
+            "--runner-label",
+            "windows-2022",
+            "--target-lock",
+            "packaging/locks/python-3.10.17/windows-x86_64/test.txt",
+            "--output-root",
+            str(tmp_path / "inputs"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert (
+        "::error title=EasyQC CI preparation failed::"
+        "bad %25 identity%0D%0Asecond line"
+    ) in captured.err
+    diagnostic = diagnostic_root / "prepare-ci-error.txt"
+    assert diagnostic.is_file()
+    text = diagnostic.read_text(encoding="utf-8")
+    assert "run_id=ci-123-2-ci-windows-2022-x86_64" in text
+    assert "matrix_row_id=ci-windows-2022-x86_64" in text
+    assert "error=bad % identity\\r\\nsecond line" in text
+    assert not (tmp_path / "inputs").exists()
+
+
+def test_local_preparation_failure_keeps_stderr_without_workflow_annotation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _preparation_module()
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("EASYQC_LOG_DIR", raising=False)
+    monkeypatch.setenv("GITHUB_RUN_ID", "local")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setattr(
+        module,
+        "inspect_ci_environment",
+        lambda environ: (_ for _ in ()).throw(
+            module.CiPreparationError("local failure")
+        ),
+    )
+
+    result = module.main(
+        [
+            "--matrix-row-id",
+            "ci-ubuntu-22.04-x86_64",
+            "--runner-label",
+            "ubuntu-22.04",
+            "--target-lock",
+            "packaging/locks/python-3.10.17/linux-x86_64/test.txt",
+            "--output-root",
+            str(tmp_path / "inputs"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert "ERROR CI verification preparation: local failure" in captured.err
+    assert "::error" not in captured.err
+    assert "::warning" not in captured.err
+
+
+def test_preparation_diagnostic_write_failure_is_visible_without_masking_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _preparation_module()
+    occupied = tmp_path / "not-a-directory"
+    occupied.write_text("occupied", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_RUN_ID", "456")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("EASYQC_LOG_DIR", str(occupied))
+    monkeypatch.setattr(
+        module,
+        "inspect_ci_environment",
+        lambda environ: (_ for _ in ()).throw(
+            module.CiPreparationError("primary failure")
+        ),
+    )
+
+    result = module.main(
+        [
+            "--matrix-row-id",
+            "ci-macos-15-arm64",
+            "--runner-label",
+            "macos-15",
+            "--target-lock",
+            "packaging/locks/python-3.10.17/macos-arm64/test.txt",
+            "--output-root",
+            str(tmp_path / "inputs"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert (
+        "::error title=EasyQC CI preparation failed::primary failure"
+    ) in captured.err
+    assert "ERROR CI diagnostic write:" in captured.err
+    assert "::warning title=EasyQC CI diagnostic write failed::" in captured.err

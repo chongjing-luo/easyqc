@@ -640,6 +640,70 @@ def _optional_environment_value(environ: Mapping[str, str], name: str) -> str | 
     return value or None
 
 
+def _github_command_escape(value: str) -> str:
+    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _emit_github_annotation(
+    environ: Mapping[str, str],
+    level: str,
+    title: str,
+    message: str,
+) -> None:
+    if environ.get("GITHUB_ACTIONS", "").lower() != "true":
+        return
+    print(
+        f"::{level} title={_github_command_escape(title)}::"
+        f"{_github_command_escape(message)}",
+        file=sys.stderr,
+    )
+
+
+def _diagnostic_line(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("\r", "\\r").replace("\n", "\\n")
+
+
+def _write_preparation_failure_diagnostic(
+    environ: Mapping[str, str],
+    *,
+    run_id: str,
+    matrix_row_id: str,
+    message: str,
+) -> Path:
+    configured_root = environ.get("EASYQC_LOG_DIR", "").strip()
+    if not configured_root:
+        raise CiPreparationError("EASYQC_LOG_DIR is not configured")
+    diagnostic_root = Path(configured_root)
+    if not diagnostic_root.is_absolute():
+        raise CiPreparationError("EASYQC_LOG_DIR must be absolute")
+    if diagnostic_root.is_symlink():
+        raise CiPreparationError("EASYQC_LOG_DIR must not be a symlink")
+    if diagnostic_root.exists():
+        if not diagnostic_root.is_dir():
+            raise CiPreparationError("EASYQC_LOG_DIR must be a directory")
+    else:
+        parent = diagnostic_root.parent
+        if parent.is_symlink() or not parent.is_dir():
+            raise CiPreparationError(
+                "EASYQC_LOG_DIR parent must be a real directory"
+            )
+        diagnostic_root.mkdir(mode=0o700)
+
+    diagnostic_path = diagnostic_root / "prepare-ci-error.txt"
+    if diagnostic_path.exists() or diagnostic_path.is_symlink():
+        raise CiPreparationError("preparation diagnostic already exists")
+    content = (
+        "EasyQC CI preparation failure\n"
+        f"run_id={_diagnostic_line(run_id)}\n"
+        f"matrix_row_id={_diagnostic_line(matrix_row_id)}\n"
+        f"source_revision={_diagnostic_line(environ.get('GITHUB_SHA', ''))}\n"
+        f"error={_diagnostic_line(message)}\n"
+    )
+    with diagnostic_path.open("x", encoding="utf-8", newline="\n") as handle:
+        handle.write(content)
+    return diagnostic_path
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--matrix-row-id", required=True)
@@ -651,6 +715,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    run_id = "unavailable"
     try:
         run_id = (
             f"ci-{os.environ['GITHUB_RUN_ID']}-"
@@ -683,7 +748,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         CiPreparationError,
         PlatformVerificationContractError,
     ) as exc:
-        print(f"ERROR CI verification preparation: {exc}", file=sys.stderr)
+        message = str(exc)
+        print(f"ERROR CI verification preparation: {message}", file=sys.stderr)
+        _emit_github_annotation(
+            os.environ,
+            "error",
+            "EasyQC CI preparation failed",
+            message,
+        )
+        if os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
+            try:
+                _write_preparation_failure_diagnostic(
+                    os.environ,
+                    run_id=run_id,
+                    matrix_row_id=args.matrix_row_id,
+                    message=message,
+                )
+            except (OSError, ValueError, CiPreparationError) as diagnostic_exc:
+                diagnostic_message = str(diagnostic_exc)
+                print(
+                    f"ERROR CI diagnostic write: {diagnostic_message}",
+                    file=sys.stderr,
+                )
+                _emit_github_annotation(
+                    os.environ,
+                    "warning",
+                    "EasyQC CI diagnostic write failed",
+                    diagnostic_message,
+                )
         return 2
     print(
         f"PREPARED row={args.matrix_row_id} output={output_root}",
