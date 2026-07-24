@@ -7,6 +7,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 from models.managed_runtime import (
     ActivationPointerV1,
     InstallReceiptV1,
@@ -17,6 +19,105 @@ from models.platform_verification import (
     ReleaseDecisionV1,
     VerificationRunV1,
 )
+from scripts.run_replacement_first_throughput import (
+    FirstThroughputError,
+    _python_relative_path,
+    _synthetic_host_profile,
+    _write_synthetic_payload,
+)
+
+
+@pytest.mark.parametrize(
+    (
+        "host_platform",
+        "target_id",
+        "matrix_row_id",
+        "release_suffix",
+        "platform_identity",
+        "uv_filename",
+        "python_key",
+        "python_relative_path",
+    ),
+    (
+        (
+            "linux",
+            "ubuntu-22.04-x86_64",
+            "ci-ubuntu-22.04-x86_64",
+            "linux",
+            ("linux", "22.04", "x86_64"),
+            "uv",
+            "cpython-3.13.13-linux-x86_64-gnu",
+            "env/bin/python",
+        ),
+        (
+            "win32",
+            "windows-11-x86_64",
+            "ci-windows-2022-x86_64",
+            "windows",
+            ("windows", "2022", "x86_64"),
+            "uv.exe",
+            "cpython-3.13.13-windows-x86_64-none",
+            "env/Scripts/python.exe",
+        ),
+        (
+            "darwin",
+            "macos-13-arm64",
+            "ci-macos-15-arm64",
+            "macos",
+            ("macos", "15", "arm64"),
+            "uv",
+            "cpython-3.13.13-darwin-aarch64-none",
+            "env/bin/python",
+        ),
+    ),
+)
+def test_synthetic_host_profile_binds_target_row_identity_and_layout(
+    host_platform: str,
+    target_id: str,
+    matrix_row_id: str,
+    release_suffix: str,
+    platform_identity: tuple[str, str, str],
+    uv_filename: str,
+    python_key: str,
+    python_relative_path: str,
+) -> None:
+    profile = _synthetic_host_profile(host_platform)
+
+    assert profile.target.target_id == target_id
+    assert profile.matrix_row_id == matrix_row_id
+    assert profile.release_suffix == release_suffix
+    assert (
+        profile.platform_os,
+        profile.platform_version,
+        profile.platform_arch,
+    ) == platform_identity
+    assert profile.uv_filename == uv_filename
+    assert profile.python_key == python_key
+    assert _python_relative_path(profile.target.os).as_posix() == python_relative_path
+
+
+def test_synthetic_host_profile_rejects_unknown_host() -> None:
+    with pytest.raises(FirstThroughputError, match="unsupported synthetic host"):
+        _synthetic_host_profile("plan9")
+
+
+@pytest.mark.parametrize("host_platform", ("linux", "win32", "darwin"))
+def test_synthetic_payload_identity_follows_host_profile(
+    host_platform: str,
+    tmp_path: Path,
+) -> None:
+    profile = _synthetic_host_profile(host_platform)
+
+    manifest = _write_synthetic_payload(
+        tmp_path / profile.release_suffix,
+        "1.0.0",
+        profile,
+    )
+
+    assert manifest.release_id == f"easyqc-1.0.0-{profile.release_suffix}"
+    assert manifest.target == profile.target
+    assert manifest.uv.filename == profile.uv_filename
+    assert manifest.python.key == profile.python_key
 
 
 def _command(easyqc_root: Path, output_root: Path | None = None) -> list[str]:
@@ -58,6 +159,7 @@ def test_integrated_command_emits_rereadable_bound_authority(
     tmp_path: Path,
 ) -> None:
     output_root = tmp_path / "集成 output with spaces"
+    profile = _synthetic_host_profile()
 
     completed = _run(easyqc_root, tmp_path, output_root)
 
@@ -68,10 +170,11 @@ def test_integrated_command_emits_rereadable_bound_authority(
     assert tuple((output_root / "logs").glob("easyqc_*.log"))
 
     runtime_root = output_root / "runtime"
-    version_root = runtime_root / "versions" / "easyqc-1.0.0-linux"
+    pointer_path = runtime_root / "state" / "activation.txt"
+    pointer = ActivationPointerV1.from_bytes(pointer_path.read_bytes())
+    version_root = runtime_root / "versions" / pointer.active_release_id
     manifest_path = version_root / "release-manifest.json"
     receipt_path = version_root / "install-receipt.json"
-    pointer_path = runtime_root / "state" / "activation.txt"
     report_path = output_root / "reports" / "integrated-seam-report.json"
     run_path = output_root / "verification" / "verification-run.json"
     decision_path = output_root / "verification" / "release-decision.json"
@@ -79,7 +182,6 @@ def test_integrated_command_emits_rereadable_bound_authority(
 
     manifest = ReleaseManifestV1.from_canonical_bytes(manifest_path.read_bytes())
     receipt = InstallReceiptV1.from_canonical_bytes(receipt_path.read_bytes())
-    pointer = ActivationPointerV1.from_bytes(pointer_path.read_bytes())
     run = VerificationRunV1.from_canonical_bytes(run_path.read_bytes())
     decision = ReleaseDecisionV1.from_canonical_bytes(decision_path.read_bytes())
     report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -89,11 +191,27 @@ def test_integrated_command_emits_rereadable_bound_authority(
     assert manifest.release_id == receipt.release_id == pointer.active_release_id
     assert run.release.release_id == decision.release_id == manifest.release_id
     assert run.release.target_id == manifest.target.target_id
+    assert manifest.target == profile.target
+    assert manifest.uv.filename == profile.uv_filename
+    assert manifest.python.key == profile.python_key
+    assert run.matrix_row_id == profile.matrix_row_id
+    assert (
+        run.platform.os,
+        run.platform.version,
+        run.platform.arch,
+    ) == (
+        profile.platform_os,
+        profile.platform_version,
+        profile.platform_arch,
+    )
     assert decision.manifest_sha256 == manifest.sha256
     assert decision.source_revision == run.source.revision
     assert decision.evaluated_run_ids == (run.run_id,)
 
-    assert pointer.previous_release_id == "easyqc-2.0.0-linux"
+    assert (
+        pointer.previous_release_id
+        == report["runtime"]["updated_active_release_id"]
+    )
     assert pointer.generation == 3
     assert report["runtime"]["failed_update_pointer_preserved"] is True
     assert report["runtime"]["failed_stage_receipt_absent"] is True
@@ -147,6 +265,12 @@ def test_integrated_command_emits_rereadable_bound_authority(
     assert summary["manifest_sha256"] == manifest.sha256
     assert summary["decision"] == "NO-GO"
     assert summary["blocker_row_ids"] == list(expected_blockers)
+    assert summary["artifacts"]["manifest"] == manifest_path.relative_to(
+        output_root
+    ).as_posix()
+    assert summary["artifacts"]["receipt"] == receipt_path.relative_to(
+        output_root
+    ).as_posix()
 
 
 def test_command_requires_new_explicit_output_root(

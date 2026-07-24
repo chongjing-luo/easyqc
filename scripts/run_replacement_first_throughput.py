@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import os
 from pathlib import Path
+import shlex
 import sys
 import time
 from typing import TYPE_CHECKING, Sequence
@@ -31,17 +33,15 @@ if TYPE_CHECKING:
         ActivationPointerV1,
         InstallReceiptV1,
         ReleaseManifestV1,
+        RuntimeTargetV1,
     )
     from models.platform_verification import ReleaseDecisionV1, VerificationRunV1
 
 
 MIB = 1024 * 1024
 GIB = 1024 * 1024 * 1024
-TARGET_ID = "ubuntu-22.04-x86_64"
 FIXTURE_SOURCE_REVISION = "f" * 40
 COMMAND_VERSION = "replacement-first-throughput-v1"
-RUN_ID = "ft-r4-ci-ubuntu-22.04"
-RUN_ROW_ID = "ci-ubuntu-22.04-x86_64"
 REPORT_RELATIVE_PATH = "reports/integrated-seam-report.json"
 
 
@@ -49,8 +49,80 @@ class FirstThroughputError(RuntimeError):
     """Raised when an approved FT-R4 seam does not produce the exact contract."""
 
 
+@dataclass(frozen=True)
+class _SyntheticHostProfile:
+    target: RuntimeTargetV1
+    matrix_row_id: str
+    run_id: str
+    release_suffix: str
+    platform_os: str
+    platform_version: str
+    platform_arch: str
+    uv_filename: str
+    python_key: str
+
+
+def _synthetic_host_profile(
+    host_platform: str | None = None,
+) -> _SyntheticHostProfile:
+    """Bind one hosted OS to a coherent, explicitly synthetic authority."""
+
+    from models.managed_runtime import RuntimeTargetV1
+
+    selected = sys.platform if host_platform is None else host_platform
+    if selected == "linux":
+        return _SyntheticHostProfile(
+            target=RuntimeTargetV1("linux", "22.04", "x86_64"),
+            matrix_row_id="ci-ubuntu-22.04-x86_64",
+            run_id="ft-r4-ci-ubuntu-22.04",
+            release_suffix="linux",
+            platform_os="linux",
+            platform_version="22.04",
+            platform_arch="x86_64",
+            uv_filename="uv",
+            python_key="cpython-3.13.13-linux-x86_64-gnu",
+        )
+    if selected == "win32":
+        return _SyntheticHostProfile(
+            target=RuntimeTargetV1("windows", "11", "x86_64"),
+            matrix_row_id="ci-windows-2022-x86_64",
+            run_id="ft-r4-ci-windows-2022",
+            release_suffix="windows",
+            platform_os="windows",
+            platform_version="2022",
+            platform_arch="x86_64",
+            uv_filename="uv.exe",
+            python_key="cpython-3.13.13-windows-x86_64-none",
+        )
+    if selected == "darwin":
+        return _SyntheticHostProfile(
+            target=RuntimeTargetV1("macos", "13", "arm64"),
+            matrix_row_id="ci-macos-15-arm64",
+            run_id="ft-r4-ci-macos-15",
+            release_suffix="macos",
+            platform_os="macos",
+            platform_version="15",
+            platform_arch="arm64",
+            uv_filename="uv",
+            python_key="cpython-3.13.13-darwin-aarch64-none",
+        )
+    raise FirstThroughputError(
+        f"unsupported synthetic host platform: {selected!r}"
+    )
+
+
+def _python_relative_path(target_os: str) -> Path:
+    """Return the target-native Python path inside one synthetic version."""
+
+    if target_os == "windows":
+        return Path("env") / "Scripts" / "python.exe"
+    if target_os in {"linux", "macos"}:
+        return Path("env") / "bin" / "python"
+    raise FirstThroughputError(f"unsupported synthetic runtime OS: {target_os!r}")
+
+
 class _SyntheticUvAdapter:
-    """scaffold-simple: stdlib venv plus a deterministic version stub.
+    """scaffold-simple: host interpreter fixture plus deterministic version stub.
 
     limit=no real uv/Python-3.13/native launcher; trigger=passed FT-R4 evidence;
     follow-up=managed-runtime architecture section 14 items 3-7.
@@ -67,8 +139,19 @@ class _SyntheticUvAdapter:
         from utils.file_utils import FileUtils
 
         environment = request.version_root / "env"
-        venv.EnvBuilder(with_pip=False, symlinks=False).create(environment)
-        python_executable = environment / "bin" / "python"
+        python_executable = request.version_root / _python_relative_path(
+            request.manifest.target.os
+        )
+        if request.manifest.target.os == "macos":
+            python_executable.parent.mkdir(parents=True)
+            native_python = shlex.quote(str(Path(sys.executable).resolve()))
+            FileUtils.atomic_write(
+                python_executable,
+                f'#!/bin/sh\nexec {native_python} "$@"\n',
+            )
+            python_executable.chmod(0o755)
+        else:
+            venv.EnvBuilder(with_pip=False, symlinks=False).create(environment)
         app_root = request.version_root / "app"
         app_root.mkdir()
         entrypoint = app_root / request.manifest.easyqc.entrypoint
@@ -89,12 +172,13 @@ def run_first_throughput(output_root: Path) -> dict[str, object]:
 
     Input: one explicit nonexistent output-root path with an existing parent.
     Output: one JSON-compatible summary. Side effects: points EASYQC_LOG_DIR at
-    the root, writes only beneath it, creates three private stdlib venv staging
-    trees, runs bounded version subprocesses and creates one offscreen
+    the root, writes only beneath it, creates three private synthetic runtime
+    staging trees, runs bounded version subprocesses and creates one offscreen
     QApplication. Real acquisition, native execution and release approval are
     separate contracts.
     """
 
+    profile = _synthetic_host_profile()
     root = _create_output_root(output_root)
     os.environ["EASYQC_LOG_DIR"] = str(root / "logs")
     from core.platform_verification import evaluate_release_gate
@@ -113,7 +197,7 @@ def run_first_throughput(output_root: Path) -> dict[str, object]:
     started_at = _utc_now()
     started = time.perf_counter()
 
-    runtime_result = _run_runtime_transaction(root)
+    runtime_result = _run_runtime_transaction(root, profile)
     table_result = _run_table_seam()
     completed_at = _utc_now()
     duration_seconds = max(0.0, time.perf_counter() - started)
@@ -145,6 +229,7 @@ def run_first_throughput(output_root: Path) -> dict[str, object]:
         started_at=started_at,
         completed_at=completed_at,
         duration_seconds=duration_seconds,
+        profile=profile,
     )
     request = ReleaseGateRequestV1.from_json_object(
         {
@@ -178,6 +263,7 @@ def run_first_throughput(output_root: Path) -> dict[str, object]:
     blocker_row_ids = [
         blocker.matrix_row_id for blocker in reread_decision.blockers
     ]
+    version_relative_root = f"runtime/versions/{manifest.release_id}"
     summary: dict[str, object] = {
         "schema_version": 1,
         "sample_classification": "synthetic",
@@ -189,12 +275,8 @@ def run_first_throughput(output_root: Path) -> dict[str, object]:
         "decision": reread_decision.decision,
         "blocker_row_ids": blocker_row_ids,
         "artifacts": {
-            "manifest": (
-                "runtime/versions/easyqc-1.0.0-linux/release-manifest.json"
-            ),
-            "receipt": (
-                "runtime/versions/easyqc-1.0.0-linux/install-receipt.json"
-            ),
+            "manifest": f"{version_relative_root}/release-manifest.json",
+            "receipt": f"{version_relative_root}/install-receipt.json",
             "activation": "runtime/state/activation.txt",
             "seam_report": REPORT_RELATIVE_PATH,
             "verification_run": "verification/verification-run.json",
@@ -209,7 +291,7 @@ def run_first_throughput(output_root: Path) -> dict[str, object]:
         },
         "limitations": [
             "Stage 5 synthetic fixture only; no real CI or native PASS evidence.",
-            "Fake uv uses the current stdlib venv and a deterministic version stub.",
+            "Fake uv uses the current interpreter in a target-native fixture layout.",
             "Release remains NO-GO until every required real matrix row passes.",
         ],
     }
@@ -241,7 +323,10 @@ def _create_output_root(output_root: Path) -> Path:
     return root
 
 
-def _run_runtime_transaction(root: Path) -> dict[str, object]:
+def _run_runtime_transaction(
+    root: Path,
+    profile: _SyntheticHostProfile,
+) -> dict[str, object]:
     from core.managed_runtime import (
         ManagedRuntimeError,
         install_candidate,
@@ -255,8 +340,8 @@ def _run_runtime_transaction(root: Path) -> dict[str, object]:
     install_root = root / "runtime"
     payload_v1 = root / "payload-v1"
     payload_v2 = root / "payload-v2"
-    manifest_v1 = _write_synthetic_payload(payload_v1, "1.0.0")
-    manifest_v2 = _write_synthetic_payload(payload_v2, "2.0.0")
+    manifest_v1 = _write_synthetic_payload(payload_v1, "1.0.0", profile)
+    manifest_v2 = _write_synthetic_payload(payload_v2, "2.0.0", profile)
 
     receipt_v1 = install_candidate(
         _install_request(install_root, manifest_v1, payload_v1),
@@ -352,12 +437,16 @@ def _run_runtime_transaction(root: Path) -> dict[str, object]:
     }
 
 
-def _write_synthetic_payload(root: Path, version: str) -> ReleaseManifestV1:
+def _write_synthetic_payload(
+    root: Path,
+    version: str,
+    profile: _SyntheticHostProfile,
+) -> ReleaseManifestV1:
     from models.managed_runtime import ReleaseManifestV1
 
     root.mkdir()
     payloads = {
-        "uv": f"uv-{version}".encode("utf-8"),
+        profile.uv_filename: f"uv-{version}".encode("utf-8"),
         "python.tar.zst": f"python-{version}".encode("utf-8"),
         "easyqc-source.tar.gz": f"source-{version}".encode("utf-8"),
         "requirements.lock": f"lock-{version}".encode("utf-8"),
@@ -379,9 +468,9 @@ def _write_synthetic_payload(root: Path, version: str) -> ReleaseManifestV1:
     return ReleaseManifestV1.from_json_object(
         {
             "schema_version": 1,
-            "release_id": f"easyqc-{version}-linux",
+            "release_id": f"easyqc-{version}-{profile.release_suffix}",
             "channel": "candidate",
-            "target": {"os": "linux", "os_minimum": "22.04", "arch": "x86_64"},
+            "target": profile.target.to_json_object(),
             "easyqc": {
                 "version": version,
                 "source_filename": "easyqc-source.tar.gz",
@@ -392,14 +481,16 @@ def _write_synthetic_payload(root: Path, version: str) -> ReleaseManifestV1:
             },
             "uv": {
                 "version": "0.11.29",
-                "filename": "uv",
-                "size_bytes": len(payloads["uv"]),
-                "sha256": hashlib.sha256(payloads["uv"]).hexdigest(),
+                "filename": profile.uv_filename,
+                "size_bytes": len(payloads[profile.uv_filename]),
+                "sha256": hashlib.sha256(
+                    payloads[profile.uv_filename]
+                ).hexdigest(),
             },
             "python": {
                 "version": "3.13.13",
                 "build": "20260720",
-                "key": "cpython-3.13.13-linux-x86_64-gnu",
+                "key": profile.python_key,
                 "filename": "python.tar.zst",
                 "size_bytes": len(payloads["python.tar.zst"]),
                 "sha256": hashlib.sha256(payloads["python.tar.zst"]).hexdigest(),
@@ -440,7 +531,7 @@ def _install_request(
         install_root=install_root,
         manifest=manifest,
         artifact_root=artifact_root,
-        expected_target_id=TARGET_ID,
+        expected_target_id=manifest.target.target_id,
         smoke_timeout_seconds=30.0,
     )
 
@@ -517,6 +608,7 @@ def _build_verification_run(
     started_at: str,
     completed_at: str,
     duration_seconds: float,
+    profile: _SyntheticHostProfile,
 ) -> VerificationRunV1:
     from PySide6 import __version__ as pyside_version
     from PySide6.QtCore import qVersion
@@ -525,8 +617,8 @@ def _build_verification_run(
     return VerificationRunV1.from_json_object(
         {
             "schema_version": 1,
-            "run_id": RUN_ID,
-            "matrix_row_id": RUN_ROW_ID,
+            "run_id": profile.run_id,
+            "matrix_row_id": profile.matrix_row_id,
             "status": "PASS",
             "reason_code": None,
             "started_at_utc": started_at,
@@ -547,9 +639,9 @@ def _build_verification_run(
                 "lock_sha256": manifest.lock.sha256,
             },
             "platform": {
-                "os": "linux",
-                "version": "22.04",
-                "arch": "x86_64",
+                "os": profile.platform_os,
+                "version": profile.platform_version,
+                "arch": profile.platform_arch,
                 "kernel": "stage5-synthetic",
                 "runner_label": "local-stage5-synthetic",
                 "runner_image": "fixture-only-not-real-ci",
