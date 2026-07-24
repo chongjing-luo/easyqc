@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -153,7 +154,15 @@ class StableFakeAdapter:
     def materialize(self, request: MaterializationRequest) -> MaterializationResult:
         runtime_python = request.version_root / "runtime" / "python"
         runtime_python.parent.mkdir()
-        shutil.copy2(Path(sys.executable).resolve(), runtime_python)
+        if sys.platform == "darwin":
+            native_python = shlex.quote(str(Path(sys.executable).resolve()))
+            runtime_python.write_text(
+                f'#!/bin/sh\nexec {native_python} "$@"\n',
+                encoding="utf-8",
+            )
+            runtime_python.chmod(0o755)
+        else:
+            shutil.copy2(Path(sys.executable).resolve(), runtime_python)
         environment_python = request.version_root / "env" / "bin" / "python"
         environment_python.parent.mkdir(parents=True)
         environment_python.symlink_to(runtime_python)
