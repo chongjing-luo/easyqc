@@ -641,7 +641,7 @@ class QtTableWorkspace(QWidget):
         callback: Callable[[], Any],
     ) -> QAction:
         action = QAction(text, toolbar)
-        action.setToolTip(f"{text} ({shortcut.toString(QKeySequence.NativeText)})")
+        action.setToolTip(f"{text} ({shortcut.toString(QKeySequence.PortableText)})")
         action.triggered.connect(callback)
         toolbar.addAction(action)
         button = toolbar.widgetForAction(action)

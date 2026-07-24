@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 import pandas as pd
 from PySide6.QtCore import QSettings, Qt
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QAbstractButton,
     QComboBox,
@@ -394,7 +395,16 @@ def test_open_table_dialogs_switch_language_without_losing_drafts(qtbot, tmp_pat
 def test_table_accessible_descriptions_switch_to_english_without_rebuilding_pages(
     qtbot,
     tmp_path,
+    monkeypatch,
 ):
+    def shortcut_text(_sequence, mode=QKeySequence.NativeText):
+        return (
+            "PORTABLE"
+            if mode == QKeySequence.PortableText
+            else "NATIVE"
+        )
+
+    monkeypatch.setattr(QKeySequence, "toString", shortcut_text)
     controller = LanguageController(settings=_settings(tmp_path))
     source = pd.DataFrame(
         {
@@ -427,6 +437,11 @@ def test_table_accessible_descriptions_switch_to_english_without_rebuilding_page
         results_table.accessibleDescription()
         == "Read-only QC results. Filters, sorting and column settings apply "
         "to the complete result."
+    )
+    assert workspace.filter_action.toolTip() == "Filter (PORTABLE)"
+    assert (
+        results.table_workspace.filter_action.toolTip()
+        == "Filter (PORTABLE)"
     )
     assert not {
         text
