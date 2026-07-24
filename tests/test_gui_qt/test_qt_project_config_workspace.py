@@ -4,7 +4,7 @@ from threading import Event, get_ident
 
 import pandas as pd
 from shiboken6 import isValid
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QDesktopServices, QFontDatabase
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QToolBar,
     QToolButton,
@@ -942,6 +943,68 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
         lambda: workspace.module_code.horizontalScrollBar().maximum() > 0,
         timeout=2000,
     )
+
+
+def test_key_toolbars_keep_actions_visible_with_wide_native_buttons(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    native_size_hint = QToolButton.sizeHint
+    native_minimum_size_hint = QToolButton.minimumSizeHint
+
+    def wide_native_size_hint(button):
+        hint = QSize(native_size_hint(button))
+        hint.setWidth(max(hint.width(), 144))
+        return hint
+
+    def wide_native_minimum_size_hint(button):
+        hint = QSize(native_minimum_size_hint(button))
+        hint.setWidth(max(hint.width(), 144))
+        return hint
+
+    monkeypatch.setattr(QToolButton, "sizeHint", wide_native_size_hint)
+    monkeypatch.setattr(
+        QToolButton,
+        "minimumSizeHint",
+        wide_native_minimum_size_hint,
+    )
+    workspace, _config = _workspace(qtbot, tmp_path)
+    workspace.resize(640, 560)
+    workspace.show()
+    workspace.tabs.setCurrentWidget(workspace.modules_tab)
+    qtbot.wait(20)
+
+    assert workspace.new_project_button.isVisible()
+    assert workspace.import_project_button.isVisible()
+    assert workspace.new_module_button.isVisible()
+    assert workspace.import_module_button.isVisible()
+
+    footer_buttons = [
+        workspace.module_actions_toolbar.widgetForAction(action)
+        for action in (
+            workspace.delete_module_action,
+            workspace.export_module_action,
+            workspace.discard_module_action,
+            workspace.save_module_action,
+        )
+    ]
+    assert all(button.isVisible() for button in footer_buttons)
+    assert [button.x() for button in footer_buttons] == sorted(
+        button.x() for button in footer_buttons
+    )
+    assert (
+        workspace.module_actions_toolbar.sizePolicy().horizontalPolicy()
+        == QSizePolicy.Policy.Minimum
+    )
+
+    workspace.resize(480, 520)
+    qtbot.waitUntil(lambda: workspace.width() == 480)
+    extension = workspace.module_list_toolbar.findChild(
+        QToolButton,
+        "qt_toolbar_ext_button",
+    )
+    assert extension is not None and extension.isVisible()
 
 
 def test_qt_configuration_uses_responsive_toolbars_splitter_and_long_tooltips(

@@ -270,7 +270,7 @@ class QtProjectConfigWorkspace(QWidget):
         self.project_splitter.setCollapsible(1, False)
         self.project_splitter.setStretchFactor(0, 2)
         self.project_splitter.setStretchFactor(1, 3)
-        self.project_splitter.setSizes([300, 500])
+        self.project_splitter.setSizes([420, 580])
         layout.addWidget(self.project_splitter, 1)
 
         # Compatibility-only selector for the existing product shell. It is
@@ -619,6 +619,10 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_actions_toolbar.setMovable(False)
         self.module_actions_toolbar.setFloatable(False)
         self.module_actions_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.module_actions_toolbar.setSizePolicy(
+            QSizePolicy.Minimum,
+            QSizePolicy.Fixed,
+        )
         self.delete_module_action, self.delete_module_button = self._add_toolbar_action(
             self.module_actions_toolbar,
             "删除模块",
@@ -660,7 +664,7 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_splitter.setCollapsible(1, False)
         self.module_splitter.setStretchFactor(0, 2)
         self.module_splitter.setStretchFactor(1, 3)
-        self.module_splitter.setSizes([360, 640])
+        self.module_splitter.setSizes([450, 550])
         layout.addWidget(self.module_splitter, 1)
         self.module_launch_status_label = QLabel("", self.modules_tab)
         self.module_launch_status_label.setObjectName("moduleLaunchStatus")
