@@ -292,6 +292,15 @@ def _run(
     return code, stdout.getvalue(), stderr.getvalue()
 
 
+def _assert_success(
+    argv: list[str],
+    context: InstallerContext,
+) -> tuple[int, str, str]:
+    result = _run(argv, context)
+    assert result[0] == 0, result[2]
+    return result
+
+
 def _mutation_args(
     command: str,
     payload: Path,
@@ -322,7 +331,7 @@ def test_trusted_stable_install_and_status_json_are_receipt_backed(
         context,
     )
 
-    assert code == 0
+    assert code == 0, stderr
     assert "install complete" in stdout
     assert stderr == ""
     code, stdout, stderr = _run(["status", "--json"], context)
@@ -364,7 +373,10 @@ def test_failed_update_preserves_pointer_then_repair_update_and_rollback_work(
         exposure,
         QueueSmoke([True, False, True, True]),
     )
-    assert _run(_mutation_args("install", payload_v1, manifest_v1), context)[0] == 0
+    _assert_success(
+        _mutation_args("install", payload_v1, manifest_v1),
+        context,
+    )
     pointer_path = install_root / "state/activation.txt"
     original_pointer = pointer_path.read_bytes()
 
@@ -376,9 +388,15 @@ def test_failed_update_preserves_pointer_then_repair_update_and_rollback_work(
     assert code == 1
     assert "smoke" in stderr
     assert pointer_path.read_bytes() == original_pointer
-    assert _run(_mutation_args("repair", payload_v2, manifest_v2), context)[0] == 0
-    assert _run(_mutation_args("update", payload_v3, manifest_v3), context)[0] == 0
-    assert _run(["rollback"], context)[0] == 0
+    _assert_success(
+        _mutation_args("repair", payload_v2, manifest_v2),
+        context,
+    )
+    _assert_success(
+        _mutation_args("update", payload_v3, manifest_v3),
+        context,
+    )
+    _assert_success(["rollback"], context)
     status = json.loads(_run(["status", "--json"], context)[1])
     assert status["active_release_id"] == manifest_v2.release_id
     assert status["previous_release_id"] == manifest_v3.release_id
