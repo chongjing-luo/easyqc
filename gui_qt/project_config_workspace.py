@@ -225,11 +225,13 @@ class QtProjectConfigWorkspace(QWidget):
 
         self.project_detail_toolbar = QToolBar("项目信息操作", project_info_panel)
         self.project_detail_toolbar.setObjectName("projectDetailToolbar")
-        self.project_detail_toolbar.setProperty("compact", "true")
         self.project_detail_toolbar.setAccessibleName("项目信息操作")
         self.project_detail_toolbar.setMovable(False)
         self.project_detail_toolbar.setFloatable(False)
         self.project_detail_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.project_detail_toolbar.setStyleSheet(
+            "QToolButton { padding-left: 2px; padding-right: 2px; }"
+        )
         self.reload_projects_action, self.reload_projects_button = self._add_toolbar_action(
             self.project_detail_toolbar,
             "刷新",
