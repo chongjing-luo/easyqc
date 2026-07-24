@@ -193,7 +193,7 @@ def test_old_log_cleanup_stays_inside_the_active_directory(tmp_path) -> None:
     unrelated = tmp_path / "logs" / "keep.txt"
     old_log.write_text("old", encoding="utf-8")
     unrelated.write_text("keep", encoding="utf-8")
-    old_timestamp = time.time() - 31 * 24 * 60 * 60
+    old_timestamp = time.time() - 32 * 24 * 60 * 60
     os.utime(old_log, (old_timestamp, old_timestamp))
     expected_log_dir = (tmp_path / "logs").resolve()
     matched_before = tuple(
@@ -204,7 +204,7 @@ def test_old_log_cleanup_stays_inside_the_active_directory(tmp_path) -> None:
     assert instance.log_dir == expected_log_dir
     assert instance.status.file_logging_enabled is True
     assert old_log.name in matched_before
-    assert observed_age_seconds > 30 * 24 * 60 * 60
+    assert observed_age_seconds > 31 * 24 * 60 * 60
 
     instance.clear_old_logs(days=30)
 
