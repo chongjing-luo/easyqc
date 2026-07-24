@@ -20,7 +20,17 @@ from core.managed_runtime_platform import resolve_runtime_paths
 from models.managed_runtime import RuntimeTargetV1
 
 
-TARGET = RuntimeTargetV1("linux", "22.04", "x86_64")
+def _native_target() -> RuntimeTargetV1:
+    if sys.platform == "win32":
+        return RuntimeTargetV1("windows", "11", "x86_64")
+    if sys.platform == "darwin":
+        return RuntimeTargetV1("macos", "13", "arm64")
+    if sys.platform.startswith("linux"):
+        return RuntimeTargetV1("linux", "22.04", "x86_64")
+    raise RuntimeError("managed-runtime lock fixture requires a supported host")
+
+
+TARGET = _native_target()
 
 
 def _paths(root: Path):
@@ -67,7 +77,7 @@ from core.managed_runtime_platform import resolve_runtime_paths
 from models.managed_runtime import RuntimeTargetV1
 
 paths = resolve_runtime_paths(
-    RuntimeTargetV1("linux", "22.04", "x86_64"),
+    RuntimeTargetV1(sys.argv[2], sys.argv[3], sys.argv[4]),
     "user",
     user_data_root=sys.argv[1],
 )
@@ -76,7 +86,15 @@ with acquire_transaction_lease(paths):
     sys.stdin.readline()
 """
     child = subprocess.Popen(
-        [sys.executable, "-c", code, str(root)],
+        [
+            sys.executable,
+            "-c",
+            code,
+            str(root),
+            TARGET.os,
+            TARGET.os_minimum,
+            TARGET.arch,
+        ],
         cwd=easyqc_root,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,

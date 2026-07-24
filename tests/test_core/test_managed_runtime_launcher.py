@@ -32,14 +32,27 @@ from models.managed_runtime import ReleaseManifestV1, RuntimeTargetV1
 
 MIB = 1024 * 1024
 SOURCE_REVISION = "a" * 40
+POSIX_INTEGRATION = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="stable POSIX launcher integration requires POSIX scripts and symlinks",
+)
 
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _native_posix_target() -> RuntimeTargetV1:
+    if sys.platform == "darwin":
+        return RuntimeTargetV1("macos", "13", "arm64")
+    if sys.platform.startswith("linux"):
+        return RuntimeTargetV1("linux", "22.04", "x86_64")
+    raise RuntimeError("POSIX launcher fixture requires Linux or macOS")
+
+
 def _manifest(payload: Path, version: str = "1.0.0") -> ReleaseManifestV1:
     payload.mkdir(parents=True)
+    target = _native_posix_target()
     files = {
         "uv": b"uv",
         "python.tar.gz": b"python",
@@ -62,13 +75,9 @@ def _manifest(payload: Path, version: str = "1.0.0") -> ReleaseManifestV1:
     manifest = ReleaseManifestV1.from_json_object(
         {
             "schema_version": 1,
-            "release_id": f"easyqc-{version}-stable-linux",
+            "release_id": f"easyqc-{version}-stable-{target.os}",
             "channel": "stable",
-            "target": {
-                "os": "linux",
-                "os_minimum": "22.04",
-                "arch": "x86_64",
-            },
+            "target": target.to_json_object(),
             "easyqc": {
                 "version": version,
                 "source_filename": "easyqc-source.tar.gz",
@@ -84,7 +93,11 @@ def _manifest(payload: Path, version: str = "1.0.0") -> ReleaseManifestV1:
             "python": {
                 "version": "3.13.13",
                 "build": "20260720",
-                "key": "cpython-3.13.13-linux-x86_64-gnu",
+                "key": (
+                    "cpython-3.13.13-darwin-aarch64-none"
+                    if target.os == "macos"
+                    else "cpython-3.13.13-linux-x86_64-gnu"
+                ),
                 "filename": "python.tar.gz",
                 "size_bytes": len(files["python.tar.gz"]),
                 "sha256": _sha256(files["python.tar.gz"]),
@@ -108,6 +121,32 @@ def _manifest(payload: Path, version: str = "1.0.0") -> ReleaseManifestV1:
     )
     (payload / "release-manifest.json").write_bytes(manifest.canonical_bytes)
     return manifest
+
+
+def _passing_snapshot(target: RuntimeTargetV1) -> HostPreflightSnapshot:
+    if target.os == "macos":
+        return HostPreflightSnapshot(
+            os_name="macos",
+            os_version="13",
+            distribution_id=None,
+            arch="arm64",
+            available_free_bytes=2 * 1024 * MIB,
+            root_writable=True,
+            privileged=False,
+            root_is_safe=True,
+            available_native_libraries=(),
+        )
+    return HostPreflightSnapshot(
+        os_name="linux",
+        os_version="22.04",
+        distribution_id="ubuntu",
+        arch="x86_64",
+        available_free_bytes=2 * 1024 * MIB,
+        root_writable=True,
+        privileged=False,
+        root_is_safe=True,
+        available_native_libraries=("libxcb-cursor.so.0",),
+    )
 
 
 class StableFakeAdapter:
@@ -197,22 +236,13 @@ def _installed_runtime(tmp_path: Path):
             manifest=manifest,
             verified_artifacts=verified,
             source_revision=SOURCE_REVISION,
-            preflight_snapshot=HostPreflightSnapshot(
-                os_name="linux",
-                os_version="22.04",
-                distribution_id="ubuntu",
-                arch="x86_64",
-                available_free_bytes=2 * 1024 * MIB,
-                root_writable=True,
-                privileged=False,
-                root_is_safe=True,
-                available_native_libraries=("libxcb-cursor.so.0",),
-            ),
+            preflight_snapshot=_passing_snapshot(manifest.target),
         )
     )
     return paths, launchers
 
 
+@POSIX_INTEGRATION
 def test_posix_stable_launchers_run_in_fresh_shell_and_preserve_argv(
     tmp_path: Path,
 ) -> None:
@@ -269,6 +299,7 @@ def test_posix_stable_launchers_run_in_fresh_shell_and_preserve_argv(
     assert scope_state["path_contains_exposure"] is True
 
 
+@POSIX_INTEGRATION
 def test_posix_launcher_rejects_python_escape_and_never_overwrites_collision(
     tmp_path: Path,
 ) -> None:
@@ -316,6 +347,7 @@ def test_posix_launcher_rejects_python_escape_and_never_overwrites_collision(
     assert not (Path(other_paths.state_root) / "scope-state.json").exists()
 
 
+@POSIX_INTEGRATION
 def test_posix_launcher_rejects_malformed_pointer_and_symlinked_authority(
     tmp_path: Path,
 ) -> None:
