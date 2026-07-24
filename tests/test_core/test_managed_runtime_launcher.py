@@ -463,6 +463,7 @@ def test_new_file_writer_preserves_bytes_when_windows_text_mode_is_simulated(
 ) -> None:
     binary_flag = 1 << 29
     binary_descriptors: set[int] = set()
+    native_binary_flag = getattr(launcher_module.os, "O_BINARY", 0)
     original_open = launcher_module.os.open
     original_write = launcher_module.os.write
 
@@ -485,7 +486,7 @@ def test_new_file_writer_preserves_bytes_when_windows_text_mode_is_simulated(
     monkeypatch.setattr(
         launcher_module.os,
         "O_BINARY",
-        binary_flag,
+        binary_flag | native_binary_flag,
         raising=False,
     )
     monkeypatch.setattr(launcher_module.os, "open", simulated_windows_open)
