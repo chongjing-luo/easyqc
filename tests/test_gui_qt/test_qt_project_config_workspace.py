@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from threading import Event, get_ident
 
 import pandas as pd
@@ -131,7 +132,9 @@ def test_project_list_header_owns_right_side_create_import_actions_and_read_only
         lambda url: opened_directories.append(url.toLocalFile()) or True,
     )
     qtbot.mouseClick(workspace.open_project_directory_button, Qt.LeftButton)
-    assert opened_directories == [str(config.current_project.path)]
+    assert [Path(path) for path in opened_directories] == [
+        config.current_project.path
+    ]
 
 
 def test_project_list_click_previews_but_only_open_project_activates(
