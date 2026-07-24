@@ -7,7 +7,7 @@ import shlex
 import signal
 import subprocess
 import tempfile
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Mapping, Sequence
 
 from utils.logger import log_error
@@ -132,7 +132,10 @@ class CodeExecutor:
             legacy_mricrogl_parts = self._split_legacy_mricrogl_temp_script(command)
             if legacy_mricrogl_parts is not None:
                 return legacy_mricrogl_parts
-            parts = shlex.split(command, posix=self.system != "Windows")
+            if self.system == "Windows":
+                parts = self._split_windows_command_line(command)
+            else:
+                parts = shlex.split(command, posix=True)
         else:
             parts = [str(part) for part in command]
 
@@ -147,6 +150,76 @@ class CodeExecutor:
             .strip()
         )
 
+    def _split_windows_command_line(self, command: str) -> list[str]:
+        """Split a command using Windows C-runtime quoting rules.
+
+        ``shlex.split(..., posix=False)`` keeps surrounding double quotes in
+        returned arguments. That breaks both executable allowlist matching and
+        paths containing spaces. This parser keeps backslashes verbatim unless
+        they precede a double quote, matching the rules used by
+        ``subprocess.list2cmdline`` when the argument list is launched.
+        """
+
+        parts: list[str] = []
+        index = 0
+        length = len(command)
+
+        while index < length:
+            while index < length and command[index] in " \t":
+                index += 1
+            if index >= length:
+                break
+
+            argument: list[str] = []
+            in_quotes = False
+
+            while index < length:
+                character = command[index]
+                if character in " \t" and not in_quotes:
+                    break
+
+                if character == "\\":
+                    slash_start = index
+                    while index < length and command[index] == "\\":
+                        index += 1
+                    slash_count = index - slash_start
+
+                    if index < length and command[index] == '"':
+                        argument.extend("\\" * (slash_count // 2))
+                        if slash_count % 2:
+                            argument.append('"')
+                        else:
+                            in_quotes = not in_quotes
+                        index += 1
+                    else:
+                        argument.extend("\\" * slash_count)
+                    continue
+
+                if character == '"':
+                    in_quotes = not in_quotes
+                    index += 1
+                    continue
+
+                argument.append(character)
+                index += 1
+
+            if in_quotes:
+                raise CommandNotAllowedError("命令包含未闭合的双引号")
+
+            parts.append("".join(argument))
+            while index < length and command[index] in " \t":
+                index += 1
+
+        return parts
+
+    @staticmethod
+    def _normalize_windows_executable_name(executable: str) -> str:
+        name = PureWindowsPath(executable).name
+        suffix = PureWindowsPath(name).suffix.casefold()
+        if suffix in {".exe", ".com"}:
+            name = name[: -len(suffix)]
+        return name.casefold()
+
     def _validate_command_parts(self, parts: list[str], reject_shell_controls: bool = True) -> None:
         if not parts:
             raise CommandNotAllowedError("空命令不允许执行")
@@ -154,8 +227,24 @@ class CodeExecutor:
         if reject_shell_controls and any(re.search(r";|&&|\|\||\|", part) for part in parts):
             raise CommandNotAllowedError("不允许 shell 控制操作符")
 
-        executable = Path(parts[0]).name
-        if executable not in self.allowed_commands:
+        if self.system == "Windows":
+            executable = PureWindowsPath(parts[0]).name
+            suffix = PureWindowsPath(executable).suffix.casefold()
+            if suffix in {".bat", ".cmd"}:
+                raise CommandNotAllowedError(
+                    f"不允许 Windows shell 脚本作为可执行命令: {executable}"
+                )
+            normalized_executable = self._normalize_windows_executable_name(executable)
+            normalized_allowlist = {
+                self._normalize_windows_executable_name(allowed)
+                for allowed in self.allowed_commands
+            }
+            is_allowed = normalized_executable in normalized_allowlist
+        else:
+            executable = Path(parts[0]).name
+            is_allowed = executable in self.allowed_commands
+
+        if not is_allowed:
             raise CommandNotAllowedError(f"命令不在白名单中: {executable}")
 
     def _split_legacy_mricrogl_temp_script(self, command: str) -> list[str] | None:

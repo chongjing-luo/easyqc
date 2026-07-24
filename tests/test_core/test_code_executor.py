@@ -53,6 +53,58 @@ def test_split_command_handles_legacy_line_continuations() -> None:
     assert result == ["freeview", "--layout", "4", "-v", "/tmp/sub-001.nii.gz"]
 
 
+def test_split_command_windows_preserves_quoted_paths_and_unicode() -> None:
+    executor = CodeExecutor(allowed_commands=["mricrogl"], system="Windows")
+
+    result = executor.split_command(
+        '"C:\\Program Files\\MRIcroGL\\MRIcroGL.EXE" '
+        '"D:\\研究数据\\质控记录 01.nii.gz"'
+    )
+
+    assert result == [
+        "C:\\Program Files\\MRIcroGL\\MRIcroGL.EXE",
+        "D:\\研究数据\\质控记录 01.nii.gz",
+    ]
+
+
+def test_split_command_windows_accepts_safe_com_suffix_case_insensitively() -> None:
+    executor = CodeExecutor(allowed_commands=["viewer"], system="Windows")
+
+    result = executor.split_command(
+        '"C:\\QC Tools\\VIEWER.COM" "D:\\data\\record 01.nii.gz"'
+    )
+
+    assert result[0] == "C:\\QC Tools\\VIEWER.COM"
+
+
+@pytest.mark.parametrize("extension", [".bat", ".cmd"])
+def test_split_command_windows_rejects_shell_script_executables_even_if_listed(
+    extension: str,
+) -> None:
+    executor = CodeExecutor(
+        allowed_commands=[f"viewer{extension}"],
+        system="Windows",
+    )
+
+    with pytest.raises(CommandNotAllowedError, match="不允许"):
+        executor.split_command(f'"C:\\QC Tools\\viewer{extension}" record.nii.gz')
+
+
+def test_split_command_macos_preserves_quoted_application_and_unicode_paths() -> None:
+    executor = CodeExecutor(allowed_commands=["open"], system="Darwin")
+
+    result = executor.split_command(
+        'open -a "MRIcroGL" "/Users/reviewer/研究数据/质控记录 01.nii.gz"'
+    )
+
+    assert result == [
+        "open",
+        "-a",
+        "MRIcroGL",
+        "/Users/reviewer/研究数据/质控记录 01.nii.gz",
+    ]
+
+
 def test_split_command_converts_legacy_mricrogl_temp_script_without_shell() -> None:
     executor = CodeExecutor()
 
