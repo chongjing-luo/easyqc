@@ -56,6 +56,7 @@ from gui_qt.theme import (
     NAVIGATION_ROW_HEIGHT,
     SECTION_SPACING,
 )
+from models.column_recipe import ColumnRecipe
 from models.qcmodule import QCModule
 from models.table_view_state import (
     FilterExpression,
@@ -834,14 +835,12 @@ class QtMainWindow(QMainWindow):
 
     def _persist_derived_subject_column(
         self,
-        name: str,
-        expression: str,
+        recipe: ColumnRecipe,
     ) -> str:
         """Worker-side Core call; event publication stays on the GUI thread."""
 
         return self.services.configuration_service.derive_subject_column(
-            name,
-            expression,
+            recipe,
             notify=False,
         )
 

@@ -227,7 +227,7 @@ def test_derived_dialog_preparation_error_is_visible_instead_of_escaping(
 ):
     workspace = QtTableWorkspace(
         _source(),
-        derive_column_callback=lambda name, _expression: name,
+        derive_column_callback=lambda recipe: recipe.name,
     )
     qtbot.addWidget(workspace)
     workspace.show()

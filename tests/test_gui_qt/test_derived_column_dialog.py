@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import pandas as pd
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog
+from PySide6.QtWidgets import QDialog, QPlainTextEdit
 
 from gui_qt.derived_column_dialog import DerivedColumnDialog
+from models.column_recipe import ColumnRecipe, RecipeStep, RecipeValue
 
 
 def _source() -> pd.DataFrame:
@@ -17,62 +18,91 @@ def _source() -> pd.DataFrame:
     )
 
 
-def test_derived_column_dialog_inserts_column_and_previews_without_writing(qtbot):
+def test_derived_column_dialog_previews_ordered_recipe_without_writing(qtbot):
     commits = []
     dialog = DerivedColumnDialog(
         _source(),
-        lambda name, expression: commits.append((name, expression)),
+        commits.append,
     )
     qtbot.addWidget(dialog)
     dialog.show()
     dialog.name_edit.setText("age_next")
-    dialog.expression_edit.setPlainText("age")
-    age_item = dialog.columns_list.findItems("age", Qt.MatchExactly)[0]
-
-    dialog.columns_list.itemDoubleClicked.emit(age_item)
-    dialog.expression_edit.setPlainText("age + 1")
+    dialog.editor.set_source_column("age")
+    dialog.editor.set_steps(
+        (
+            RecipeStep.create(
+                "add",
+                value=RecipeValue.literal(1),
+            ),
+        )
+    )
     qtbot.mouseClick(dialog.preview_button, Qt.LeftButton)
 
     assert commits == []
     assert dialog.preview_table.rowCount() == 3
-    assert dialog.preview_table.columnCount() == 2
-    assert dialog.preview_table.horizontalHeaderItem(1).text() == "age_next"
-    assert dialog.preview_table.item(0, 1).text() == "30"
+    assert dialog.preview_table.columnCount() == 3
+    assert dialog.preview_table.horizontalHeaderItem(1).text() == "原始值"
+    assert dialog.preview_table.horizontalHeaderItem(2).text() == "age_next"
+    assert dialog.preview_table.item(0, 2).text() == "30"
     assert dialog.error_label.text() == ""
 
 
-def test_derived_column_dialog_rejects_unsafe_preview_and_commits_once(qtbot):
+def test_derived_column_dialog_has_no_code_editor_and_commits_recipe_once(qtbot):
     commits = []
 
-    def persist(name, expression):
-        commits.append((name, expression))
-        return name
+    def persist(recipe):
+        commits.append(recipe)
+        return recipe.name
 
     dialog = DerivedColumnDialog(_source(), persist)
     qtbot.addWidget(dialog)
     dialog.show()
-    dialog.name_edit.setText("unsafe")
-    dialog.expression_edit.setPlainText("__import__('os')")
-    qtbot.mouseClick(dialog.preview_button, Qt.LeftButton)
-    assert "白名单" in dialog.error_label.text()
-    assert commits == []
-
     dialog.name_edit.setText("age_next")
-    dialog.expression_edit.setPlainText("age + 1")
+    dialog.editor.set_source_column("age")
+    dialog.editor.set_steps(
+        (
+            RecipeStep.create(
+                "add",
+                value=RecipeValue.literal(1),
+            ),
+        )
+    )
+
+    assert dialog.findChildren(QPlainTextEdit) == []
+    assert "__import__" not in " ".join(
+        dialog.editor.operation_combo.itemText(index)
+        for index in range(dialog.editor.operation_combo.count())
+    )
     qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
     qtbot.waitUntil(lambda: dialog.result() == QDialog.Accepted, timeout=3000)
 
-    assert commits == [("age_next", "age + 1")]
+    assert len(commits) == 1
+    assert isinstance(commits[0], ColumnRecipe)
+    assert commits[0].name == "age_next"
+    assert commits[0].source_column == "age"
     assert dialog.committed_column == "age_next"
 
 
 def test_derived_column_preview_renders_missing_values_as_blank(qtbot):
     source = _source()
     source.loc[1, "age"] = pd.NA
-    dialog = DerivedColumnDialog(source, lambda name, _expression: name)
+    dialog = DerivedColumnDialog(source, lambda recipe: recipe.name)
     qtbot.addWidget(dialog)
     dialog.name_edit.setText("age_copy")
-    dialog.expression_edit.setPlainText("age")
+    dialog.editor.set_source_column("age")
 
     assert dialog.preview()
-    assert dialog.preview_table.item(1, 1).text() == ""
+    assert dialog.preview_table.item(1, 2).text() == ""
+
+
+def test_derived_column_dialog_shows_step_specific_validation_error(qtbot):
+    dialog = DerivedColumnDialog(_source(), lambda recipe: recipe.name)
+    qtbot.addWidget(dialog)
+    dialog.name_edit.setText("bad_split")
+    dialog.editor.set_source_column("age")
+    dialog.editor.set_steps(
+        (RecipeStep.create("split_take", delimiter="", index=0),)
+    )
+
+    assert not dialog.preview()
+    assert "delimiter" in dialog.error_label.text()

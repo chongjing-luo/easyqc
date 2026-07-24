@@ -31,6 +31,7 @@ from gui_qt.i18n import (
 from gui_qt.qc_results_page import QtQcResultsPage
 from gui_qt.sort_dialog import SortDialog
 from gui_qt.table_workspace import QtTableWorkspace
+from models.column_recipe import RecipeStep, RecipeValue
 from models.table_view_state import (
     ColumnViewState,
     FilterCondition,
@@ -358,9 +359,17 @@ def test_open_table_dialogs_switch_language_without_losing_drafts(qtbot, tmp_pat
     filter_dialog = FilterDialog(profiles, filter_expression)
     sort_dialog = SortDialog(columns.order, (SortRule("评分", True),))
     columns_dialog = ColumnsDialog(columns, columns)
-    derived_dialog = DerivedColumnDialog(source, lambda name, _expression: name)
+    derived_dialog = DerivedColumnDialog(source, lambda recipe: recipe.name)
     derived_dialog.name_edit.setText("age_next")
-    derived_dialog.expression_edit.setPlainText("age + 1")
+    derived_dialog.editor.set_source_column("age")
+    derived_dialog.editor.set_steps(
+        (
+            RecipeStep.create(
+                "add",
+                value=RecipeValue.literal(1),
+            ),
+        )
+    )
     dialogs = (filter_dialog, sort_dialog, columns_dialog, derived_dialog)
     for dialog in dialogs:
         qtbot.addWidget(dialog)
@@ -382,13 +391,13 @@ def test_open_table_dialogs_switch_language_without_losing_drafts(qtbot, tmp_pat
     assert sort_dialog.editor.rule_rows[0].column_combo.currentText() == "评分"
     filter_column_combo = filter_dialog.editor.condition_rows[0].column_combo
     assert filter_column_combo.itemText(filter_column_combo.findData("评分")) == "评分"
-    assert any(
-        derived_dialog.columns_list.item(row).text() == "评分"
-        for row in range(derived_dialog.columns_list.count())
-    )
+    assert derived_dialog.editor.source_combo.findData("评分") >= 0
     assert columns_dialog.editor.state() == columns
     assert derived_dialog.name_edit.text() == "age_next"
-    assert derived_dialog.expression_edit.toPlainText() == "age + 1"
+    assert derived_dialog.editor.source_combo.currentData() == "age"
+    assert derived_dialog.editor.recipe("age_next").steps[0].parameters[
+        "value"
+    ] == RecipeValue.literal(1)
     assert "Sort priority" in _widget_presentation_texts(sort_dialog)
 
 

@@ -56,6 +56,7 @@ from gui_qt.sort_panel import SortPanel
 from gui_qt.table_model import QtTableModel, QtTableRowReference
 from gui_qt.task_runner import RevisionedTaskController
 from gui_qt.theme import set_button_role
+from models.column_recipe import ColumnRecipe
 from models.table_view_state import (
     ColumnViewState,
     FilterCondition,
@@ -79,7 +80,7 @@ class QtTableWorkspace(QWidget):
         source: pd.DataFrame,
         *,
         on_open_qc: Callable[[str], None] | None = None,
-        derive_column_callback: Callable[[str, str], str] | None = None,
+        derive_column_callback: Callable[[ColumnRecipe], str] | None = None,
         derive_preview_source: Callable[[], pd.DataFrame] | None = None,
         on_derived_column_committed: Callable[[str], None] | None = None,
         page_size: int = 200,

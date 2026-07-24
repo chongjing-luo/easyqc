@@ -1,4 +1,4 @@
-"""Focused one-time derived-column dialog for the pre-QC list."""
+"""Safe one-time derived-column dialog for the authoritative QC list."""
 
 from __future__ import annotations
 
@@ -17,9 +17,6 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
-    QPlainTextEdit,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -28,12 +25,13 @@ from PySide6.QtWidgets import (
 )
 
 from core.table_transform import TableTransformEngine
-from gui_qt.i18n import protect_user_text
+from gui_qt.column_recipe_editor import ColumnRecipeEditor
 from gui_qt.task_runner import RevisionedTaskController
+from models.column_recipe import ColumnRecipe
 
 
 class DerivedColumnDialog(QDialog):
-    """Preview a restricted expression, then persist it once in a worker."""
+    """Preview a typed transformation chain, then persist it in a worker."""
 
     busyChanged = Signal(bool)
     columnCommitted = Signal(str)
@@ -41,19 +39,21 @@ class DerivedColumnDialog(QDialog):
     def __init__(
         self,
         preview_source: pd.DataFrame,
-        persist_column: Callable[[str, str], str],
+        persist_column: Callable[[ColumnRecipe], str],
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         if not isinstance(preview_source, pd.DataFrame):
             raise TypeError("DerivedColumnDialog preview source must be a DataFrame")
+        if preview_source.columns.empty:
+            raise ValueError("新增列预览来源至少需要一个列")
         if not callable(persist_column):
             raise TypeError("DerivedColumnDialog requires a persistence callback")
-        self._preview_source = preview_source.head(10).copy(deep=True)
+        self._preview_source = preview_source.head(20).copy(deep=True)
         self._persist_column = persist_column
         self._engine = TableTransformEngine()
         self._revision = 0
-        self._pending_request: tuple[int, str, str] | None = None
+        self._pending_request: tuple[int, ColumnRecipe] | None = None
         self.committed_column = ""
 
         self.setObjectName("derivedColumnDialog")
@@ -71,47 +71,27 @@ class DerivedColumnDialog(QDialog):
         self.name_edit = QLineEdit(self)
         self.name_edit.setObjectName("derivedColumnName")
         self.name_edit.setAccessibleName("新列名")
-        self.name_edit.setPlaceholderText("例如：age_next")
+        self.name_edit.setPlaceholderText("例如：scan_key")
         form.addRow("新列名", self.name_edit)
         layout.addLayout(form)
 
-        editor_row = QHBoxLayout()
-        columns_side = QVBoxLayout()
-        columns_label = QLabel("现有列（双击插入）", self)
-        self.columns_list = QListWidget(self)
-        self.columns_list.setObjectName("derivedColumnSources")
-        self.columns_list.setAccessibleName("可用于表达式的现有列")
-        protect_user_text(self.columns_list, "items")
-        for column in self._preview_source.columns:
-            item = QListWidgetItem(str(column), self.columns_list)
-            if not str(column).isidentifier():
-                item.setToolTip("该列名包含空格或标点，不能直接用于表达式")
-        columns_side.addWidget(columns_label)
-        columns_side.addWidget(self.columns_list, 1)
-        editor_row.addLayout(columns_side, 1)
-
-        expression_side = QVBoxLayout()
-        expression_side.addWidget(QLabel("计算表达式", self))
-        self.expression_edit = QPlainTextEdit(self)
-        self.expression_edit.setObjectName("derivedColumnExpression")
-        self.expression_edit.setAccessibleName("新增列计算表达式")
-        self.expression_edit.setPlaceholderText("例如：age + 1")
-        self.expression_edit.setMinimumHeight(
-            self.expression_edit.fontMetrics().lineSpacing() * 4
-        )
-        expression_side.addWidget(self.expression_edit, 1)
-        help_label = QLabel(
-            "支持算术、比较以及 abs、round、isna、notna、fillna、"
-            "contains、startswith、endswith、isin；不支持 Python 代码或 SQL。",
+        helper = QLabel(
+            "选择主要来源列，再按顺序添加转换步骤。路径操作只处理单元格文本，"
+            "不会读取文件；配方和中间结果不会保存。",
             self,
         )
-        help_label.setWordWrap(True)
-        expression_side.addWidget(help_label)
-        editor_row.addLayout(expression_side, 2)
-        layout.addLayout(editor_row, 1)
+        helper.setWordWrap(True)
+        layout.addWidget(helper)
+
+        columns = tuple(str(column) for column in self._preview_source.columns)
+        self.editor = ColumnRecipeEditor(columns, self)
+        self.editor.setObjectName("derivedColumnRecipeEditor")
+        self.editor.setAccessibleName("新增列转换步骤编辑器")
+        self.editor.validationError.connect(self._set_error)
+        layout.addWidget(self.editor, 3)
 
         preview_header = QHBoxLayout()
-        preview_header.addWidget(QLabel("前 10 行预览", self))
+        preview_header.addWidget(QLabel("前 20 行预览", self))
         preview_header.addStretch(1)
         self.preview_button = QPushButton("预览结果", self)
         self.preview_button.setAccessibleName("预览新增列结果")
@@ -120,8 +100,7 @@ class DerivedColumnDialog(QDialog):
 
         self.preview_table = QTableWidget(0, 0, self)
         self.preview_table.setObjectName("derivedColumnPreview")
-        self.preview_table.setAccessibleName("新增列前十行预览")
-        protect_user_text(self.preview_table, "headers")
+        self.preview_table.setAccessibleName("新增列前二十行预览")
         self.preview_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.preview_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.preview_table.verticalHeader().hide()
@@ -152,76 +131,68 @@ class DerivedColumnDialog(QDialog):
         self.cancel_button.setAccessibleName("取消新增列")
         layout.addWidget(self.button_box)
 
-        self.columns_list.itemDoubleClicked.connect(self._insert_column)
         self.preview_button.clicked.connect(self.preview)
         self.generate_button.clicked.connect(self._request_commit)
         self.cancel_button.clicked.connect(self.reject)
-        self.resize(780, 620)
+        self.resize(920, 760)
 
-    def _request_values(self) -> tuple[str, str]:
+    def _request_recipe(self) -> ColumnRecipe:
         name = self.name_edit.text().strip()
-        expression = self.expression_edit.toPlainText().strip()
         if not name:
             raise ValueError("新增列名不能为空")
         if not name.isidentifier() or keyword.iskeyword(name):
             raise ValueError("新增列名必须是不含空格或标点的有效字段名")
         if name in self._preview_source.columns:
             raise ValueError(f"列已存在: {name}")
-        if not expression:
-            raise ValueError("新增列表达式不能为空")
-        return name, expression
+        return self.editor.recipe(name)
 
-    def _evaluate_preview(self) -> tuple[str, str, pd.DataFrame]:
-        name, expression = self._request_values()
-        result = self._engine.derive_column(
+    def _evaluate_preview(
+        self,
+    ) -> tuple[ColumnRecipe, pd.DataFrame]:
+        recipe = self._request_recipe()
+        result = self._engine.derive_column_from_recipe(
             self._preview_source,
-            name,
-            expression,
+            recipe,
         )
-        return name, expression, result
-
-    @Slot(QListWidgetItem)
-    def _insert_column(self, item: QListWidgetItem) -> None:
-        column = item.text()
-        if not column.isidentifier():
-            self._set_error(
-                f"列名 '{column}' 包含空格或标点，不能直接用于表达式"
-            )
-            return
-        cursor = self.expression_edit.textCursor()
-        cursor.insertText(column)
-        self.expression_edit.setTextCursor(cursor)
-        self.expression_edit.setFocus()
-        self._set_error("")
+        return recipe, result
 
     def preview(self) -> bool:
         try:
-            name, _expression, result = self._evaluate_preview()
+            recipe, result = self._evaluate_preview()
         except (ArithmeticError, TypeError, ValueError) as exc:
             self._set_error(str(exc))
             return False
-        columns = [
-            column
-            for column in ("ezqcid", name)
-            if column in result.columns
-        ]
+        source = self._preview_source[recipe.source_column]
+        columns = ["ezqcid", "原始值", recipe.name]
         self.preview_table.clear()
         self.preview_table.setColumnCount(len(columns))
         self.preview_table.setHorizontalHeaderLabels(columns)
+        self.preview_table.horizontalHeaderItem(0).setData(
+            Qt.ItemDataRole.UserRole,
+            "ezqcid",
+        )
+        self.preview_table.horizontalHeaderItem(2).setData(
+            Qt.ItemDataRole.UserRole,
+            recipe.name,
+        )
         self.preview_table.setRowCount(len(result))
         for row in range(len(result)):
-            for column_index, column in enumerate(columns):
-                value = result.iloc[row][column]
+            identity = (
+                result.iloc[row]["ezqcid"]
+                if "ezqcid" in result.columns
+                else row + 1
+            )
+            values = (identity, source.iloc[row], result.iloc[row][recipe.name])
+            for column_index, value in enumerate(values):
                 self.preview_table.setItem(
                     row,
                     column_index,
                     QTableWidgetItem(self._display_value(value)),
                 )
-        if columns:
-            self.preview_table.horizontalHeader().setSectionResizeMode(
-                0,
-                QHeaderView.ResizeToContents,
-            )
+        self.preview_table.horizontalHeader().setSectionResizeMode(
+            0,
+            QHeaderView.ResizeToContents,
+        )
         self._set_error("")
         return True
 
@@ -229,17 +200,17 @@ class DerivedColumnDialog(QDialog):
         if self.task_controller.busy:
             return
         try:
-            name, expression, _preview = self._evaluate_preview()
+            recipe, _preview = self._evaluate_preview()
         except (ArithmeticError, TypeError, ValueError) as exc:
             self._set_error(str(exc))
             return
         self._revision += 1
         revision = self._revision
-        self._pending_request = (revision, name, expression)
+        self._pending_request = (revision, recipe)
         self._set_error("")
         self.task_controller.submit(
             revision,
-            lambda: self._persist_column(name, expression),
+            lambda: self._persist_column(recipe),
         )
 
     @Slot(int, object)
@@ -247,7 +218,7 @@ class DerivedColumnDialog(QDialog):
         pending = self._pending_request
         if pending is None or pending[0] != revision:
             return
-        name = pending[1]
+        name = pending[1].name
         if result != name:
             self._handle_commit_error(
                 revision,
@@ -270,8 +241,7 @@ class DerivedColumnDialog(QDialog):
     def _set_busy(self, busy: bool) -> None:
         for control in (
             self.name_edit,
-            self.expression_edit,
-            self.columns_list,
+            self.editor,
             self.preview_button,
             self.generate_button,
             self.cancel_button,
@@ -284,6 +254,7 @@ class DerivedColumnDialog(QDialog):
             return
         super().reject()
 
+    @Slot(str)
     def _set_error(self, message: str) -> None:
         self.error_label.setText(str(message))
         self.error_label.setVisible(bool(message))

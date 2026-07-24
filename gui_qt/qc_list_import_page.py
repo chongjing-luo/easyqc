@@ -38,6 +38,7 @@ from gui_qt.sort_dialog import SortDialog
 from gui_qt.table_model import QtTableModel
 from gui_qt.task_runner import RevisionedTaskController
 from gui_qt.theme import set_button_role
+from models.column_recipe import ColumnRecipe
 from models.table_view_state import (
     ColumnViewState,
     FilterExpression,
@@ -714,10 +715,9 @@ class QtQcListImportPage(QWidget):
         dialog.open()
         return dialog
 
-    def _persist_derived_subject_column(self, name: str, expression: str) -> str:
+    def _persist_derived_subject_column(self, recipe: ColumnRecipe) -> str:
         return self.configuration.derive_subject_column(
-            name,
-            expression,
+            recipe,
             notify=False,
         )
 

@@ -199,12 +199,12 @@ def test_import_page_groups_all_four_table_actions_and_derives_subject_column(
     dialog = page.derived_column_dialog
     assert dialog is not None and dialog.isVisible()
     assert [
-        dialog.columns_list.item(index).text()
-        for index in range(dialog.columns_list.count())
+        dialog.editor.source_combo.itemData(index)
+        for index in range(dialog.editor.source_combo.count())
     ] == ["ezqcid", "site"]
 
     dialog.name_edit.setText("site_copy")
-    dialog.expression_edit.setPlainText("site")
+    dialog.editor.set_source_column("site")
     qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
     qtbot.waitUntil(
         lambda: (
