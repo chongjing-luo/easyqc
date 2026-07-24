@@ -58,6 +58,11 @@ from gui_qt.theme import (
 )
 from models.column_recipe import ColumnRecipe
 from models.qcmodule import QCModule
+from models.qc_row_context import (
+    QcModuleMenuEntry,
+    QcRecordMenuEntry,
+    QcRowContext,
+)
 from models.table_view_state import (
     FilterExpression,
     filter_expression_to_json_object,
@@ -732,6 +737,21 @@ class QtMainWindow(QMainWindow):
             if snapshot.has_project
             else None
         )
+        for workspace in (self.table_workspace, self.results_workspace):
+            if snapshot.has_project:
+                workspace.set_row_context_actions(
+                    lambda identity, revision=snapshot.context_revision: (
+                        self._resolve_qc_row_context(identity, revision)
+                    ),
+                    lambda identity, entry, revision=snapshot.context_revision: (
+                        self._open_qc_row_module(identity, entry, revision)
+                    ),
+                    lambda entry, revision=snapshot.context_revision: (
+                        self._open_qc_row_record(entry, revision)
+                    ),
+                )
+            else:
+                workspace.set_row_context_actions(None, None, None)
         self._sync_preview_aliases()
         self._refresh_selectors(snapshot, previous_module if same_project else "")
         self.config_workspace.refresh(
@@ -1345,6 +1365,66 @@ class QtMainWindow(QMainWindow):
         self._install_qc_workspace(replacement, module_name)
         self._set_error("")
 
+    def _resolve_qc_row_context(
+        self,
+        identity: str,
+        context_revision: int,
+    ) -> QcRowContext:
+        if context_revision != self.current_context.context_revision:
+            raise ProjectContextError("该表格操作属于已失效的项目上下文")
+        return self.context_service.qc_row_context(
+            self.current_context,
+            identity,
+        )
+
+    def _open_qc_row_module(
+        self,
+        identity: str,
+        entry: QcModuleMenuEntry,
+        context_revision: int,
+    ) -> None:
+        if context_revision != self.current_context.context_revision:
+            self._set_error("该表格操作属于已失效的项目上下文")
+            return
+        if self.active_workflow is not None and self.active_workflow.dirty:
+            self._set_error("请先保存或放弃当前质控修改，再打开其他名单")
+            return
+        try:
+            replacement = self.context_service.create_qc_workflow(
+                self.current_context,
+                module_name=entry.module_name,
+                initial_ezqcid=identity,
+            )
+        except Exception as exc:
+            self._set_error(str(exc).strip() or type(exc).__name__)
+            return
+        self._install_qc_workspace(replacement, entry.module_name)
+        self._set_error("")
+
+    def _open_qc_row_record(
+        self,
+        entry: QcRecordMenuEntry,
+        context_revision: int,
+    ) -> None:
+        if context_revision != self.current_context.context_revision:
+            self._set_error("该表格操作属于已失效的项目上下文")
+            return
+        if self.active_workflow is not None and self.active_workflow.dirty:
+            self._set_error("请先保存或放弃当前质控修改，再打开其他名单")
+            return
+        try:
+            replacement = self.context_service.create_qc_record_workflow(
+                self.current_context,
+                ezqcid=entry.ezqcid,
+                module_name=entry.module_name,
+                rater=entry.rater,
+            )
+        except Exception as exc:
+            self._set_error(str(exc).strip() or type(exc).__name__)
+            return
+        self._install_qc_workspace(replacement, entry.module_name)
+        self._set_error("")
+
     def _install_qc_workspace(
         self,
         workflow: QcWorkflowService,
@@ -1364,6 +1444,19 @@ class QtMainWindow(QMainWindow):
         replacement.workspace.filterRequested.connect(
             self._open_qc_filter_dialog
         )
+        context_revision = self.current_context.context_revision
+        if self.current_context.has_project:
+            replacement.workspace.set_row_context_actions(
+                lambda identity, revision=context_revision: (
+                    self._resolve_qc_row_context(identity, revision)
+                ),
+                lambda identity, entry, revision=context_revision: (
+                    self._open_qc_row_module(identity, entry, revision)
+                ),
+                lambda entry, revision=context_revision: (
+                    self._open_qc_row_record(entry, revision)
+                ),
+            )
         replacement.closed.connect(
             lambda controller=replacement: self._qc_controller_closed(controller)
         )

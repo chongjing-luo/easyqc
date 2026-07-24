@@ -10,7 +10,7 @@ from threading import Event
 from typing import Any
 
 import pandas as pd
-from PySide6.QtCore import QEvent, QItemSelectionModel, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QItemSelectionModel, QPoint, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -51,12 +51,14 @@ from gui_qt.derived_column_dialog import DerivedColumnDialog
 from gui_qt.filter_dialog import FilterDialog
 from gui_qt.filter_panel import FilterPanel, operator_label
 from gui_qt.i18n import LanguageController, translate_ui_text
+from gui_qt.qc_row_context_menu import QcRowContextMenu
 from gui_qt.sort_dialog import SortDialog
 from gui_qt.sort_panel import SortPanel
 from gui_qt.table_model import QtTableModel, QtTableRowReference
 from gui_qt.task_runner import RevisionedTaskController
 from gui_qt.theme import set_button_role
 from models.column_recipe import ColumnRecipe
+from models.qc_row_context import QcModuleMenuEntry, QcRecordMenuEntry, QcRowContext
 from models.table_view_state import (
     ColumnViewState,
     FilterCondition,
@@ -83,6 +85,11 @@ class QtTableWorkspace(QWidget):
         derive_column_callback: Callable[[ColumnRecipe], str] | None = None,
         derive_preview_source: Callable[[], pd.DataFrame] | None = None,
         on_derived_column_committed: Callable[[str], None] | None = None,
+        row_context_provider: Callable[[str], QcRowContext] | None = None,
+        on_open_qc_module: (
+            Callable[[str, QcModuleMenuEntry], None] | None
+        ) = None,
+        on_open_qc_record: Callable[[QcRecordMenuEntry], None] | None = None,
         page_size: int = 200,
         background_row_threshold: int = 10_000,
         language: LanguageController | None = None,
@@ -130,6 +137,10 @@ class QtTableWorkspace(QWidget):
         self.derive_column_callback = derive_column_callback
         self.derive_preview_source = derive_preview_source
         self.on_derived_column_committed = on_derived_column_committed
+        self.row_context_provider = row_context_provider
+        self.on_open_qc_module = on_open_qc_module
+        self.on_open_qc_record = on_open_qc_record
+        self.active_row_context_menu: QcRowContextMenu | None = None
         self.initial_state = self.service.default_state(page_size=page_size)
         self.applied_state = self.initial_state
         self.draft_state: TableViewState | None = None
@@ -310,6 +321,8 @@ class QtTableWorkspace(QWidget):
         self.pinned_view.setAccessibleName("固定 ezqcid 列")
         self._configure_table(self.table_view)
         self._configure_table(self.pinned_view)
+        self.table_view.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.pinned_view.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table_view.setModel(self.table_model)
         self.pinned_view.setModel(self.table_model)
         self.pinned_view.setSelectionModel(self.table_view.selectionModel())
@@ -421,6 +434,12 @@ class QtTableWorkspace(QWidget):
         self.pinned_view.horizontalHeader().sectionClicked.connect(self._header_clicked)
         self.pinned_view.horizontalHeader().sectionResized.connect(self._pinned_section_resized)
         self.table_view.selectionModel().selectionChanged.connect(self._selection_changed)
+        self.table_view.customContextMenuRequested.connect(
+            lambda point: self._open_row_context_menu(self.table_view, point)
+        )
+        self.pinned_view.customContextMenuRequested.connect(
+            lambda point: self._open_row_context_menu(self.pinned_view, point)
+        )
         self.table_view.horizontalScrollBar().rangeChanged.connect(
             self._sync_horizontal_scroll_range
         )
@@ -1555,6 +1574,73 @@ class QtTableWorkspace(QWidget):
         self._set_error("")
         self.on_open_qc(identity)
         return True
+
+    def set_row_context_actions(
+        self,
+        provider: Callable[[str], QcRowContext] | None,
+        on_module: Callable[[str, QcModuleMenuEntry], None] | None,
+        on_record: Callable[[QcRecordMenuEntry], None] | None,
+    ) -> None:
+        """Install or clear the three callbacks required by row menus."""
+
+        supplied = (provider, on_module, on_record)
+        if any(item is not None for item in supplied) and not all(
+            callable(item) for item in supplied
+        ):
+            raise TypeError("QC row context actions must be all callable or all None")
+        self.row_context_provider = provider
+        self.on_open_qc_module = on_module
+        self.on_open_qc_record = on_record
+        if self.active_row_context_menu is not None:
+            self.active_row_context_menu.close()
+            self.active_row_context_menu.deleteLater()
+            self.active_row_context_menu = None
+
+    def _open_row_context_menu(
+        self,
+        view: QTableView,
+        point: QPoint,
+    ) -> None:
+        if view not in {self.table_view, self.pinned_view}:
+            raise ValueError("QC row menu requires one of this workspace's tables")
+        index = view.indexAt(point)
+        if not index.isValid():
+            return
+        view.setCurrentIndex(index)
+        view.selectRow(index.row())
+        reference = self.table_model.row_reference(index.row())
+        try:
+            identity = self.service.validate_qc_identity(
+                self.result,
+                reference.result_position,
+            )
+            if identity != reference.ezqcid:
+                raise TableViewError("所选记录引用已失效，请重新选择")
+            if (
+                self.row_context_provider is None
+                or self.on_open_qc_module is None
+                or self.on_open_qc_record is None
+            ):
+                raise TableViewError("当前表格不能打开质控菜单")
+            provider = self.row_context_provider
+            module_callback = self.on_open_qc_module
+            record_callback = self.on_open_qc_record
+            context = provider(identity)
+            menu = QcRowContextMenu(
+                context,
+                on_module=lambda entry: module_callback(identity, entry),
+                on_record=record_callback,
+                parent=view,
+            )
+        except (ArithmeticError, RuntimeError, TypeError, ValueError) as exc:
+            self._set_error(str(exc).strip() or type(exc).__name__)
+            return
+        if self.active_row_context_menu is not None:
+            self.active_row_context_menu.close()
+            self.active_row_context_menu.deleteLater()
+        self.active_row_context_menu = menu
+        self._set_error("")
+        menu.popup(view.viewport().mapToGlobal(point))
 
     def _commit_state(
         self,

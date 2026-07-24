@@ -510,6 +510,45 @@ def test_historical_record_workflow_uses_saved_schema_and_is_forced_read_only(
         workflow.set_score("1", "Fair")
 
 
+def test_historical_record_remains_available_after_module_is_removed(
+    tmp_path,
+) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    project = _add_project(
+        services,
+        tmp_path,
+        "SAMPLE",
+        second_module=True,
+    )
+    seed = QcWorkflowService(
+        _module_payload(),
+        _subjects(),
+        rating_dir=project.rating_dir / "AnatQC" / "rater1",
+        code_executor=services.code_executor,
+    )
+    seed.set_score("1", "Good")
+    seed.save()
+    services.configuration_service.remove_module("AnatQC")
+    snapshot = services.project_context_service.snapshot()
+
+    context = services.project_context_service.qc_row_context(
+        snapshot,
+        "SUB001",
+    )
+    workflow = services.project_context_service.create_qc_record_workflow(
+        snapshot,
+        ezqcid="SUB001",
+        module_name="AnatQC",
+        rater="rater1",
+    )
+
+    assert [entry.module_name for entry in context.modules] == ["FuncQC"]
+    assert [entry.module_name for entry in context.records] == ["AnatQC"]
+    assert workflow.watch_mode
+    assert workflow.current_module.name == "AnatQC"
+    assert workflow.current_module.scores["1"].value == "Good"
+
+
 def test_qc_row_context_and_record_factory_reject_stale_or_unknown_facts(
     tmp_path,
 ) -> None:

@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from core.app_services import build_app_services
 from core.event_bus import EventType
 from core.project_context_service import ProjectContextError
+from core.qc_workflow_service import QcWorkflowService
 from core.table_view_service import TableViewService
 from gui_qt.application import build_product_window
 from gui_qt.i18n import LanguageController, get_or_create_language_controller
@@ -631,6 +632,121 @@ def test_results_page_derived_action_persists_from_subject_columns_only(
         "B",
         "C",
     ]
+
+
+def test_row_context_menus_cover_pre_qc_results_and_active_qc_queue(
+    qtbot,
+    tmp_path,
+) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    _add_project(
+        services,
+        tmp_path,
+        "SAMPLE",
+        second_module=True,
+    )
+    services.configuration_service.save_module_filter(
+        "FuncQC",
+        _site_filter("B", operator="=="),
+    )
+    window = build_product_window(services)
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
+
+    pre_index = window.table_workspace.table_model.index(0, 0)
+    window.table_workspace._open_row_context_menu(
+        window.table_workspace.pinned_view,
+        window.table_workspace.pinned_view.visualRect(pre_index).center(),
+    )
+    pre_menu = window.table_workspace.active_row_context_menu
+    assert pre_menu is not None
+    assert not pre_menu.module_actions["FuncQC"].isEnabled()
+
+    result_index = window.results_workspace.table_model.index(1, 1)
+    window.results_workspace._open_row_context_menu(
+        window.results_workspace.table_view,
+        window.results_workspace.table_view.visualRect(result_index).center(),
+    )
+    results_menu = window.results_workspace.active_row_context_menu
+    assert results_menu is not None
+    assert results_menu.module_actions["FuncQC"].isEnabled()
+    results_menu.module_actions["FuncQC"].trigger()
+
+    assert window.qc_controller is not None
+    assert window.active_workflow.current_module.name == "FuncQC"
+    assert window.active_workflow.subject_ids == ("SUB002",)
+    queue_index = window.qc_workspace.queue_model.index(0, 1)
+    window.qc_workspace._open_queue_context_menu(
+        window.qc_workspace.queue_table.visualRect(queue_index).center()
+    )
+    assert window.qc_workspace.active_row_context_menu is not None
+    assert (
+        window.qc_workspace.active_row_context_menu.context.ezqcid
+        == "SUB002"
+    )
+
+
+def test_row_record_action_is_read_only_and_dirty_draft_blocks_replacement(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.Yes,
+    )
+    services = build_app_services(tmp_path / "projects.json")
+    _add_project(services, tmp_path, "SAMPLE")
+    project = services.configuration_service.current_project
+    seed = QcWorkflowService(
+        _module_payload(),
+        services.configuration_service.subjects(),
+        rating_dir=project.rating_dir / "AnatQC" / "rater1",
+        code_executor=services.code_executor,
+    )
+    seed.set_score("1", "Good")
+    seed.save()
+    window = build_product_window(services)
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
+
+    first_index = window.table_workspace.table_model.index(0, 0)
+    window.table_workspace._open_row_context_menu(
+        window.table_workspace.pinned_view,
+        window.table_workspace.pinned_view.visualRect(first_index).center(),
+    )
+    record_menu = window.table_workspace.active_row_context_menu
+    record_menu.record_actions[("SUB001", "AnatQC", "rater1")].trigger()
+
+    assert window.active_workflow.watch_mode
+    assert window.active_workflow.current_module.scores["1"].value == "Good"
+
+    window.table_workspace._open_row_context_menu(
+        window.table_workspace.pinned_view,
+        window.table_workspace.pinned_view.visualRect(first_index).center(),
+    )
+    window.table_workspace.active_row_context_menu.module_actions[
+        "AnatQC"
+    ].trigger()
+    qtbot.mouseClick(window.qc_workspace.score_buttons["1"]["Fair"], Qt.LeftButton)
+    assert window.active_workflow.dirty
+    current_controller = window.qc_controller
+
+    second_index = window.table_workspace.table_model.index(1, 0)
+    window.table_workspace._open_row_context_menu(
+        window.table_workspace.pinned_view,
+        window.table_workspace.pinned_view.visualRect(second_index).center(),
+    )
+    window.table_workspace.active_row_context_menu.module_actions[
+        "AnatQC"
+    ].trigger()
+
+    assert window.qc_controller is current_controller
+    assert window.active_workflow.current_ezqcid == "SUB001"
+    assert "请先保存或放弃" in window.shell_error_label.text()
 
 
 def test_three_requested_pages_present_same_table_action_order(qtbot, tmp_path) -> None:

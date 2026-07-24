@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
+from collections.abc import Callable
+
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPoint, Qt, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -31,7 +33,9 @@ from gui_qt.i18n import (
     protect_user_text,
     translate_ui_text,
 )
+from gui_qt.qc_row_context_menu import QcRowContextMenu
 from gui_qt.theme import CONTROL_HEIGHT, set_button_role
+from models.qc_row_context import QcModuleMenuEntry, QcRecordMenuEntry, QcRowContext
 
 
 class QtQcQueueModel(QAbstractTableModel):
@@ -171,6 +175,12 @@ class QtQcWorkspace(QWidget):
         self.score_buttons: dict[str, dict[str | None, QPushButton]] = {}
         self._legacy_score_buttons: dict[str, QPushButton] = {}
         self.tag_boxes: dict[str, QCheckBox] = {}
+        self.row_context_provider: Callable[[str], QcRowContext] | None = None
+        self.on_open_qc_module: (
+            Callable[[str, QcModuleMenuEntry], None] | None
+        ) = None
+        self.on_open_qc_record: Callable[[QcRecordMenuEntry], None] | None = None
+        self.active_row_context_menu: QcRowContextMenu | None = None
         self.setObjectName("qtQcWorkspace")
         self.setAccessibleName("EasyQC 质控控制器")
         self._build_ui()
@@ -205,6 +215,7 @@ class QtQcWorkspace(QWidget):
         self.queue_table.setAlternatingRowColors(True)
         self.queue_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self.queue_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.queue_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.queue_table.verticalHeader().hide()
         header = self.queue_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -366,6 +377,9 @@ class QtQcWorkspace(QWidget):
         layout.addWidget(self.error_label)
 
         self.queue_table.doubleClicked.connect(self._queue_double_clicked)
+        self.queue_table.customContextMenuRequested.connect(
+            self._open_queue_context_menu
+        )
         self.read_only_box.toggled.connect(self._read_only_changed)
         self.notes_edit.textChanged.connect(self._notes_changed)
 
@@ -596,6 +610,59 @@ class QtQcWorkspace(QWidget):
     def _queue_double_clicked(self, index: QModelIndex) -> None:
         if index.isValid():
             self._open_identity(self.queue_model.identity_at(index.row()))
+
+    def set_row_context_actions(
+        self,
+        provider: Callable[[str], QcRowContext] | None,
+        on_module: Callable[[str, QcModuleMenuEntry], None] | None,
+        on_record: Callable[[QcRecordMenuEntry], None] | None,
+    ) -> None:
+        supplied = (provider, on_module, on_record)
+        if any(item is not None for item in supplied) and not all(
+            callable(item) for item in supplied
+        ):
+            raise TypeError("QC row context actions must be all callable or all None")
+        self.row_context_provider = provider
+        self.on_open_qc_module = on_module
+        self.on_open_qc_record = on_record
+        if self.active_row_context_menu is not None:
+            self.active_row_context_menu.close()
+            self.active_row_context_menu.deleteLater()
+            self.active_row_context_menu = None
+
+    def _open_queue_context_menu(self, point: QPoint) -> None:
+        index = self.queue_table.indexAt(point)
+        if not index.isValid():
+            return
+        self.queue_table.setCurrentIndex(index)
+        self.queue_table.selectRow(index.row())
+        identity = self.queue_model.identity_at(index.row())
+        try:
+            if (
+                self.row_context_provider is None
+                or self.on_open_qc_module is None
+                or self.on_open_qc_record is None
+            ):
+                raise ValueError("当前质控表格不能打开质控菜单")
+            provider = self.row_context_provider
+            module_callback = self.on_open_qc_module
+            record_callback = self.on_open_qc_record
+            context = provider(identity)
+            menu = QcRowContextMenu(
+                context,
+                on_module=lambda entry: module_callback(identity, entry),
+                on_record=record_callback,
+                parent=self.queue_table,
+            )
+        except (ArithmeticError, RuntimeError, TypeError, ValueError) as exc:
+            self._set_error(str(exc).strip() or type(exc).__name__)
+            return
+        if self.active_row_context_menu is not None:
+            self.active_row_context_menu.close()
+            self.active_row_context_menu.deleteLater()
+        self.active_row_context_menu = menu
+        self._set_error("")
+        menu.popup(self.queue_table.viewport().mapToGlobal(point))
 
     def _open_identity(self, identity: str) -> None:
         try:

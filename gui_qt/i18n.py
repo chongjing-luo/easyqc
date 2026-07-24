@@ -341,6 +341,17 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "质控前名单": "Pre-QC list",
     "质控结果": "QC results",
     "质控模块": "QC modules",
+    "已有质控记录": "Existing QC records",
+    "没有可用的质控模块": "No QC modules are available",
+    "没有已有质控记录": "No existing QC records",
+    "此模块将以只读模式打开": "This module will open read-only",
+    "该条目不在此模块的独立质控名单中": (
+        "This item is not in the module's independent QC list"
+    ),
+    "当前表格不能打开质控菜单": "This table cannot open the QC menu.",
+    "当前质控表格不能打开质控菜单": (
+        "The current QC table cannot open the QC menu."
+    ),
     "模块列表": "Modules",
     "模块编辑": "Module editor",
     "模块名称（内部 ID）": "Module name (internal ID)",
@@ -756,6 +767,10 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
 
 
 _SOURCE_PATTERNS = (
+    (
+        re.compile(r"^质控操作：(?P<value>.*)$"),
+        "QC actions: {value}",
+    ),
     (re.compile(r"^已加载项目：(?P<value>.*)$"), "Project loaded: {value}"),
     (re.compile(r"^质控标签: (?P<value>.*)$"), "QC tag: {value}"),
     (re.compile(r"^(?P<label>.*): 未评$"), "{label}: Not rated"),

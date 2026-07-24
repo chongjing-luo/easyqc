@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWi
 from core.table_view_service import TableViewService
 from gui_qt.i18n import LanguageController, translate_ui_text
 from gui_qt.table_workspace import QtTableWorkspace
+from models.column_recipe import ColumnRecipe
 
 
 class _QtQcResultsTableWorkspace(QtTableWorkspace):
@@ -73,7 +74,7 @@ class QtQcResultsPage(QWidget):
         source: pd.DataFrame,
         *,
         refresh_callback: Callable[[], bool],
-        derive_column_callback: Callable[[str, str], str] | None = None,
+        derive_column_callback: Callable[[ColumnRecipe], str] | None = None,
         derive_preview_source: Callable[[], pd.DataFrame] | None = None,
         on_derived_column_committed: Callable[[str], None] | None = None,
         language: LanguageController | None = None,
