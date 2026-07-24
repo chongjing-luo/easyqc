@@ -263,7 +263,7 @@ def test_platform_roots_fail_loud_on_invalid_scope_or_anchor(
 def test_default_user_root_uses_platformdirs_without_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    expected = Path("/home/测试 User/.local/share/easyqc")
+    expected = PurePosixPath("/home/测试 User/.local/share/easyqc")
 
     class FakePlatformDirs:
         def __init__(self, appname: str, *, appauthor: bool) -> None:
@@ -274,6 +274,10 @@ def test_default_user_root_uses_platformdirs_without_fallback(
     monkeypatch.setattr(
         "core.managed_runtime_platform.PlatformDirs",
         FakePlatformDirs,
+    )
+    monkeypatch.setattr(
+        "core.managed_runtime_platform._current_os_name",
+        lambda: "linux",
     )
 
     paths = resolve_runtime_paths(_target("ubuntu-22.04-x86_64"), "user")
@@ -298,7 +302,12 @@ def _passing_snapshot(*, free_bytes: int = 500 * MIB) -> HostPreflightSnapshot:
 def test_preflight_passes_complete_supported_snapshot_without_writes(
     tmp_path: Path,
 ) -> None:
-    install_root = tmp_path / "数据 root with spaces" / "easyqc"
+    install_root = (
+        PurePosixPath("/tmp/easyqc-managed-runtime-tests")
+        / tmp_path.name
+        / "数据 root with spaces"
+        / "easyqc"
+    )
     paths = resolve_runtime_paths(
         _target("ubuntu-22.04-x86_64"),
         "user",
@@ -321,7 +330,7 @@ def test_preflight_passes_complete_supported_snapshot_without_writes(
         "NATIVE_PREREQUISITES": True,
     }
     report.require_passed()
-    assert not install_root.exists()
+    assert not Path(str(install_root)).exists()
 
 
 @pytest.mark.parametrize(
@@ -401,7 +410,12 @@ def test_preflight_reports_each_failure_without_scope_fallback_or_writes(
             scope,
         )
     else:
-        install_root = tmp_path / "未创建 root" / "easyqc"
+        install_root = (
+            PurePosixPath("/tmp/easyqc-managed-runtime-tests")
+            / tmp_path.name
+            / "未创建 root"
+            / "easyqc"
+        )
         paths = resolve_runtime_paths(
             _target("ubuntu-22.04-x86_64"),
             scope,
@@ -422,10 +436,15 @@ def test_preflight_reports_each_failure_without_scope_fallback_or_writes(
 
 
 def test_preflight_rejects_manifest_for_a_different_target(tmp_path: Path) -> None:
+    install_root = (
+        PurePosixPath("/tmp/easyqc-managed-runtime-tests")
+        / tmp_path.name
+        / "easyqc"
+    )
     paths = resolve_runtime_paths(
         _target("ubuntu-22.04-x86_64"),
         "user",
-        user_data_root=str(tmp_path / "easyqc"),
+        user_data_root=str(install_root),
     )
     other = _manifest(_target("ubuntu-24.04-x86_64"))
 

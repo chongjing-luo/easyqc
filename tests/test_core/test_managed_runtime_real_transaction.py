@@ -33,6 +33,12 @@ from core.managed_runtime_transaction import (
 from models.managed_runtime import ActivationPointerV1, ReleaseManifestV1
 
 
+pytestmark = pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="S6-RT-03 is the real Ubuntu user-scope transaction campaign",
+)
+
+
 MIB = 1024 * 1024
 TARGET_ID = "ubuntu-22.04-x86_64"
 SOURCE_REVISION = "a" * 40
