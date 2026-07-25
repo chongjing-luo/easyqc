@@ -283,8 +283,9 @@ freeview -v $SUBJECTS_DIR/{ezqcid}/mri/T1.mgz \
 
 ## 表格操作
 
-EasyQC 内置结构化表格操作引擎，支持 8 种类型化操作。用户通过 GUI 选择列、
-操作符和值，无需查看、粘贴或编辑 JSON，也无需编写代码：
+EasyQC 的统一表格工作区直接提供结构化筛选、多列排序、列显示和新增列。
+用户不需要查看、粘贴或编辑 JSON。底层 `TableTransformEngine` 还支持 8
+种类型化操作：
 
 | 操作 | 说明 | 示例 |
 |---|---|---|
@@ -297,11 +298,25 @@ EasyQC 内置结构化表格操作引擎，支持 8 种类型化操作。用户�
 | `merge_tables` | 合并表格 | 与外部 CSV 按 `ezqcid` 合并 |
 | `aggregate` | 分组聚合 | 按 `batch` 分组统计 `score1` 均值 |
 
-底层仍使用可验证的结构化 Core 契约执行操作；它不是面向用户的编辑格式。
-所有操作在 GUI 中组合为操作序列，一次执行。派生列表达式通过安全解析器验证：
-- **白名单运算符**：`+`, `-`, `*`, `/`, `==`, `!=`, `>`, `>=`, `<`, `<=`, `and`, `or`, `not`
-- **白名单函数**：`abs`, `round`, `isna`, `notna`, `fillna`, `contains`, `startswith`, `endswith`, `isin`
-- **禁止**：`eval()`, `exec()`, `lambda`, `import`, 任意属性访问
+这些 Core 操作不是面向用户的 JSON 编辑格式。交互式新增列使用
+**EasyQC Formula**：普通用户可通过快捷模板生成公式，高级用户也可直接输入
+一个表达式。精确列名写成 `[列名]`，例如：
+
+```text
+IF([site] = "A", UPPER(TEXTBEFORE([filename], "_")), "OTHER")
+[parent path] & "/" & [filename]
+ROUND(([age] - [baseline_age]) / 12, 1)
+"fixed value"
+```
+
+- **运算符**：算术、比较、`AND`/`OR`/`NOT` 与文本连接 `&`；
+- **23 个封闭函数**：控制/空值、文本提取、数值和路径文本函数；
+- **安全边界**：不是完整 VBA，不接受 Python、SQL、正则、语句、对象、循环、
+  用户函数、文件、网络、Shell、`eval` 或 `exec`；
+- **保存语义**：预览成功后只生成普通的新列；公式、AST、快捷模板状态和
+  中间结果均不保存；
+- **数据范围**：导入页使用当前完整导入草稿；质控前名单和质控结果使用
+  权威质控总名单。只有尚无 `ezqcid` 的导入草稿可以创建该列，已有列不能覆盖。
 
 ---
 
@@ -322,6 +337,8 @@ easyqc/
 │   ├── code_executor.py        # 受控外部命令执行（白名单 + shell=False）
 │   ├── table_transform.py      # 结构化表格操作引擎（8 种操作）
 │   ├── expression_parser.py    # 安全表达式解析器（AST 白名单）
+│   ├── formula_parser.py       # EasyQC Formula 封闭语法与 AST
+│   ├── formula_engine.py       # 逐列向量计算与逐行错误语义
 │   └── cli_service.py          # CLI 模式启动流程
 │
 ├── models/                     # 数据模型（纯 dataclass，零依赖）

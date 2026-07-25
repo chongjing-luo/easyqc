@@ -35,23 +35,23 @@ APPROVED_TARGET_LOCK_SHA256: Mapping[str, Mapping[str, str]] = MappingProxyType(
     {
         "linux-x86_64": MappingProxyType(
             {
-                "runtime": "9fd267a83751cb81016889a82c49245fae4fcd08a1e4bd77028333ee4927fc70",
-                "build": "b75da9138dc7d650d48640d49d0d58609bc1079a87ed41ad75bc68bfb733ec15",
-                "test": "110f3c182b62cafea36c5369e05d5c0762e43717ef39ec65e925eea3174bbec9",
+                "runtime": "430b04a9a9311de9241fb914765e9ff1480c8d6c1377b2137ecb9e27973561b0",
+                "build": "cce2a707233ba5eb4b97af405fa4c6e3a7c6ba9e39a2317bdafc5c15494122c6",
+                "test": "72ed47ed6b911f3f9951c491f68bb452feb8d3926e8dba3137b9186300fce05b",
             }
         ),
         "windows-x86_64": MappingProxyType(
             {
-                "runtime": "9fd267a83751cb81016889a82c49245fae4fcd08a1e4bd77028333ee4927fc70",
-                "build": "485750e3a37231cd83a6f03c9c3fa3270b67151430182f15dad57a0e8dce7e96",
-                "test": "6a789692559202ad5d1a3e54c3895d75515fd69c22c2cd7b76b5f4ea85387fe1",
+                "runtime": "430b04a9a9311de9241fb914765e9ff1480c8d6c1377b2137ecb9e27973561b0",
+                "build": "4f7c11404475759d0ba83144203ba7bc62027627b31d7bb29530408920baac96",
+                "test": "25a8a04d4c34c935391d53d5b648f0d3e8c932b1a6054ef2835e487d32fa760b",
             }
         ),
         "macos-arm64": MappingProxyType(
             {
-                "runtime": "9fd267a83751cb81016889a82c49245fae4fcd08a1e4bd77028333ee4927fc70",
-                "build": "0c3ae7ca750c7754d7116eeaa91818ec4c7dfe144f270479dda1a279379345e8",
-                "test": "110f3c182b62cafea36c5369e05d5c0762e43717ef39ec65e925eea3174bbec9",
+                "runtime": "430b04a9a9311de9241fb914765e9ff1480c8d6c1377b2137ecb9e27973561b0",
+                "build": "f67ddf95fa08831a7d704de569794be9e21eb56d6be9948ee31102b974068d6f",
+                "test": "72ed47ed6b911f3f9951c491f68bb452feb8d3926e8dba3137b9186300fce05b",
             }
         ),
     }
