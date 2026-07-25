@@ -36,6 +36,20 @@ QLabel#productName {
 QLabel#productTagline, QLabel#navigationSectionLabel {
     color: #A9B5C7;
 }
+QPushButton#navigationToggle {
+    background: transparent;
+    color: #DCE3EC;
+    border: 1px solid #43526A;
+    border-radius: 6px;
+    padding: 0;
+    font-size: 18px;
+}
+QPushButton#navigationToggle:hover,
+QPushButton#navigationToggle:focus {
+    background: #24334A;
+    color: #FFFFFF;
+    border-color: #6F829E;
+}
 QListWidget#primaryNavigation {
     background: transparent;
     border: none;
@@ -71,8 +85,15 @@ QLabel#projectNavigationContext {
 QWidget#languageBar {
     border-top: 1px solid #314056;
 }
-QLabel#languageLabel {
-    color: #A9B5C7;
+QPushButton#languageToggle {
+    background: #24334A;
+    color: #F4F7FB;
+    border: 1px solid #43526A;
+}
+QPushButton#languageToggle:hover,
+QPushButton#languageToggle:focus {
+    background: #2D4260;
+    border-color: #7186A3;
 }
 QStackedWidget#workspaceStack {
     background: #F4F6F8;

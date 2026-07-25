@@ -5,13 +5,19 @@ from threading import Event
 
 import pandas as pd
 import pytest
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QAbstractButton, QLabel, QLineEdit
+from PySide6.QtCore import QItemSelectionModel, QTimer, Qt
+from PySide6.QtWidgets import (
+    QAbstractButton,
+    QAbstractItemView,
+    QLabel,
+    QLineEdit,
+)
 
 from core.configuration_service import ConfigurationService
 from core.event_bus import EventType
 from core.project_service import ProjectService
 from core.table_service import TableService
+from gui_qt.i18n import get_or_create_language_controller
 from models.table_view_state import (
     FilterCondition,
     FilterExpression,
@@ -178,11 +184,28 @@ def test_preview_search_filter_sort_and_columns_do_not_change_draft(
     assert page.columns_button.text().startswith("列显示")
 
 
-def test_import_page_groups_all_four_table_actions_and_derives_subject_column(
+def test_derived_column_updates_only_latest_import_draft(
     qtbot,
     tmp_path,
 ) -> None:
-    page, configuration, _current = _page(qtbot, tmp_path)
+    page, configuration, current = _page(qtbot, tmp_path)
+    source = tmp_path / "draft-columns.csv"
+    pd.DataFrame(
+        {
+            "ezqcid": ["NEW001", "NEW002", "NEW003"],
+            "batch": ["X", "Y", "Z"],
+        }
+    ).to_csv(source, index=False)
+    page.source_path_edit.setText(str(source))
+    qtbot.mouseClick(page.read_preview_button, Qt.LeftButton)
+    _wait(page, qtbot)
+    table_path = configuration.current_project.table_dir / "ezqc_all.csv"
+    before_bytes = table_path.read_bytes()
+    events = []
+    configuration.project_service.event_bus.subscribe(
+        EventType.SUBJECTS_CHANGED,
+        lambda event: events.append(event),
+    )
 
     action_roots = [
         button.text().split(" (", 1)[0]
@@ -201,21 +224,127 @@ def test_import_page_groups_all_four_table_actions_and_derives_subject_column(
     assert [
         dialog.editor.source_combo.itemData(index)
         for index in range(dialog.editor.source_combo.count())
-    ] == ["ezqcid", "site"]
+    ] == ["ezqcid", "batch"]
 
-    dialog.name_edit.setText("site_copy")
-    dialog.editor.set_source_column("site")
+    dialog.name_edit.setText("batch_copy")
+    dialog.editor.set_source_column("batch")
     qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
     qtbot.waitUntil(
         lambda: (
-            "site_copy" in configuration.subjects().columns
-            and page.status_label.text() == "已生成质控前名单列：site_copy"
+            "batch_copy" in page.draft.columns
+            and page.status_label.text()
+            == "已生成导入草稿列：batch_copy；尚未写入"
         ),
         timeout=3000,
     )
 
-    assert configuration.subjects()["site_copy"].tolist() == ["A", "B"]
-    assert page.status_label.text() == "已生成质控前名单列：site_copy"
+    assert page.draft["batch_copy"].tolist() == ["X", "Y", "Z"]
+    pd.testing.assert_frame_equal(configuration.subjects(), current)
+    assert table_path.read_bytes() == before_bytes
+    assert events == []
+
+
+def test_import_preview_context_actions_edit_correct_draft_rows(
+    qtbot,
+    tmp_path,
+) -> None:
+    page, configuration, current = _page(qtbot, tmp_path)
+    source = tmp_path / "draft-rows.csv"
+    pd.DataFrame(
+        {
+            "ezqcid": ["ROW_A", "ROW_B", "ROW_C", "ROW_D"],
+            "site": ["A", "B", "C", "D"],
+        }
+    ).to_csv(source, index=False)
+    page.source_path_edit.setText(str(source))
+    qtbot.mouseClick(page.read_preview_button, Qt.LeftButton)
+    _wait(page, qtbot)
+    before_bytes = (
+        configuration.current_project.table_dir / "ezqc_all.csv"
+    ).read_bytes()
+
+    assert page.preview_table.selectionMode() == QAbstractItemView.ExtendedSelection
+    assert page.preview_table.contextMenuPolicy() == Qt.CustomContextMenu
+
+    page.preview_search.setText("ROW_D")
+    page.preview_search.returnPressed.emit()
+    _wait(page, qtbot)
+    assert page.draft_position_for_preview_row(0) == 3
+    page.preview_table.selectRow(0)
+    assert page.delete_selected_draft_rows()
+    assert page.draft["ezqcid"].tolist() == ["ROW_A", "ROW_B", "ROW_C"]
+
+    assert page.apply_preview_sort((SortRule("site", ascending=False),))
+    assert page.draft_position_for_preview_row(0) == 2
+    assert page.draft_position_for_preview_row(2) == 0
+    selection = page.preview_table.selectionModel()
+    selection.select(
+        page.preview_model.index(0, 0),
+        QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
+    )
+    selection.select(
+        page.preview_model.index(2, 0),
+        QItemSelectionModel.Select | QItemSelectionModel.Rows,
+    )
+    assert page.delete_selected_draft_rows()
+    assert page.draft["ezqcid"].tolist() == ["ROW_B"]
+    assert page.draft.columns.tolist() == ["ezqcid", "site"]
+
+    assert page.insert_blank_draft_row(after_position=0)
+    assert page.draft.columns.tolist() == ["ezqcid", "site"]
+    assert len(page.draft) == 2
+    assert pd.isna(page.draft.iloc[1]["ezqcid"])
+    assert page.insert_blank_draft_row(after_position=None)
+    assert len(page.draft) == 3
+    assert pd.isna(page.draft.iloc[-1]["site"])
+
+    menu = page.create_preview_context_menu(after_position=None)
+    assert [action.text() for action in menu.actions()] == [
+        "增加空行",
+        "删除选中行",
+    ]
+    language = get_or_create_language_controller()
+    language.set_language("en")
+    english_menu = page.create_preview_context_menu(after_position=None)
+    assert [action.text() for action in english_menu.actions()] == [
+        "Add blank row",
+        "Delete selected rows",
+    ]
+    language.set_language("zh_CN")
+    pd.testing.assert_frame_equal(configuration.subjects(), current)
+    assert (
+        configuration.current_project.table_dir / "ezqc_all.csv"
+    ).read_bytes() == before_bytes
+
+
+def test_import_row_edits_feed_the_next_derived_column(qtbot, tmp_path) -> None:
+    page, configuration, current = _page(qtbot, tmp_path)
+    page._install_draft(
+        pd.DataFrame(
+            {
+                "ezqcid": ["NEW001", "NEW002", "NEW003"],
+                "batch": ["X", "Y", "Z"],
+            }
+        )
+    )
+    selection = page.preview_table.selectionModel()
+    selection.select(
+        page.preview_model.index(1, 0),
+        QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
+    )
+    assert page.delete_selected_draft_rows()
+
+    qtbot.mouseClick(page.derive_button, Qt.LeftButton)
+    dialog = page.derived_column_dialog
+    assert dialog is not None
+    dialog.name_edit.setText("batch_copy")
+    dialog.editor.set_source_column("batch")
+    qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
+    qtbot.waitUntil(lambda: "batch_copy" in page.draft.columns, timeout=3000)
+
+    assert page.draft["ezqcid"].tolist() == ["NEW001", "NEW003"]
+    assert page.draft["batch_copy"].tolist() == ["X", "Z"]
+    pd.testing.assert_frame_equal(configuration.subjects(), current)
 
 
 def test_merge_columns_applies_once_and_emits_list_change(qtbot, tmp_path) -> None:

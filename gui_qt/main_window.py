@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
@@ -105,6 +106,9 @@ class QtMainWindow(QMainWindow):
         "质控模块",
         "质控结果",
     )
+    EXPANDED_NAVIGATION_MIN_WIDTH = 202
+    EXPANDED_NAVIGATION_MAX_WIDTH = 248
+    COLLAPSED_NAVIGATION_WIDTH = 48
 
     def __init__(
         self,
@@ -205,19 +209,38 @@ class QtMainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        navigation_panel = QWidget(central)
-        navigation_panel.setObjectName("primaryNavigationPanel")
-        navigation_layout = QVBoxLayout(navigation_panel)
-        navigation_layout.setContentsMargins(16, 20, 16, 16)
-        navigation_layout.setSpacing(12)
-        self.product_name_label = QLabel("EasyQC", navigation_panel)
+        self.navigation_collapsed = False
+        self.navigation_panel = QWidget(central)
+        self.navigation_panel.setObjectName("primaryNavigationPanel")
+        self.navigation_layout = QVBoxLayout(self.navigation_panel)
+        self.navigation_layout.setContentsMargins(16, 20, 16, 16)
+        self.navigation_layout.setSpacing(12)
+        self.navigation_header = QWidget(self.navigation_panel)
+        self.navigation_header.setObjectName("navigationHeader")
+        navigation_header_layout = QHBoxLayout(self.navigation_header)
+        navigation_header_layout.setContentsMargins(0, 0, 0, 0)
+        navigation_header_layout.setSpacing(8)
+        self.product_name_label = QLabel("EasyQC", self.navigation_header)
         self.product_name_label.setObjectName("productName")
         self.product_name_label.setAccessibleName("EasyQC")
-        navigation_layout.addWidget(self.product_name_label)
-        self.product_tagline_label = QLabel("质控工作台", navigation_panel)
+        navigation_header_layout.addWidget(self.product_name_label, 1)
+        self.navigation_toggle_button = QPushButton("‹", self.navigation_header)
+        self.navigation_toggle_button.setObjectName("navigationToggle")
+        self.navigation_toggle_button.setMinimumSize(
+            CONTROL_SPACING * 4,
+            CONTROL_SPACING * 4,
+        )
+        self.navigation_toggle_button.setMaximumWidth(CONTROL_SPACING * 4)
+        self.navigation_toggle_button.clicked.connect(self._toggle_navigation)
+        navigation_header_layout.addWidget(self.navigation_toggle_button)
+        self.navigation_layout.addWidget(self.navigation_header)
+        self.product_tagline_label = QLabel(
+            "质控工作台",
+            self.navigation_panel,
+        )
         self.product_tagline_label.setObjectName("productTagline")
-        navigation_layout.addWidget(self.product_tagline_label)
-        self.navigation = QListWidget(navigation_panel)
+        self.navigation_layout.addWidget(self.product_tagline_label)
+        self.navigation = QListWidget(self.navigation_panel)
         self.navigation.setObjectName("primaryNavigation")
         self.navigation.setAccessibleName("EasyQC 功能导航")
         self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -254,32 +277,23 @@ class QtMainWindow(QMainWindow):
             )
         for row in range(self.navigation.count()):
             self._set_navigation_item_height(row, line_count=1)
-        navigation_layout.addWidget(self.navigation, 1)
-        self.language_bar = QWidget(navigation_panel)
+        self.navigation_layout.addWidget(self.navigation, 1)
+        self.language_bar = QWidget(self.navigation_panel)
         self.language_bar.setObjectName("languageBar")
         language_layout = QHBoxLayout(self.language_bar)
         language_layout.setContentsMargins(0, 12, 0, 0)
-        language_layout.setSpacing(8)
-        self.language_label = QLabel("", self.language_bar)
-        self.language_label.setObjectName("languageLabel")
-        self.language_selector = QComboBox(self.language_bar)
-        self.language_selector.setObjectName("languageSelector")
-        self.language_selector.setAccessibleName("界面语言")
-        for language in self.language.supported_languages:
-            self.language_selector.addItem(
-                self.language.language_display_name(language),
-                language,
-            )
-        self.language_selector.currentIndexChanged.connect(
-            self._language_selected
+        self.language_button = QPushButton("English", self.language_bar)
+        self.language_button.setObjectName("languageToggle")
+        self.language_button.clicked.connect(self._toggle_language)
+        language_layout.addWidget(self.language_button, 1)
+        self.navigation_layout.addWidget(self.language_bar)
+        self.navigation_panel.setMinimumWidth(
+            self.EXPANDED_NAVIGATION_MIN_WIDTH
         )
-        language_layout.addWidget(self.language_label)
-        language_layout.addWidget(self.language_selector, 1)
-        navigation_layout.addWidget(self.language_bar)
-        minimum_navigation_width = 202
-        navigation_panel.setMinimumWidth(minimum_navigation_width)
-        navigation_panel.setMaximumWidth(248)
-        layout.addWidget(navigation_panel)
+        self.navigation_panel.setMaximumWidth(
+            self.EXPANDED_NAVIGATION_MAX_WIDTH
+        )
+        layout.addWidget(self.navigation_panel)
 
         self.workspace_stack = QStackedWidget(central)
         self.workspace_stack.setObjectName("workspaceStack")
@@ -504,17 +518,63 @@ class QtMainWindow(QMainWindow):
     def _navigation_labels(self) -> tuple[str, ...]:
         return tuple(self.language.tr(key) for key in self.NAVIGATION_KEYS)
 
-    @Slot(int)
-    def _language_selected(self, index: int) -> None:
-        language = self.language_selector.itemData(index)
-        if language in self.language.supported_languages:
-            self.language.set_language(language)
+    @Slot()
+    def _toggle_language(self) -> None:
+        target = "en" if self.language.language == "zh_CN" else "zh_CN"
+        self.language.set_language(target)
+
+    @Slot()
+    def _toggle_navigation(self) -> None:
+        self.set_navigation_collapsed(not self.navigation_collapsed)
+
+    def set_navigation_collapsed(self, collapsed: bool) -> None:
+        """Collapse the primary navigation while retaining a recovery button."""
+
+        self.navigation_collapsed = bool(collapsed)
+        visible = not self.navigation_collapsed
+        for widget in (
+            self.product_name_label,
+            self.product_tagline_label,
+            self.navigation,
+            self.language_bar,
+        ):
+            widget.setVisible(visible)
+        if self.navigation_collapsed:
+            self.navigation_layout.setContentsMargins(8, 12, 8, 12)
+            self.navigation_panel.setMinimumWidth(0)
+            self.navigation_panel.setMaximumWidth(
+                self.COLLAPSED_NAVIGATION_WIDTH
+            )
+            self.navigation_panel.setMinimumWidth(
+                self.COLLAPSED_NAVIGATION_WIDTH
+            )
+        else:
+            self.navigation_layout.setContentsMargins(16, 20, 16, 16)
+            self.navigation_panel.setMaximumWidth(
+                self.EXPANDED_NAVIGATION_MAX_WIDTH
+            )
+            self.navigation_panel.setMinimumWidth(
+                self.EXPANDED_NAVIGATION_MIN_WIDTH
+            )
+        self._update_navigation_toggle_presentation()
+
+    def _update_navigation_toggle_presentation(self) -> None:
+        self.navigation_toggle_button.setText(
+            "›" if self.navigation_collapsed else "‹"
+        )
+        key = (
+            "navigation.expand"
+            if self.navigation_collapsed
+            else "navigation.collapse"
+        )
+        description = self.language.tr(key)
+        self.navigation_toggle_button.setAccessibleName(description)
+        self.navigation_toggle_button.setToolTip(description)
 
     @Slot()
     def retranslate_ui(self, _language: str | None = None) -> None:
         """Refresh presentation strings without reconstructing active state."""
 
-        self.language_label.setText(self.language.tr("language.label"))
         self.product_tagline_label.setText(
             "质控工作台"
             if self.language.language == "zh_CN"
@@ -542,11 +602,19 @@ class QtMainWindow(QMainWindow):
             else ""
         )
         self._set_project_navigation_context(project_name)
-        selector_index = self.language_selector.findData(self.language.language)
-        if selector_index >= 0 and selector_index != self.language_selector.currentIndex():
-            self.language_selector.blockSignals(True)
-            self.language_selector.setCurrentIndex(selector_index)
-            self.language_selector.blockSignals(False)
+        if self.language.language == "zh_CN":
+            self.language_button.setText("English")
+            language_description = self.language.tr(
+                "language.switch_to_english"
+            )
+        else:
+            self.language_button.setText("中文")
+            language_description = self.language.tr(
+                "language.switch_to_chinese"
+            )
+        self.language_button.setAccessibleName(language_description)
+        self.language_button.setToolTip(language_description)
+        self._update_navigation_toggle_presentation()
         self.table_workspace.retranslate_ui()
         self.results_workspace.retranslate_ui()
         self.config_workspace.retranslate_ui()

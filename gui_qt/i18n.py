@@ -61,6 +61,22 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
     "app.workspace": {"zh_CN": "EasyQC 工作区", "en": "EasyQC workspace"},
     "field.ezqcid": {"zh_CN": "ezqcid", "en": "ezqcid"},
     "language.label": {"zh_CN": "语言", "en": "Language"},
+    "language.switch_to_english": {
+        "zh_CN": "将界面切换为英文",
+        "en": "Switch the interface to English",
+    },
+    "language.switch_to_chinese": {
+        "zh_CN": "将界面切换为中文",
+        "en": "Switch the interface to Chinese",
+    },
+    "navigation.collapse": {
+        "zh_CN": "收起导航",
+        "en": "Collapse navigation",
+    },
+    "navigation.expand": {
+        "zh_CN": "展开导航",
+        "en": "Expand navigation",
+    },
     "nav.constants": {"zh_CN": "常量设置", "en": "Constants"},
     "nav.import": {"zh_CN": "质控名单导入", "en": "QC list import"},
     "nav.modules": {"zh_CN": "质控模块", "en": "QC modules"},
@@ -140,6 +156,9 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "排序优先级": "Sort priority",
     "使用质控前名单中的已有列生成普通新列": (
         "Create a regular new column from existing Pre-QC list columns"
+    ),
+    "使用导入草稿中的已有列生成普通新列": (
+        "Create a regular new column from existing import-draft columns"
     ),
     "使用已有列生成新列": "Create a new column from existing columns",
     "放弃当前未保存的质控修改并关闭 EasyQC？": (
@@ -555,6 +574,8 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "导入方式": "Import mode",
     "按 ezqcid 合并列": "Merge columns by ezqcid",
     "追加行": "Append rows",
+    "增加空行": "Add blank row",
+    "删除选中行": "Delete selected rows",
     "清空导入数据": "Clear import data",
     "写入前需包含 ezqcid": "ezqcid is required before writing",
     "导入预览": "Import preview",
@@ -621,6 +642,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "配置任务状态": "Configuration task status",
     "直接输入名单": "Direct-entry list",
     "为质控前名单新增列": "Add a column to the Pre-QC list",
+    "为导入草稿新增列": "Add a column to the import draft",
     "仅在导入单列数据时使用": "Use only when importing one data column",
     "例如 ezqcid 或 scanner_model": "For example: ezqcid or scanner_model",
     "单列字段名": "Single-column field name",
@@ -962,6 +984,18 @@ _SOURCE_PATTERNS = (
     (
         re.compile(r"^已写入质控前名单，共 (?P<count>[\d,]+) 条$"),
         "Wrote {count} records to the Pre-QC list.",
+    ),
+    (
+        re.compile(r"^已生成导入草稿列：(?P<name>.+)；尚未写入$"),
+        "Generated import-draft column {name}; nothing has been written yet.",
+    ),
+    (
+        re.compile(r"^已增加 (?P<count>[\d,]+) 行导入草稿；尚未写入$"),
+        "Added {count} import-draft row; nothing has been written yet.",
+    ),
+    (
+        re.compile(r"^已删除 (?P<count>[\d,]+) 行导入草稿；尚未写入$"),
+        "Deleted {count} import-draft rows; nothing has been written yet.",
     ),
     (
         re.compile(

@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from typing import Callable
 
 import pandas as pd
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import QItemSelectionModel, Qt, Signal, Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLayout,
     QLineEdit,
+    QMenu,
     QPushButton,
     QRadioButton,
     QSizePolicy,
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.configuration_service import ConfigurationService
+from core.table_transform import TableTransformEngine
 from core.table_view_service import TableViewError, TableViewService
 from gui_qt.columns_dialog import ColumnsDialog
 from gui_qt.derived_column_dialog import DerivedColumnDialog
@@ -55,6 +57,7 @@ class _PreparedImportPreview:
 
     draft: pd.DataFrame | None
     service: TableViewService
+    draft_positions: tuple[int, ...]
 
 
 class QtQcListImportPage(QWidget):
@@ -80,9 +83,12 @@ class QtQcListImportPage(QWidget):
         self._preview_service: TableViewService | None = None
         self._preview_state: TableViewState | None = None
         self._preview_result: TableViewResult | None = None
+        self._preview_draft_positions: tuple[int, ...] = ()
         self._preview_offset = 0
         self._derive_busy = False
         self._derive_enabled = self.configuration.current_project is not None
+        self._draft_revision = 0
+        self._derived_draft_result: tuple[int, str, pd.DataFrame] | None = None
         self.filter_dialog: FilterDialog | None = None
         self.sort_dialog: SortDialog | None = None
         self.columns_dialog: ColumnsDialog | None = None
@@ -214,8 +220,8 @@ class QtQcListImportPage(QWidget):
         self.sort_button = QPushButton("排序", self)
         self.columns_button = QPushButton("列显示", self)
         self.derive_button = QPushButton("新增列", self)
-        self.derive_button.setAccessibleName("为质控前名单新增列")
-        self.derive_button.setToolTip("使用质控前名单中的已有列生成普通新列")
+        self.derive_button.setAccessibleName("为导入草稿新增列")
+        self.derive_button.setToolTip("使用导入草稿中的已有列生成普通新列")
         self.filter_button.clicked.connect(self.open_filter_dialog)
         self.sort_button.clicked.connect(self.open_sort_dialog)
         self.columns_button.clicked.connect(self.open_columns_dialog)
@@ -231,11 +237,15 @@ class QtQcListImportPage(QWidget):
         self.preview_table.setAccessibleName("只读导入预览")
         self.preview_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.preview_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.preview_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.preview_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.preview_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.preview_table.setAlternatingRowColors(True)
         self.preview_table.setWordWrap(False)
         self.preview_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.preview_table.horizontalHeader().setStretchLastSection(True)
+        self.preview_table.customContextMenuRequested.connect(
+            self._show_preview_context_menu
+        )
         layout.addWidget(self.preview_table, 1)
 
         preview_footer = QHBoxLayout()
@@ -407,7 +417,11 @@ class QtQcListImportPage(QWidget):
                         raise TypeError("名单读取任务缺少导入草稿")
                     self._install_prepared_draft(result)
                 else:
-                    self._install_preview_service(result.service, reset_state=False)
+                    self._install_preview_service(
+                        result.service,
+                        draft_positions=result.draft_positions,
+                        reset_state=False,
+                    )
                 self.status_label.setText(
                     (
                         f"已读取 {len(self._draft):,} 条、{len(self._draft.columns):,} 列；尚未写入"
@@ -479,25 +493,50 @@ class QtQcListImportPage(QWidget):
         frame: pd.DataFrame,
         *,
         keep_draft: bool,
+        draft_positions: tuple[int, ...] | None = None,
     ) -> _PreparedImportPreview:
         if not isinstance(frame, pd.DataFrame):
             raise TypeError("Import preview requires a pandas DataFrame")
+        detached = frame.copy(deep=True).reset_index(drop=True)
+        positions = (
+            tuple(range(len(detached)))
+            if draft_positions is None
+            else tuple(int(position) for position in draft_positions)
+        )
+        if len(positions) != len(detached):
+            raise ValueError(
+                "Import preview rows and draft positions must have equal length"
+            )
         return _PreparedImportPreview(
-            draft=frame if keep_draft else None,
-            service=TableViewService(frame),
+            draft=detached if keep_draft else None,
+            service=TableViewService(detached),
+            draft_positions=positions,
         )
 
-    def _install_prepared_draft(self, prepared: _PreparedImportPreview) -> None:
+    def _install_prepared_draft(
+        self,
+        prepared: _PreparedImportPreview,
+        *,
+        reset_state: bool = True,
+    ) -> None:
         if prepared.draft is None:
             raise TypeError("Prepared import draft is missing its source table")
         self._draft = prepared.draft
+        self._draft_revision += 1
+        self._derived_draft_result = None
         self.preview_search.clear()
-        self._install_preview_service(prepared.service, reset_state=True)
+        self._install_preview_service(
+            prepared.service,
+            draft_positions=prepared.draft_positions,
+            reset_state=reset_state,
+        )
         self._update_stats()
         self._update_actions()
 
     def clear_draft(self) -> None:
         self._draft = pd.DataFrame()
+        self._draft_revision += 1
+        self._derived_draft_result = None
         self.preview_search.clear()
         self._render_empty_preview()
         self.status_label.setText("已清空导入草稿；质控前名单未改变")
@@ -514,6 +553,7 @@ class QtQcListImportPage(QWidget):
         def search() -> _PreparedImportPreview:
             if not query:
                 filtered = draft
+                positions = tuple(range(len(draft)))
             else:
                 text = draft.astype("string")
                 mask = text.apply(
@@ -523,8 +563,17 @@ class QtQcListImportPage(QWidget):
                         na=False,
                     )
                 ).any(axis=1)
-                filtered = draft.loc[mask].reset_index(drop=True)
-            return self._prepare_import_preview(filtered, keep_draft=False)
+                positions = tuple(
+                    position
+                    for position, matched in enumerate(mask.tolist())
+                    if bool(matched)
+                )
+                filtered = draft.iloc[list(positions)].reset_index(drop=True)
+            return self._prepare_import_preview(
+                filtered,
+                keep_draft=False,
+                draft_positions=positions,
+            )
 
         return self._submit("search", search)
 
@@ -532,6 +581,7 @@ class QtQcListImportPage(QWidget):
         self,
         service: TableViewService,
         *,
+        draft_positions: tuple[int, ...],
         reset_state: bool,
     ) -> None:
         previous = self._preview_state
@@ -551,6 +601,7 @@ class QtQcListImportPage(QWidget):
         self._preview_service = service
         self._preview_state = state
         self._preview_result = result
+        self._preview_draft_positions = tuple(draft_positions)
         self._preview_offset = 0
         self._render_preview()
 
@@ -694,10 +745,16 @@ class QtQcListImportPage(QWidget):
             self.derived_column_dialog.activateWindow()
             return self.derived_column_dialog
         try:
-            preview_source = self._current.head(10).copy(deep=True)
+            draft_source = self._draft.copy(deep=True)
+            draft_revision = self._draft_revision
+            preview_source = draft_source.head(20).copy(deep=True)
             dialog = DerivedColumnDialog(
                 preview_source,
-                self._persist_derived_subject_column,
+                lambda recipe: self._derive_import_draft_column(
+                    recipe,
+                    source=draft_source,
+                    draft_revision=draft_revision,
+                ),
                 self,
             )
         except Exception as exc:
@@ -715,11 +772,21 @@ class QtQcListImportPage(QWidget):
         dialog.open()
         return dialog
 
-    def _persist_derived_subject_column(self, recipe: ColumnRecipe) -> str:
-        return self.configuration.derive_subject_column(
+    def _derive_import_draft_column(
+        self,
+        recipe: ColumnRecipe,
+        *,
+        source: pd.DataFrame,
+        draft_revision: int,
+    ) -> str:
+        """Materialize one safe recipe in a detached import draft only."""
+
+        result = TableTransformEngine().derive_column_from_recipe(
+            source,
             recipe,
-            notify=False,
         )
+        self._derived_draft_result = (draft_revision, recipe.name, result)
+        return recipe.name
 
     @Slot(bool)
     def _set_derive_busy(self, busy: bool) -> None:
@@ -729,13 +796,21 @@ class QtQcListImportPage(QWidget):
 
     @Slot(str)
     def _derived_column_committed(self, name: str) -> None:
+        prepared = self._derived_draft_result
+        self._derived_draft_result = None
+        if prepared is None:
+            self._set_error("新增列任务没有返回导入草稿")
+            return
+        revision, prepared_name, result = prepared
+        if revision != self._draft_revision or prepared_name != name:
+            self._set_error("导入草稿已变化，请重新生成新增列")
+            return
         try:
-            self.refresh_current(self.configuration.subjects())
-            self.configuration.publish_subjects_changed()
+            self._replace_draft(result, reset_state=True)
         except Exception as exc:
             self._set_error(str(exc).strip() or type(exc).__name__)
             return
-        self.status_label.setText(f"已生成质控前名单列：{name}")
+        self.status_label.setText(f"已生成导入草稿列：{name}；尚未写入")
         self._set_error("")
 
     def _derived_column_dialog_finished(
@@ -746,6 +821,137 @@ class QtQcListImportPage(QWidget):
             self.derived_column_dialog = None
         self._derive_busy = False
         self._update_actions()
+
+    def draft_position_for_preview_row(self, row: int) -> int:
+        """Map one visible preview row to its authoritative draft position."""
+
+        reference = self.preview_model.row_reference(int(row))
+        service_position = reference.source_position
+        if service_position < 0 or service_position >= len(
+            self._preview_draft_positions
+        ):
+            raise IndexError("preview row no longer maps to the import draft")
+        draft_position = self._preview_draft_positions[service_position]
+        if draft_position < 0 or draft_position >= len(self._draft):
+            raise IndexError("preview row points outside the import draft")
+        return draft_position
+
+    def _selected_draft_positions(self) -> tuple[int, ...]:
+        selection_model = self.preview_table.selectionModel()
+        if selection_model is None:
+            return ()
+        return tuple(
+            sorted(
+                {
+                    self.draft_position_for_preview_row(index.row())
+                    for index in selection_model.selectedRows()
+                }
+            )
+        )
+
+    def _replace_draft(
+        self,
+        frame: pd.DataFrame,
+        *,
+        reset_state: bool,
+    ) -> None:
+        prepared = self._prepare_import_preview(frame, keep_draft=True)
+        self._install_prepared_draft(prepared, reset_state=reset_state)
+
+    def insert_blank_draft_row(self, *, after_position: int | None) -> bool:
+        """Insert one blank row without writing the active project list."""
+
+        if (
+            self.task_controller.busy
+            or self._derive_busy
+            or not self._draft.columns.size
+        ):
+            return False
+        if after_position is None:
+            insertion = len(self._draft)
+        else:
+            position = int(after_position)
+            if position < 0 or position >= len(self._draft):
+                raise IndexError("blank-row insertion position is outside the draft")
+            insertion = position + 1
+        blank = pd.DataFrame(
+            [{column: pd.NA for column in self._draft.columns}],
+            columns=self._draft.columns,
+        )
+        result = pd.concat(
+            (
+                self._draft.iloc[:insertion],
+                blank,
+                self._draft.iloc[insertion:],
+            ),
+            ignore_index=True,
+        )
+        self._replace_draft(result, reset_state=True)
+        if insertion < self.preview_model.rowCount():
+            self.preview_table.selectRow(insertion)
+        self.status_label.setText("已增加 1 行导入草稿；尚未写入")
+        self._set_error("")
+        return True
+
+    def delete_selected_draft_rows(self) -> bool:
+        """Delete every selected visible row from the detached import draft."""
+
+        if self.task_controller.busy or self._derive_busy:
+            return False
+        positions = self._selected_draft_positions()
+        if not positions:
+            return False
+        result = self._draft.drop(index=list(positions)).reset_index(drop=True)
+        self._replace_draft(result, reset_state=True)
+        self.status_label.setText(
+            f"已删除 {len(positions):,} 行导入草稿；尚未写入"
+        )
+        self._set_error("")
+        return True
+
+    def create_preview_context_menu(
+        self,
+        *,
+        after_position: int | None,
+    ) -> QMenu:
+        """Build the row-maintenance menu for one draft source position."""
+
+        menu = QMenu(self.preview_table)
+        add_action = menu.addAction(translate_ui_text("增加空行"))
+        delete_action = menu.addAction(translate_ui_text("删除选中行"))
+        enabled = (
+            not self.task_controller.busy
+            and not self._derive_busy
+            and bool(self._draft.columns.size)
+        )
+        add_action.setEnabled(enabled)
+        delete_action.setEnabled(enabled and bool(self._selected_draft_positions()))
+        add_action.triggered.connect(
+            lambda _checked=False, position=after_position: self.insert_blank_draft_row(
+                after_position=position
+            )
+        )
+        delete_action.triggered.connect(self.delete_selected_draft_rows)
+        return menu
+
+    @Slot(object)
+    def _show_preview_context_menu(self, position: object) -> None:
+        index = self.preview_table.indexAt(position)
+        after_position: int | None = None
+        if index.isValid():
+            selection_model = self.preview_table.selectionModel()
+            if selection_model is not None and not selection_model.isRowSelected(
+                index.row(),
+                index.parent(),
+            ):
+                selection_model.select(
+                    index,
+                    QItemSelectionModel.ClearAndSelect
+                    | QItemSelectionModel.Rows,
+                )
+            after_position = self.draft_position_for_preview_row(index.row())
+        menu = self.create_preview_context_menu(after_position=after_position)
+        menu.exec(self.preview_table.viewport().mapToGlobal(position))
 
     def _render_empty_preview(self) -> None:
         empty = RowWindow(
@@ -763,6 +969,7 @@ class QtQcListImportPage(QWidget):
         self._preview_service = None
         self._preview_state = None
         self._preview_result = None
+        self._preview_draft_positions = ()
         self._preview_offset = 0
         self.preview_range_label.setText("0–0 / 0")
         self.previous_button.setEnabled(False)
@@ -860,7 +1067,7 @@ class QtQcListImportPage(QWidget):
             and not self._derive_busy
             and self._derive_enabled
             and self.configuration.current_project is not None
-            and bool(self._current.columns.size)
+            and has_draft
         )
 
     def _set_error(self, message: str) -> None:

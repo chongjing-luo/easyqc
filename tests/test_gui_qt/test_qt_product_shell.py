@@ -357,8 +357,8 @@ def test_runtime_language_switch_updates_six_pages_and_preserves_context(
     window.navigation.setCurrentRow(window.results_page_index)
     selected_page = window.workspace_stack.currentWidget()
 
-    english_index = window.language_selector.findData("en")
-    window.language_selector.setCurrentIndex(english_index)
+    assert window.language_button.text() == "English"
+    qtbot.mouseClick(window.language_button, Qt.LeftButton)
 
     assert isinstance(window.language, LanguageController)
     assert window.language.language == "en"
@@ -374,7 +374,11 @@ def test_runtime_language_switch_updates_six_pages_and_preserves_context(
     assert window.project_navigation_label.text() == "Project selection"
     assert window.project_navigation_context.text() == "SAMPLE"
     assert window.navigation.accessibleName() == "EasyQC feature navigation"
-    assert window.language_selector.accessibleName() == "Interface language"
+    assert window.language_button.text() == "中文"
+    assert (
+        window.language_button.accessibleName()
+        == "Switch the interface to Chinese"
+    )
     assert window.workspace_stack.accessibleName() == "Current EasyQC page"
     assert window.config_workspace.project_state_preview.text() == "Open now"
     assert [
@@ -412,8 +416,7 @@ def test_runtime_language_switch_updates_six_pages_and_preserves_context(
         == "Sort priority 1 · Descending"
     )
 
-    chinese_index = window.language_selector.findData("zh_CN")
-    window.language_selector.setCurrentIndex(chinese_index)
+    qtbot.mouseClick(window.language_button, Qt.LeftButton)
     assert _primary_navigation_labels(window)[0] == "项目选择"
     assert table.applied_state is applied_state
     assert table.result is table_result
@@ -427,6 +430,77 @@ def test_runtime_language_switch_updates_six_pages_and_preserves_context(
     )
     assert filter_chip.text() == "site 不等于 C  ×"
     assert filter_chip.toolTip() == "移除筛选 site 不等于 C"
+
+
+def test_navigation_can_collapse_and_restore_current_workspace(
+    qtbot,
+    tmp_path,
+) -> None:
+    window, _services = _window(qtbot, tmp_path)
+    window.navigation.setCurrentRow(window.results_page_index)
+    selected_page = window.workspace_stack.currentWidget()
+
+    assert not window.navigation_collapsed
+    assert window.navigation_panel.minimumWidth() >= 202
+    assert window.navigation.isVisible()
+    qtbot.mouseClick(window.navigation_toggle_button, Qt.LeftButton)
+
+    assert window.navigation_collapsed
+    assert window.navigation_panel.maximumWidth() <= 52
+    assert window.navigation_toggle_button.isVisible()
+    assert not window.navigation.isVisible()
+    assert not window.language_bar.isVisible()
+    assert window.workspace_stack.currentWidget() is selected_page
+    assert window.navigation.currentRow() == window.results_page_index
+
+    window.resize(760, 560)
+    qtbot.mouseClick(window.navigation_toggle_button, Qt.LeftButton)
+
+    assert not window.navigation_collapsed
+    assert window.navigation_panel.minimumWidth() >= 202
+    assert window.navigation.isVisible()
+    assert window.language_bar.isVisible()
+    assert window.workspace_stack.currentWidget() is selected_page
+    assert window.navigation.currentRow() == window.results_page_index
+
+
+def test_single_language_button_toggles_without_losing_page_or_draft(
+    qtbot,
+    tmp_path,
+) -> None:
+    window, services = _window(qtbot, tmp_path)
+    window.language.set_language("zh_CN")
+    window.navigation.setCurrentRow(window.qc_list_import_page_index)
+    selected_page = window.workspace_stack.currentWidget()
+    draft = pd.DataFrame(
+        {"ezqcid": ["DRAFT001", "DRAFT002"], "site": ["A", "B"]}
+    )
+    window.config_workspace.subjects_tab._install_draft(draft)
+
+    assert window.findChild(QComboBox, "languageSelector") is None
+    assert window.language_button.text() == "English"
+    qtbot.mouseClick(window.language_button, Qt.LeftButton)
+
+    assert window.language.language == "en"
+    assert window.language_button.text() == "中文"
+    assert window.workspace_stack.currentWidget() is selected_page
+    pd.testing.assert_frame_equal(
+        window.config_workspace.subjects_tab.draft,
+        draft,
+    )
+    pd.testing.assert_frame_equal(
+        services.configuration_service.subjects(),
+        window.current_context.subjects,
+    )
+
+    qtbot.mouseClick(window.language_button, Qt.LeftButton)
+    assert window.language.language == "zh_CN"
+    assert window.language_button.text() == "English"
+    assert window.workspace_stack.currentWidget() is selected_page
+    pd.testing.assert_frame_equal(
+        window.config_workspace.subjects_tab.draft,
+        draft,
+    )
 
 
 def test_runtime_language_switch_preserves_module_and_rater_text(
