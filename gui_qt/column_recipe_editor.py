@@ -131,12 +131,32 @@ def _default_step(operation: str) -> RecipeStep:
 class ValueSourceEditor(QWidget):
     """Edit one typed current/column/literal recipe operand."""
 
-    def __init__(self, columns: tuple[str, ...], parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        columns: tuple[str, ...],
+        parent: QWidget | None = None,
+        *,
+        allowed_kinds: tuple[str, ...] = ("current", "column", "literal"),
+    ) -> None:
         super().__init__(parent)
+        supported_kinds = {"current", "column", "literal"}
+        if (
+            not allowed_kinds
+            or len(set(allowed_kinds)) != len(allowed_kinds)
+            or any(kind not in supported_kinds for kind in allowed_kinds)
+        ):
+            raise ValueError("值来源类型无效")
+        if "column" in allowed_kinds and not columns:
+            raise ValueError("列来源至少需要一个可用列")
+        self._allowed_kinds = tuple(allowed_kinds)
         self.kind_combo = QComboBox(self)
-        self.kind_combo.addItem("当前步骤值", "current")
-        self.kind_combo.addItem("其他列", "column")
-        self.kind_combo.addItem("固定值", "literal")
+        kind_labels = {
+            "current": "当前步骤值",
+            "column": "已有列",
+            "literal": "固定值",
+        }
+        for kind in self._allowed_kinds:
+            self.kind_combo.addItem(kind_labels[kind], kind)
 
         self.pages = QStackedWidget(self)
         self.pages.addWidget(QLabel("使用上一步的结果", self.pages))
@@ -175,7 +195,8 @@ class ValueSourceEditor(QWidget):
         self._sync_literal_type()
 
     def _sync_page(self) -> None:
-        self.pages.setCurrentIndex(self.kind_combo.currentIndex())
+        page_by_kind = {"current": 0, "column": 1, "literal": 2}
+        self.pages.setCurrentIndex(page_by_kind[str(self.kind_combo.currentData())])
 
     def _sync_literal_type(self) -> None:
         value_type = self.literal_type_combo.currentData()
@@ -184,7 +205,9 @@ class ValueSourceEditor(QWidget):
 
     def set_value(self, value: RecipeValue) -> None:
         index = self.kind_combo.findData(value.kind)
-        self.kind_combo.setCurrentIndex(max(0, index))
+        if index < 0:
+            raise ValueError(f"当前编辑器不支持值来源: {value.kind}")
+        self.kind_combo.setCurrentIndex(index)
         if value.kind == "column":
             column_index = self.column_combo.findData(value.value)
             if column_index < 0:
@@ -267,7 +290,7 @@ class StepParameterEditor(QWidget):
         if step is None:
             empty = QLabel(
                 "添加并选择一个步骤后，可在这里设置参数。\n"
-                "不添加步骤时会直接复制来源列。",
+                "不添加步骤时会直接使用起始值。",
                 self._content,
             )
             empty.setWordWrap(True)
@@ -411,15 +434,19 @@ class ColumnRecipeEditor(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        source_form = QFormLayout()
-        self.source_combo = QComboBox(self)
+        initial_form = QFormLayout()
+        self.initial_value_editor = ValueSourceEditor(
+            self._columns,
+            self,
+            allowed_kinds=("column", "literal"),
+        )
+        self.initial_value_editor.setObjectName("derivedColumnInitialValue")
+        self.initial_value_editor.setAccessibleName("新增列起始值")
+        self.source_combo = self.initial_value_editor.column_combo
         self.source_combo.setObjectName("derivedColumnSource")
-        self.source_combo.setAccessibleName("新增列主要来源列")
-        protect_user_text(self.source_combo, "items")
-        for column in self._columns:
-            self.source_combo.addItem(column, column)
-        source_form.addRow("主要来源列", self.source_combo)
-        layout.addLayout(source_form)
+        self.source_combo.setAccessibleName("新增列已有来源列")
+        initial_form.addRow("起始值", self.initial_value_editor)
+        layout.addLayout(initial_form)
 
         add_row = QHBoxLayout()
         self.operation_combo = QComboBox(self)
@@ -472,10 +499,12 @@ class ColumnRecipeEditor(QWidget):
         self._update_buttons()
 
     def set_source_column(self, column: str) -> None:
-        index = self.source_combo.findData(column)
-        if index < 0:
-            raise ValueError(f"未知来源列: {column}")
-        self.source_combo.setCurrentIndex(index)
+        self.initial_value_editor.set_value(RecipeValue.column(column))
+
+    def set_initial_value(self, value: RecipeValue) -> None:
+        """Select one existing-column or fixed-value recipe start."""
+
+        self.initial_value_editor.set_value(value)
 
     def set_steps(self, steps: tuple[RecipeStep, ...]) -> None:
         for step in steps:
@@ -508,7 +537,7 @@ class ColumnRecipeEditor(QWidget):
             raise ValueError("当前步骤参数无效")
         return ColumnRecipe(
             name=name,
-            source_column=str(self.source_combo.currentData()),
+            initial_value=self.initial_value_editor.value(),
             steps=tuple(self._steps),
         )
 

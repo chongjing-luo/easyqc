@@ -41,7 +41,7 @@ def test_derived_column_dialog_previews_ordered_recipe_without_writing(qtbot):
     assert commits == []
     assert dialog.preview_table.rowCount() == 3
     assert dialog.preview_table.columnCount() == 3
-    assert dialog.preview_table.horizontalHeaderItem(1).text() == "原始值"
+    assert dialog.preview_table.horizontalHeaderItem(1).text() == "起始值"
     assert dialog.preview_table.horizontalHeaderItem(2).text() == "age_next"
     assert dialog.preview_table.item(0, 2).text() == "30"
     assert dialog.error_label.text() == ""
@@ -106,3 +106,36 @@ def test_derived_column_dialog_shows_step_specific_validation_error(qtbot):
 
     assert not dialog.preview()
     assert "delimiter" in dialog.error_label.text()
+
+
+def test_derived_column_dialog_previews_and_commits_fixed_start(qtbot):
+    commits = []
+
+    def persist(recipe):
+        commits.append(recipe)
+        return recipe.name
+
+    dialog = DerivedColumnDialog(_source(), persist)
+    qtbot.addWidget(dialog)
+    dialog.name_edit.setText("batch")
+    dialog.editor.set_initial_value(RecipeValue.literal("A"))
+
+    assert dialog.preview()
+    assert dialog.preview_table.item(0, 1).text() == "A"
+    assert dialog.preview_table.item(0, 2).text() == "A"
+    qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
+    qtbot.waitUntil(lambda: dialog.result() == QDialog.Accepted, timeout=3000)
+    assert commits[0].initial_value == RecipeValue.literal("A")
+
+
+def test_derived_column_dialog_can_preview_missing_ezqcid_target(qtbot):
+    source = pd.DataFrame({"raw_id": ["SUB001", "SUB002"]})
+    dialog = DerivedColumnDialog(source, lambda recipe: recipe.name)
+    qtbot.addWidget(dialog)
+    dialog.name_edit.setText("ezqcid")
+    dialog.editor.set_source_column("raw_id")
+
+    assert dialog.preview()
+    assert dialog.preview_table.horizontalHeaderItem(0).text() == "行"
+    assert dialog.preview_table.horizontalHeaderItem(2).text() == "ezqcid"
+    assert dialog.preview_table.item(0, 2).text() == "SUB001"

@@ -58,7 +58,7 @@ class DerivedColumnDialog(QDialog):
 
         self.setObjectName("derivedColumnDialog")
         self.setWindowTitle("新增列")
-        self.setAccessibleName("使用已有列生成新列")
+        self.setAccessibleName("使用已有列或固定值生成新列")
         self.setModal(True)
 
         self.task_controller = RevisionedTaskController(self)
@@ -76,7 +76,7 @@ class DerivedColumnDialog(QDialog):
         layout.addLayout(form)
 
         helper = QLabel(
-            "选择主要来源列，再按顺序添加转换步骤。路径操作只处理单元格文本，"
+            "选择已有列或固定值作为起始值，再按顺序添加转换步骤。路径操作只处理单元格文本，"
             "不会读取文件；配方和中间结果不会保存。",
             self,
         )
@@ -162,14 +162,15 @@ class DerivedColumnDialog(QDialog):
         except (ArithmeticError, TypeError, ValueError) as exc:
             self._set_error(str(exc))
             return False
-        source = self._preview_source[recipe.source_column]
-        columns = ["ezqcid", "原始值", recipe.name]
+        source = self._engine.recipe_initial_values(self._preview_source, recipe)
+        has_identity = "ezqcid" in self._preview_source.columns
+        columns = ["ezqcid" if has_identity else "行", "起始值", recipe.name]
         self.preview_table.clear()
         self.preview_table.setColumnCount(len(columns))
         self.preview_table.setHorizontalHeaderLabels(columns)
         self.preview_table.horizontalHeaderItem(0).setData(
             Qt.ItemDataRole.UserRole,
-            "ezqcid",
+            "ezqcid" if has_identity else "row",
         )
         self.preview_table.horizontalHeaderItem(2).setData(
             Qt.ItemDataRole.UserRole,
@@ -178,8 +179,8 @@ class DerivedColumnDialog(QDialog):
         self.preview_table.setRowCount(len(result))
         for row in range(len(result)):
             identity = (
-                result.iloc[row]["ezqcid"]
-                if "ezqcid" in result.columns
+                self._preview_source.iloc[row]["ezqcid"]
+                if has_identity
                 else row + 1
             )
             values = (identity, source.iloc[row], result.iloc[row][recipe.name])

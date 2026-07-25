@@ -11,8 +11,11 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
+    QCheckBox,
+    QComboBox,
     QFileDialog,
     QFrame,
+    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -22,6 +25,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSizePolicy,
+    QSpinBox,
     QStackedWidget,
     QTableView,
     QTextEdit,
@@ -41,6 +45,7 @@ from gui_qt.table_model import QtTableModel
 from gui_qt.task_runner import RevisionedTaskController
 from gui_qt.theme import set_button_role
 from models.column_recipe import ColumnRecipe
+from models.folder_match import FolderMatchRequest
 from models.table_view_state import (
     ColumnViewState,
     FilterExpression,
@@ -182,6 +187,96 @@ class QtQcListImportPage(QWidget):
         self.source_stack.addWidget(text_page)
         layout.addWidget(self.source_stack)
 
+        self.folder_options_widget = QWidget(self)
+        folder_options_layout = QVBoxLayout(self.folder_options_widget)
+        folder_options_layout.setContentsMargins(0, 0, 0, 0)
+        folder_options_layout.setSpacing(8)
+        folder_mode_row = QHBoxLayout()
+        folder_mode_row.addWidget(QLabel("文件夹读取", self.folder_options_widget))
+        self.folder_read_mode_group = QButtonGroup(self.folder_options_widget)
+        self.folder_read_mode_group.setExclusive(True)
+        self.folder_default_button = QPushButton(
+            "直接下一级文件夹",
+            self.folder_options_widget,
+        )
+        self.folder_match_button = QPushButton(
+            "模式匹配",
+            self.folder_options_widget,
+        )
+        for button in (self.folder_default_button, self.folder_match_button):
+            button.setCheckable(True)
+            self.folder_read_mode_group.addButton(button)
+            folder_mode_row.addWidget(button)
+        self.folder_default_button.setChecked(True)
+        folder_mode_row.addStretch(1)
+        folder_options_layout.addLayout(folder_mode_row)
+
+        self.folder_match_panel = QFrame(self.folder_options_widget)
+        self.folder_match_panel.setObjectName("folderMatchPanel")
+        self.folder_match_panel.setProperty("surface", "subtle")
+        folder_match_form = QFormLayout(self.folder_match_panel)
+        folder_match_form.setContentsMargins(8, 8, 8, 8)
+        folder_match_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+
+        self.folder_target_combo = QComboBox(self.folder_match_panel)
+        self.folder_target_combo.addItem("文件夹", "directory")
+        self.folder_target_combo.addItem("文件", "file")
+        self.folder_target_combo.addItem("文件夹和文件", "both")
+        folder_match_form.addRow("目标类型", self.folder_target_combo)
+
+        self.folder_match_kind_combo = QComboBox(self.folder_match_panel)
+        self.folder_match_kind_combo.addItem("开头是", "starts_with")
+        self.folder_match_kind_combo.addItem("结尾是", "ends_with")
+        self.folder_match_kind_combo.addItem("包含", "contains")
+        self.folder_match_kind_combo.addItem("通配符", "wildcard")
+        self.folder_match_kind_combo.addItem("正则", "regex")
+        folder_match_form.addRow("匹配方式", self.folder_match_kind_combo)
+
+        self.folder_pattern_edit = QLineEdit(self.folder_match_panel)
+        self.folder_pattern_edit.setPlaceholderText("输入名称匹配模式")
+        folder_match_form.addRow("匹配模式", self.folder_pattern_edit)
+
+        self.folder_scope_combo = QComboBox(self.folder_match_panel)
+        self.folder_scope_combo.addItem("直接下一级", "direct")
+        self.folder_scope_combo.addItem("指定层级", "exact")
+        self.folder_scope_combo.addItem("所有层级", "all")
+        folder_match_form.addRow("查找范围", self.folder_scope_combo)
+
+        self.folder_exact_depth_spin = QSpinBox(self.folder_match_panel)
+        self.folder_exact_depth_spin.setRange(1, 100)
+        self.folder_exact_depth_spin.setValue(1)
+        folder_match_form.addRow("层级", self.folder_exact_depth_spin)
+
+        parent_output = QWidget(self.folder_match_panel)
+        parent_output_layout = QHBoxLayout(parent_output)
+        parent_output_layout.setContentsMargins(0, 0, 0, 0)
+        self.include_parent_column_checkbox = QCheckBox(
+            "输出相对父路径",
+            parent_output,
+        )
+        self.include_parent_column_checkbox.setChecked(True)
+        self.parent_column_name_edit = QLineEdit(parent_output)
+        self.parent_column_name_edit.setPlaceholderText("相对父路径字段名")
+        self.parent_column_name_edit.setText("relative_parent")
+        parent_output_layout.addWidget(self.include_parent_column_checkbox)
+        parent_output_layout.addWidget(self.parent_column_name_edit, 1)
+        folder_match_form.addRow("父路径", parent_output)
+        folder_options_layout.addWidget(self.folder_match_panel)
+        layout.addWidget(self.folder_options_widget)
+
+        self.folder_default_button.toggled.connect(
+            self._sync_folder_match_controls
+        )
+        self.folder_match_button.toggled.connect(
+            self._sync_folder_match_controls
+        )
+        self.folder_scope_combo.currentIndexChanged.connect(
+            self._sync_folder_match_controls
+        )
+        self.include_parent_column_checkbox.toggled.connect(
+            self._sync_folder_match_controls
+        )
+
         single_column_row = QHBoxLayout()
         single_column_row.addWidget(QLabel("单列字段名", self))
         self.single_column_name = QLineEdit(self)
@@ -221,7 +316,9 @@ class QtQcListImportPage(QWidget):
         self.columns_button = QPushButton("列显示", self)
         self.derive_button = QPushButton("新增列", self)
         self.derive_button.setAccessibleName("为导入草稿新增列")
-        self.derive_button.setToolTip("使用导入草稿中的已有列生成普通新列")
+        self.derive_button.setToolTip(
+            "使用导入草稿中的已有列或固定值生成普通新列"
+        )
         self.filter_button.clicked.connect(self.open_filter_dialog)
         self.sort_button.clicked.connect(self.open_sort_dialog)
         self.columns_button.clicked.connect(self.open_columns_dialog)
@@ -313,6 +410,8 @@ class QtQcListImportPage(QWidget):
         self.error_label.hide()
         layout.addWidget(self.error_label)
 
+        self._sync_folder_match_controls()
+
     def _set_source_mode(self, mode: str) -> None:
         if mode not in {"folder", "file", "text"}:
             raise ValueError(f"Unsupported list-import source mode: {mode}")
@@ -327,6 +426,8 @@ class QtQcListImportPage(QWidget):
         self.source_stack.setMaximumHeight(
             max(1, self.source_stack.currentWidget().sizeHint().height())
         )
+        self.folder_options_widget.setVisible(mode == "folder")
+        self._sync_folder_match_controls()
         if mode == "folder":
             self.source_path_edit.setPlaceholderText("选择包含名单目录的文件夹")
         elif mode == "file":
@@ -353,10 +454,38 @@ class QtQcListImportPage(QWidget):
         column_name = self.single_column_name.text()
         if mode == "folder":
             path = self.source_path_edit.text()
-            reader = lambda: self._prepare_import_preview(
-                self.configuration.draft_from_folder(path, column_name),
-                keep_draft=True,
-            )
+            if self.folder_match_button.isChecked():
+                request_values = {
+                    "target_kind": str(self.folder_target_combo.currentData()),
+                    "match_kind": str(
+                        self.folder_match_kind_combo.currentData()
+                    ),
+                    "pattern": self.folder_pattern_edit.text(),
+                    "scope": str(self.folder_scope_combo.currentData()),
+                    "exact_depth": self.folder_exact_depth_spin.value(),
+                    "item_column": column_name,
+                    "parent_column": (
+                        self.parent_column_name_edit.text()
+                        if self.include_parent_column_checkbox.isChecked()
+                        else None
+                    ),
+                }
+
+                def reader() -> _PreparedImportPreview:
+                    request = FolderMatchRequest(**request_values)
+                    return self._prepare_import_preview(
+                        self.configuration.draft_from_folder_matches(
+                            path,
+                            request,
+                        ),
+                        keep_draft=True,
+                    )
+
+            else:
+                reader = lambda: self._prepare_import_preview(
+                    self.configuration.draft_from_folder(path, column_name),
+                    keep_draft=True,
+                )
         elif mode == "file":
             path = self.source_path_edit.text()
             reader = lambda: self._prepare_import_preview(
@@ -370,6 +499,19 @@ class QtQcListImportPage(QWidget):
                 keep_draft=True,
             )
         return self._submit("read", reader)
+
+    def _sync_folder_match_controls(self) -> None:
+        match_mode = (
+            self._source_mode == "folder"
+            and self.folder_match_button.isChecked()
+        )
+        self.folder_match_panel.setVisible(match_mode)
+        self.folder_exact_depth_spin.setEnabled(
+            match_mode and self.folder_scope_combo.currentData() == "exact"
+        )
+        self.parent_column_name_edit.setEnabled(
+            match_mode and self.include_parent_column_checkbox.isChecked()
+        )
 
     def apply_draft(self) -> bool:
         if self._draft.empty:
@@ -462,6 +604,15 @@ class QtQcListImportPage(QWidget):
             self.text_mode_button,
             self.source_path_edit,
             self.browse_button,
+            self.folder_default_button,
+            self.folder_match_button,
+            self.folder_target_combo,
+            self.folder_match_kind_combo,
+            self.folder_pattern_edit,
+            self.folder_scope_combo,
+            self.folder_exact_depth_spin,
+            self.include_parent_column_checkbox,
+            self.parent_column_name_edit,
             self.direct_text_edit,
             self.single_column_name,
             self.read_preview_button,
@@ -475,6 +626,8 @@ class QtQcListImportPage(QWidget):
             self.clear_button,
         ):
             widget.setEnabled(enabled)
+        if enabled:
+            self._sync_folder_match_controls()
         self._update_actions()
 
     def refresh_current(self, frame: pd.DataFrame) -> None:

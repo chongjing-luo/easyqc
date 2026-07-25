@@ -71,3 +71,34 @@ def test_recipe_editor_exposes_complete_core_catalog_and_omits_unused_compare(
     recipe = editor.recipe("missing_status")
 
     assert "compare_to" not in recipe.steps[0].parameters
+
+
+def test_recipe_editor_uses_typed_fixed_value_as_shared_start(qtbot) -> None:
+    editor = ColumnRecipeEditor(("ezqcid", "site"))
+    qtbot.addWidget(editor)
+
+    editor.set_initial_value(RecipeValue.literal("same-site"))
+    recipe = editor.recipe("site_copy")
+
+    assert editor.initial_value_editor.kind_combo.currentData() == "literal"
+    assert recipe.initial_value == RecipeValue.literal("same-site")
+    assert recipe.source_column is None
+
+
+def test_recipe_editor_fixed_start_can_feed_later_steps(qtbot) -> None:
+    editor = ColumnRecipeEditor(("ezqcid", "site"))
+    qtbot.addWidget(editor)
+    editor.set_initial_value(RecipeValue.literal(2))
+    editor.set_steps(
+        (
+            RecipeStep.create(
+                "multiply",
+                value=RecipeValue.literal(3),
+            ),
+        )
+    )
+
+    recipe = editor.recipe("six")
+
+    assert recipe.initial_value == RecipeValue.literal(2)
+    assert recipe.steps[0].parameters["value"] == RecipeValue.literal(3)

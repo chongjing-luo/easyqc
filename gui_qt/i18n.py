@@ -161,6 +161,13 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
         "Create a regular new column from existing import-draft columns"
     ),
     "使用已有列生成新列": "Create a new column from existing columns",
+    "使用导入草稿中的已有列或固定值生成普通新列": (
+        "Create a regular new column from an existing import-draft column or "
+        "a fixed value"
+    ),
+    "使用已有列或固定值生成新列": (
+        "Create a new column from an existing column or fixed value"
+    ),
     "放弃当前未保存的质控修改并关闭 EasyQC？": (
         "Discard the unsaved QC changes and close EasyQC?"
     ),
@@ -472,16 +479,21 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "现有列（双击插入）": "Existing columns (double-click to insert)",
     "预览结果": "Preview",
     "例如：scan_key": "For example: scan_key",
-    "选择主要来源列，再按顺序添加转换步骤。路径操作只处理单元格文本，"
+    "选择已有列或固定值作为起始值，再按顺序添加转换步骤。路径操作只处理单元格文本，"
     "不会读取文件；配方和中间结果不会保存。": (
-        "Choose a primary source column, then add transformations in order. "
+        "Choose an existing column or fixed value as the starting value, then "
+        "add transformations in order. "
         "Path operations process cell text only and never read files; recipes "
         "and intermediate values are not saved."
     ),
     "新增列转换步骤编辑器": "New-column transformation editor",
     "前 20 行预览": "First 20 rows",
     "新增列前二十行预览": "First twenty rows of the new-column preview",
-    "原始值": "Original value",
+    "起始值": "Starting value",
+    "新增列起始值": "Starting value for the new column",
+    "新增列已有来源列": "Existing source column for the new column",
+    "已有列": "Existing column",
+    "行": "Row",
     "新增列错误": "New-column error",
     "确认生成并写入新列": "Create and write the new column",
     "取消新增列": "Cancel new column",
@@ -551,9 +563,9 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "空值": "Blank",
     "输入固定值": "Enter a fixed value",
     "添加并选择一个步骤后，可在这里设置参数。\n"
-    "不添加步骤时会直接复制来源列。": (
+    "不添加步骤时会直接使用起始值。": (
         "Add and select a step to configure it here.\n"
-        "With no steps, the source column is copied directly."
+        "With no steps, the starting value is used directly."
     ),
     "遇到错误时停止": "Stop on error",
     "错误行置空": "Set error rows to blank",
@@ -569,6 +581,26 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "浏览…": "Browse…",
     "文件夹": "Folder",
     "文件": "File",
+    "文件夹读取": "Folder reading",
+    "直接下一级文件夹": "Immediate child folders",
+    "模式匹配": "Pattern matching",
+    "目标类型": "Target type",
+    "文件夹和文件": "Folders and files",
+    "匹配方式": "Match method",
+    "开头是": "Starts with",
+    "结尾是": "Ends with",
+    "通配符": "Wildcard",
+    "正则": "Regular expression",
+    "匹配模式": "Match pattern",
+    "输入名称匹配模式": "Enter a name pattern",
+    "查找范围": "Search scope",
+    "直接下一级": "Immediate children",
+    "指定层级": "Exact level",
+    "所有层级": "All levels",
+    "层级": "Level",
+    "父路径": "Parent path",
+    "输出相对父路径": "Output relative parent path",
+    "相对父路径字段名": "Relative-parent field name",
     "直接输入": "Direct input",
     "读取并预览": "Read and preview",
     "导入方式": "Import mode",

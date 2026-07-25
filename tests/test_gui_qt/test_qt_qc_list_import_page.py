@@ -9,6 +9,7 @@ from PySide6.QtCore import QItemSelectionModel, QTimer, Qt
 from PySide6.QtWidgets import (
     QAbstractButton,
     QAbstractItemView,
+    QComboBox,
     QLabel,
     QLineEdit,
 )
@@ -474,3 +475,168 @@ def test_reduced_width_keeps_import_and_apply_actions_reachable(qtbot, tmp_path)
     assert page.clear_button.isVisible()
     assert page.apply_button.isVisible()
     assert page.preview_table.horizontalScrollBarPolicy() == Qt.ScrollBarAsNeeded
+
+
+def test_import_draft_can_generate_missing_ezqcid_then_merge(qtbot, tmp_path) -> None:
+    page, configuration, _current = _page(qtbot, tmp_path)
+    page._install_draft(
+        pd.DataFrame(
+            {
+                "raw_id": ["SUB003", "SUB004"],
+                "batch": ["C", "D"],
+            }
+        )
+    )
+
+    qtbot.mouseClick(page.derive_button, Qt.LeftButton)
+    dialog = page.derived_column_dialog
+    assert dialog is not None
+    dialog.name_edit.setText("ezqcid")
+    dialog.editor.set_source_column("raw_id")
+    qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
+    qtbot.waitUntil(lambda: "ezqcid" in page.draft.columns, timeout=3000)
+
+    assert page.draft["ezqcid"].tolist() == ["SUB003", "SUB004"]
+    qtbot.mouseClick(page.apply_button, Qt.LeftButton)
+    _wait(page, qtbot)
+    assert configuration.subjects()["ezqcid"].tolist() == [
+        "SUB001",
+        "SUB002",
+        "SUB003",
+        "SUB004",
+    ]
+
+
+def _pattern_tree(tmp_path):
+    root = tmp_path / "folder-pattern-ui"
+    (root / "siteA" / "sub01").mkdir(parents=True)
+    (root / "siteB" / "sub02").mkdir(parents=True)
+    (root / "siteA" / "sub01" / "scan_T1.nii.gz").write_text(
+        "a",
+        encoding="utf-8",
+    )
+    (root / "siteB" / "sub02" / "scan_T2.nii.gz").write_text(
+        "b",
+        encoding="utf-8",
+    )
+    return root
+
+
+def test_folder_pattern_controls_create_two_or_one_column_draft(
+    qtbot,
+    tmp_path,
+) -> None:
+    page, _configuration, _current = _page(qtbot, tmp_path)
+    root = _pattern_tree(tmp_path)
+    qtbot.mouseClick(page.folder_mode_button, Qt.LeftButton)
+
+    assert page.folder_default_button.isChecked()
+    assert not page.folder_match_panel.isVisible()
+    qtbot.mouseClick(page.folder_match_button, Qt.LeftButton)
+    assert page.folder_match_panel.isVisible()
+
+    page.source_path_edit.setText(str(root))
+    page.single_column_name.setText("matched_item")
+    page.parent_column_name_edit.setText("relative_parent")
+    page.folder_target_combo.setCurrentIndex(
+        page.folder_target_combo.findData("file")
+    )
+    page.folder_match_kind_combo.setCurrentIndex(
+        page.folder_match_kind_combo.findData("ends_with")
+    )
+    page.folder_pattern_edit.setText(".nii.gz")
+    page.folder_scope_combo.setCurrentIndex(
+        page.folder_scope_combo.findData("exact")
+    )
+    assert page.folder_exact_depth_spin.isEnabled()
+    page.folder_exact_depth_spin.setValue(3)
+    qtbot.mouseClick(page.read_preview_button, Qt.LeftButton)
+    _wait(page, qtbot)
+
+    assert page.draft.to_dict("records") == [
+        {"relative_parent": "siteA/sub01", "matched_item": "scan_T1.nii.gz"},
+        {"relative_parent": "siteB/sub02", "matched_item": "scan_T2.nii.gz"},
+    ]
+
+    page.include_parent_column_checkbox.setChecked(False)
+    assert not page.parent_column_name_edit.isEnabled()
+    qtbot.mouseClick(page.read_preview_button, Qt.LeftButton)
+    _wait(page, qtbot)
+    assert not page.parent_column_name_edit.isEnabled()
+    assert page.draft.to_dict("records") == [
+        {"matched_item": "scan_T1.nii.gz"},
+        {"matched_item": "scan_T2.nii.gz"},
+    ]
+
+
+def test_folder_pattern_controls_translate_without_losing_request_state(
+    qtbot,
+    tmp_path,
+) -> None:
+    page, _configuration, _current = _page(qtbot, tmp_path)
+    language = get_or_create_language_controller()
+    language.register_root(page)
+    qtbot.mouseClick(page.folder_mode_button, Qt.LeftButton)
+    qtbot.mouseClick(page.folder_match_button, Qt.LeftButton)
+    page.folder_pattern_edit.setText("scan_*")
+    page.folder_scope_combo.setCurrentIndex(
+        page.folder_scope_combo.findData("all")
+    )
+    page.include_parent_column_checkbox.setChecked(False)
+
+    language.set_language("en")
+    try:
+        assert page.folder_match_button.text() == "Pattern matching"
+        assert page.folder_target_combo.itemText(0) == "Folder"
+        assert page.folder_match_kind_combo.itemText(3) == "Wildcard"
+        assert page.folder_scope_combo.currentText() == "All levels"
+        assert page.folder_pattern_edit.text() == "scan_*"
+        assert not page.include_parent_column_checkbox.isChecked()
+        assert not page.parent_column_name_edit.isEnabled()
+        presentation = [
+            *(widget.text() for widget in page.findChildren(QLabel)),
+            *(widget.text() for widget in page.findChildren(QAbstractButton)),
+            *(
+                combo.itemText(index)
+                for combo in page.findChildren(QComboBox)
+                for index in range(combo.count())
+            ),
+            *(
+                widget.placeholderText()
+                for widget in page.findChildren(QLineEdit)
+            ),
+        ]
+        assert not {
+            text
+            for text in presentation
+            if any("\u3400" <= char <= "\u9fff" for char in text)
+        }
+    finally:
+        language.set_language("zh_CN")
+
+
+def test_failed_folder_pattern_preserves_previous_import_draft(
+    qtbot,
+    tmp_path,
+) -> None:
+    page, _configuration, _current = _page(qtbot, tmp_path)
+    root = _pattern_tree(tmp_path)
+    previous = pd.DataFrame({"raw_id": ["KEEP001"]})
+    page._install_draft(previous)
+    qtbot.mouseClick(page.folder_mode_button, Qt.LeftButton)
+    qtbot.mouseClick(page.folder_match_button, Qt.LeftButton)
+    page.source_path_edit.setText(str(root))
+    page.single_column_name.setText("matched_item")
+    page.folder_target_combo.setCurrentIndex(
+        page.folder_target_combo.findData("file")
+    )
+    page.folder_match_kind_combo.setCurrentIndex(
+        page.folder_match_kind_combo.findData("regex")
+    )
+    page.folder_pattern_edit.setText("(")
+
+    qtbot.mouseClick(page.read_preview_button, Qt.LeftButton)
+    _wait(page, qtbot)
+
+    pd.testing.assert_frame_equal(page.draft, previous)
+    assert "正则" in page.error_text
