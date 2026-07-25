@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pandas as pd
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QPlainTextEdit
+from PySide6.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QLineEdit,
+    QPlainTextEdit,
+    QPushButton,
+)
 
 from gui_qt.derived_column_dialog import DerivedColumnDialog
 from gui_qt.formula_editor import FormulaEditorWidget
@@ -184,3 +190,30 @@ def test_dialog_rejects_existing_target_without_calling_worker(qtbot) -> None:
 
     assert commits == []
     assert "已存在" in dialog.error_label.text()
+
+
+def test_dialog_remains_reachable_and_accessible_at_640_pixels(qtbot) -> None:
+    dialog = DerivedColumnDialog(_source(), lambda request: request.name)
+    qtbot.addWidget(dialog)
+    dialog.name_edit.setText("age next")
+    dialog.editor.set_formula("[age] + 1")
+    assert dialog.preview()
+
+    dialog.resize(640, 680)
+    dialog.show()
+    qtbot.waitUntil(lambda: dialog.width() == 640)
+
+    assert dialog.minimumSizeHint().width() <= 640
+    assert dialog.name_edit.isVisibleTo(dialog)
+    assert dialog.editor.formula_edit.isVisibleTo(dialog)
+    assert dialog.preview_table.isVisibleTo(dialog)
+    assert dialog.preview_button.isVisibleTo(dialog)
+    assert dialog.generate_button.isVisibleTo(dialog)
+    assert dialog.cancel_button.isVisibleTo(dialog)
+    assert dialog.preview_button.minimumHeight() >= 34
+    assert dialog.editor.quick_panel.generate_button.minimumHeight() >= 34
+    assert dialog.generate_button.minimumHeight() >= 34
+    assert dialog.cancel_button.minimumHeight() >= 34
+    for control_type in (QComboBox, QLineEdit, QPlainTextEdit, QPushButton):
+        for control in dialog.findChildren(control_type):
+            assert control.accessibleName().strip(), type(control).__name__

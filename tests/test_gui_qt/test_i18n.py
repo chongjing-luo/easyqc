@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.formula_engine import FormulaEngine
 from core.table_view_service import TableViewService
 from gui_qt.columns_dialog import ColumnsDialog
 from gui_qt.columns_panel import ColumnsPanel
@@ -31,7 +32,6 @@ from gui_qt.i18n import (
 from gui_qt.qc_results_page import QtQcResultsPage
 from gui_qt.sort_dialog import SortDialog
 from gui_qt.table_workspace import QtTableWorkspace
-from models.column_recipe import RecipeStep, RecipeValue
 from models.table_view_state import (
     ColumnViewState,
     FilterCondition,
@@ -359,16 +359,38 @@ def test_open_table_dialogs_switch_language_without_losing_drafts(qtbot, tmp_pat
     filter_dialog = FilterDialog(profiles, filter_expression)
     sort_dialog = SortDialog(columns.order, (SortRule("评分", True),))
     columns_dialog = ColumnsDialog(columns, columns)
-    derived_dialog = DerivedColumnDialog(source, lambda recipe: recipe.name)
-    derived_dialog.name_edit.setText("age_next")
-    derived_dialog.editor.set_source_column("age")
-    derived_dialog.editor.set_steps(
-        (
-            RecipeStep.create(
-                "add",
-                value=RecipeValue.literal(1),
-            ),
+    derived_dialog = DerivedColumnDialog(
+        source,
+        lambda formula_request: formula_request.name,
+    )
+    derived_dialog.name_edit.setText("age next")
+    derived_dialog.editor.set_formula(
+        'IF([评分] = "合格", [age] + 1, [age])'
+    )
+    derived_dialog.editor.quick_panel.set_template("concatenate")
+    quick_panel = derived_dialog.editor.quick_panel
+    quick_panel.concatenate_left_combo.setCurrentIndex(
+        quick_panel.concatenate_left_combo.findData("评分")
+    )
+    quick_panel.concatenate_separator_edit.setText("·")
+    quick_panel.concatenate_right_combo.setCurrentIndex(
+        quick_panel.concatenate_right_combo.findData("site")
+    )
+    derived_dialog.editor.tabs.setCurrentIndex(1)
+    derived_dialog.editor.column_combo.setCurrentIndex(
+        derived_dialog.editor.column_combo.findData("评分")
+    )
+    derived_dialog.editor.function_combo.setCurrentIndex(
+        derived_dialog.editor.function_combo.findData("VALUE")
+    )
+    assert derived_dialog.preview()
+    formula_before = derived_dialog.editor.formula()
+    preview_before = tuple(
+        tuple(
+            derived_dialog.preview_table.item(row, column).text()
+            for column in range(derived_dialog.preview_table.columnCount())
         )
+        for row in range(derived_dialog.preview_table.rowCount())
     )
     dialogs = (filter_dialog, sort_dialog, columns_dialog, derived_dialog)
     for dialog in dialogs:
@@ -391,14 +413,98 @@ def test_open_table_dialogs_switch_language_without_losing_drafts(qtbot, tmp_pat
     assert sort_dialog.editor.rule_rows[0].column_combo.currentText() == "评分"
     filter_column_combo = filter_dialog.editor.condition_rows[0].column_combo
     assert filter_column_combo.itemText(filter_column_combo.findData("评分")) == "评分"
-    assert derived_dialog.editor.source_combo.findData("评分") >= 0
+    assert derived_dialog.editor.column_combo.findData("评分") >= 0
     assert columns_dialog.editor.state() == columns
-    assert derived_dialog.name_edit.text() == "age_next"
-    assert derived_dialog.editor.source_combo.currentData() == "age"
-    assert derived_dialog.editor.recipe("age_next").steps[0].parameters[
-        "value"
-    ] == RecipeValue.literal(1)
+    assert derived_dialog.name_edit.text() == "age next"
+    assert derived_dialog.editor.formula() == formula_before
+    assert derived_dialog.editor.tabs.currentIndex() == 1
+    assert quick_panel.template_combo.currentData() == "concatenate"
+    assert quick_panel.concatenate_left_combo.currentData() == "评分"
+    assert quick_panel.concatenate_separator_edit.text() == "·"
+    assert quick_panel.concatenate_right_combo.currentData() == "site"
+    assert derived_dialog.editor.column_combo.currentData() == "评分"
+    assert derived_dialog.editor.function_combo.currentData() == "VALUE"
+    assert preview_before == tuple(
+        tuple(
+            derived_dialog.preview_table.item(row, column).text()
+            for column in range(derived_dialog.preview_table.columnCount())
+        )
+        for row in range(derived_dialog.preview_table.rowCount())
+    )
+    assert derived_dialog.preview_table.horizontalHeaderItem(1).text() == "评分"
+    assert derived_dialog.preview_table.horizontalHeaderItem(4).text() == "Error"
+    assert derived_dialog.editor.tabs.tabText(0) == "Quick templates"
+    assert derived_dialog.editor.tabs.tabText(1) == "Advanced formula"
+    value_spec = next(
+        spec
+        for spec in FormulaEngine.function_catalog()
+        if spec.name == "VALUE"
+    )
+    assert derived_dialog.editor.function_description.text() == (
+        value_spec.description_en
+    )
+    assert derived_dialog.editor.function_signature.text() == value_spec.signature
+    assert derived_dialog.editor.function_example.text() == (
+        f"Example: {value_spec.example}"
+    )
+    assert derived_dialog.editor.status_label.text() == (
+        "Formula valid · 2 columns referenced"
+    )
     assert "Sort priority" in _widget_presentation_texts(sort_dialog)
+
+    quick_panel.set_template("fixed")
+    quick_panel.fixed_type_combo.setCurrentIndex(
+        quick_panel.fixed_type_combo.findData("integer")
+    )
+    quick_panel.fixed_value_edit.setText("not-an-integer")
+    qtbot.mouseClick(quick_panel.generate_button, Qt.LeftButton)
+    controller.localize_widget_tree(derived_dialog)
+    assert derived_dialog.editor.status_label.text() == (
+        "Fixed value must be an integer"
+    )
+    assert derived_dialog.editor.formula() == formula_before
+
+    controller.set_language("zh_CN")
+    assert derived_dialog.name_edit.text() == "age next"
+    assert derived_dialog.editor.formula() == formula_before
+    assert derived_dialog.editor.function_description.text() == (
+        value_spec.description_zh
+    )
+    assert derived_dialog.preview_table.horizontalHeaderItem(1).text() == "评分"
+    assert derived_dialog.preview_table.horizontalHeaderItem(4).text() == "错误"
+
+
+def test_formula_row_errors_switch_to_english_without_translating_data(
+    qtbot,
+    tmp_path,
+) -> None:
+    controller = LanguageController(settings=_settings(tmp_path))
+    source = pd.DataFrame(
+        {
+            "ezqcid": ["A"],
+            "评分": ["无法转换"],
+        }
+    )
+    dialog = DerivedColumnDialog(source, lambda request: request.name)
+    qtbot.addWidget(dialog)
+    dialog.name_edit.setText("number")
+    dialog.editor.set_formula("VALUE([评分])")
+    assert dialog.preview()
+    controller.register_root(dialog)
+    dialog.show()
+
+    controller.set_language("en")
+
+    assert dialog.editor.formula() == "VALUE([评分])"
+    assert dialog.preview_table.horizontalHeaderItem(1).text() == "评分"
+    assert dialog.preview_table.item(0, 1).text() == "无法转换"
+    assert dialog.preview_table.item(0, 3).text() == (
+        "VALUE cannot convert the value to a number"
+    )
+    assert dialog.error_label.text() == (
+        "Formula cannot process 1 row "
+        "(index 0: VALUE cannot convert the value to a number)"
+    )
 
 
 def test_table_accessible_descriptions_switch_to_english_without_rebuilding_pages(

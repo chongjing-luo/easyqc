@@ -37,10 +37,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from models.formula_function import FORMULA_FUNCTION_CATALOG
+
 DEFAULT_LANGUAGE = "zh_CN"
 SUPPORTED_LANGUAGES = ("zh_CN", "en")
 LANGUAGE_SETTING_KEY = "ui/language"
 USER_TEXT_PROPERTIES = "_easyqc_user_text_properties"
+TRANSLATABLE_TABLE_COLUMNS_PROPERTY = "_easyqc_translatable_table_columns"
 _LOCALIZABLE_PROPERTY_NAMES = frozenset(
     {
         "accessibleDescription",
@@ -476,6 +479,121 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "新列名": "New column name",
     "计算表达式": "Expression",
     "生成列": "Create column",
+    "使用快捷模板或 EasyQC 公式生成新列": (
+        "Create a new column with a quick template or EasyQC Formula"
+    ),
+    "例如：scan_key 或 QC 分组": "For example: scan_key or QC group",
+    "快捷模板和高级公式共用同一套安全计算规则。公式、模板和中间结果不会保存；"
+    "只写入最终普通列。": (
+        "Quick templates and advanced formulas use the same safe calculation "
+        "rules. Formulas, templates and intermediate results are not saved; "
+        "only the final ordinary column is written."
+    ),
+    "新增列公式编辑器": "New-column formula editor",
+    "预览新增列结果和逐行错误": (
+        "Preview the new-column result and row errors"
+    ),
+    "新增列前二十行公式预览": (
+        "First twenty rows of the new-column formula preview"
+    ),
+    "确认计算完整数据并写入新列": (
+        "Calculate the full data and write the new column"
+    ),
+    "EasyQC 公式编辑器": "EasyQC Formula editor",
+    "公式输入方式": "Formula input mode",
+    "快捷模板": "Quick templates",
+    "高级公式": "Advanced formula",
+    "快捷公式模板": "Quick formula templates",
+    "快捷模板类型": "Quick-template type",
+    "模板": "Template",
+    "快捷模板参数": "Quick-template parameters",
+    "生成公式": "Generate formula",
+    "用快捷模板生成公式": "Generate a formula from the quick template",
+    "固定值类型": "Fixed-value type",
+    "固定值内容": "Fixed-value content",
+    "固定布尔值": "Fixed Boolean value",
+    "固定值必须是整数": "Fixed value must be an integer",
+    "固定值必须是小数": "Fixed value must be a decimal number",
+    "请输入固定数值": "Enter a fixed number",
+    "固定数值格式无效": "The fixed-number format is invalid",
+    "类型": "Type",
+    "连接两列": "Concatenate two columns",
+    "连接左列": "Left column for concatenation",
+    "连接分隔文本": "Concatenation separator text",
+    "连接右列": "Right column for concatenation",
+    "左列": "Left column",
+    "中间文本": "Separator text",
+    "右列": "Right column",
+    "按分隔符提取": "Extract by delimiter",
+    "提取来源列": "Extraction source column",
+    "提取分隔符": "Extraction delimiter",
+    "提取位置": "Extraction position",
+    "来源列": "Source column",
+    "保留": "Keep",
+    "分隔符之前": "Before delimiter",
+    "分隔符之后": "After delimiter",
+    "条件生成": "Conditional value",
+    "条件来源列": "Condition source column",
+    "条件比较符": "Condition comparison operator",
+    "条件比较文本": "Condition comparison text",
+    "条件成立文本": "Text when true",
+    "条件不成立文本": "Text when false",
+    "比较": "Compare",
+    "等于文本": "Text to match",
+    "成立时": "When true",
+    "不成立时": "When false",
+    "文本清理与大小写": "Text cleanup and case",
+    "文本清理来源列": "Text-cleanup source column",
+    "文本清理方式": "Text-cleanup operation",
+    "处理": "Operation",
+    "去除首尾空白": "Trim leading and trailing whitespace",
+    "转为大写": "Convert to uppercase",
+    "转为小写": "Convert to lowercase",
+    "去空白并转大写": "Trim and convert to uppercase",
+    "去空白并转小写": "Trim and convert to lowercase",
+    "数值计算": "Numeric calculation",
+    "数值计算左列": "Left column for numeric calculation",
+    "数值运算符": "Numeric operator",
+    "数值计算右值类型": "Right-value type for numeric calculation",
+    "数值计算右列": "Right column for numeric calculation",
+    "数值计算固定数值": "Fixed value for numeric calculation",
+    "运算": "Operator",
+    "右值类型": "Right-value type",
+    "固定数值": "Fixed number",
+    "例如：12 或 0.5": "For example: 12 or 0.5",
+    "当前公式": "Current formula",
+    "公式只计算当前表格中的值；不会运行 Python、SQL、正则或文件操作。": (
+        "The formula calculates only values in the current table; it cannot "
+        "run Python, SQL, regular expressions or file operations."
+    ),
+    "当前 EasyQC 公式": "Current EasyQC Formula",
+    '例如：IF([site] = "A", UPPER([filename]), [filename])': (
+        'For example: IF([site] = "A", UPPER([filename]), [filename])'
+    ),
+    "请输入公式": "Enter a formula",
+    "公式语法状态": "Formula syntax status",
+    "高级公式插入工具": "Advanced formula insertion tools",
+    "要插入的表格列": "Table column to insert",
+    "插入列": "Insert column",
+    "在光标处插入所选列": "Insert the selected column at the cursor",
+    "表格列": "Table column",
+    "要插入的公式函数": "Formula function to insert",
+    "插入函数": "Insert function",
+    "在光标处插入所选函数": "Insert the selected function at the cursor",
+    "函数": "Function",
+    "函数说明": "Function details",
+    "公式函数签名": "Formula function signature",
+    "公式函数说明": "Formula function description",
+    "公式函数示例": "Formula function example",
+    "VALUE 无法转换为数值": "VALUE cannot convert the value to a number",
+    "IF 条件需要布尔值": "IF condition requires Boolean values",
+    "除数不能为零": "The divisor cannot be zero",
+    "FIND 未找到文本": "FIND cannot find the requested text",
+    "公式缺少运算对象": "The formula is missing an operand",
+    "公式不能为空": "The formula cannot be empty",
+    "公式没有产生有效表达式": (
+        "The formula did not produce a valid expression"
+    ),
     "现有列（双击插入）": "Existing columns (double-click to insert)",
     "预览结果": "Preview",
     "例如：scan_key": "For example: scan_key",
@@ -817,10 +935,88 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
         "This column name contains spaces or punctuation and cannot be used "
         "directly in an expression."
     ),
+    **{
+        spec.description_zh: spec.description_en
+        for spec in FORMULA_FUNCTION_CATALOG
+    },
 }
 
 
 _SOURCE_PATTERNS = (
+    (
+        re.compile(r"^示例：(?P<value>.*)$"),
+        "Example: {value}",
+    ),
+    (
+        re.compile(
+            r"^公式语法错误（第 (?P<line>\d+) 行，第 (?P<column>\d+) 列）$"
+        ),
+        "Formula syntax error (line {line}, column {column})",
+    ),
+    (
+        re.compile(r"^未知列: (?P<value>.*)$"),
+        "Unknown column: {value}",
+    ),
+    (
+        re.compile(r"^未知函数: (?P<value>.*)$"),
+        "Unknown function: {value}",
+    ),
+    (
+        re.compile(r"^未知快捷模板: (?P<value>.*)$"),
+        "Unknown quick template: {value}",
+    ),
+    (
+        re.compile(r"^公式不能超过 (?P<count>[\d,]+) 个字符$"),
+        "The formula cannot exceed {count} characters",
+    ),
+    (
+        re.compile(r"^公式节点不能超过 (?P<count>[\d,]+) 个$"),
+        "The formula cannot exceed {count} syntax nodes",
+    ),
+    (
+        re.compile(r"^公式嵌套不能超过 (?P<count>[\d,]+) 层$"),
+        "The formula cannot exceed {count} levels of nesting",
+    ),
+    (
+        re.compile(r"^公式解析失败: (?P<value>.*)$"),
+        "Formula parsing failed: {value}",
+    ),
+    (
+        re.compile(r"^不支持的公式节点: (?P<value>.*)$"),
+        "Unsupported formula node: {value}",
+    ),
+    (
+        re.compile(r"^不支持的一元运算符: (?P<value>.*)$"),
+        "Unsupported unary operator: {value}",
+    ),
+    (
+        re.compile(r"^不支持的运算符: (?P<value>.*)$"),
+        "Unsupported operator: {value}",
+    ),
+    (
+        re.compile(r"^不支持的函数: (?P<value>.*)$"),
+        "Unsupported function: {value}",
+    ),
+    (
+        re.compile(r"^函数尚未实现: (?P<value>.*)$"),
+        "Formula function is not implemented: {value}",
+    ),
+    (
+        re.compile(r"^(?P<function>[A-Z]+) 未找到分隔符$"),
+        "{function} cannot find the delimiter",
+    ),
+    (
+        re.compile(r"^(?P<operator>.+) 需要数值$"),
+        "{operator} requires numeric values",
+    ),
+    (
+        re.compile(r"^(?P<operator>.+) 需要布尔值$"),
+        "{operator} requires Boolean values",
+    ),
+    (
+        re.compile(r"^(?P<operator>.+) 无法比较$"),
+        "{operator} cannot compare these values",
+    ),
     (
         re.compile(r"^质控操作：(?P<value>.*)$"),
         "QC actions: {value}",
@@ -1121,6 +1317,15 @@ _SOURCE_PATTERNS = (
 )
 
 _HAN_RE = re.compile(r"[\u3400-\u9fff]")
+_FORMULA_VALID_RE = re.compile(
+    r"^公式有效 · 引用 (?P<count>\d+) 列$"
+)
+_FORMULA_ROW_ERROR_RE = re.compile(
+    r"^公式有 (?P<count>\d+) 行无法处理（(?P<examples>.*)）$"
+)
+_FORMULA_ROW_EXAMPLE_RE = re.compile(
+    r"^索引 (?P<index>[^:]+): (?P<message>.*)$"
+)
 
 
 def _format_message(template: str, values: Mapping[str, Any]) -> str:
@@ -1159,6 +1364,28 @@ def protect_user_text(obj: QObject, *properties: str) -> None:
         else ({existing} if isinstance(existing, str) and existing else set())
     )
     obj.setProperty(USER_TEXT_PROPERTIES, tuple(sorted(retained | requested)))
+
+
+def set_translatable_table_columns(
+    table: QTableWidget,
+    *columns: int,
+) -> None:
+    """Mark table columns whose cell text is UI diagnostics, not user data."""
+
+    if not isinstance(table, QTableWidget):
+        raise TypeError("Translatable table columns require QTableWidget")
+    normalized = tuple(int(column) for column in columns)
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("Translatable table columns cannot contain duplicates")
+    if any(
+        column < 0 or column >= table.columnCount()
+        for column in normalized
+    ):
+        raise ValueError("Translatable table column is outside the table")
+    table.setProperty(
+        TRANSLATABLE_TABLE_COLUMNS_PROPERTY,
+        normalized,
+    )
 
 
 class LanguageController(QObject):
@@ -1243,6 +1470,29 @@ class LanguageController(QObject):
 
         if self._language == "zh_CN" or not source or not _HAN_RE.search(source):
             return source
+        valid_match = _FORMULA_VALID_RE.fullmatch(source)
+        if valid_match is not None:
+            count = int(valid_match.group("count"))
+            noun = "column" if count == 1 else "columns"
+            return f"Formula valid · {count} {noun} referenced"
+        row_error_match = _FORMULA_ROW_ERROR_RE.fullmatch(source)
+        if row_error_match is not None:
+            count = int(row_error_match.group("count"))
+            translated_examples: list[str] = []
+            for example in row_error_match.group("examples").split("; "):
+                example_match = _FORMULA_ROW_EXAMPLE_RE.fullmatch(example)
+                if example_match is None:
+                    return source
+                translated_examples.append(
+                    "index "
+                    f"{example_match.group('index')}: "
+                    f"{self.translate_source(example_match.group('message'))}"
+                )
+            noun = "row" if count == 1 else "rows"
+            return (
+                f"Formula cannot process {count} {noun} "
+                f"({'; '.join(translated_examples)})"
+            )
         exact = SOURCE_TRANSLATIONS.get(source)
         if exact is not None:
             return exact
@@ -1530,10 +1780,25 @@ class LanguageController(QObject):
     def _localize_table_headers(self, table: QTableWidget) -> None:
         if self._is_user_text_property(table, "headers"):
             return
+        translatable_columns = table.property(
+            TRANSLATABLE_TABLE_COLUMNS_PROPERTY
+        )
+        translatable = (
+            {
+                int(column)
+                for column in translatable_columns
+                if isinstance(column, int)
+            }
+            if isinstance(translatable_columns, (list, tuple))
+            else set()
+        )
         for index in range(table.columnCount()):
             item = table.horizontalHeaderItem(index)
             if item is not None:
                 self._localize_flat_item(item)
+            if index in translatable:
+                for row in range(table.rowCount()):
+                    self._localize_flat_item(table.item(row, index))
         for index in range(table.rowCount()):
             item = table.verticalHeaderItem(index)
             if item is not None:
@@ -1629,8 +1894,10 @@ __all__ = [
     "MESSAGES",
     "SOURCE_TRANSLATIONS",
     "SUPPORTED_LANGUAGES",
+    "TRANSLATABLE_TABLE_COLUMNS_PROPERTY",
     "USER_TEXT_PROPERTIES",
     "get_or_create_language_controller",
     "protect_user_text",
+    "set_translatable_table_columns",
     "translate_ui_text",
 ]

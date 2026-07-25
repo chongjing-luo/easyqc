@@ -35,6 +35,7 @@ from gui_qt.formula_templates import (
     render_numeric_fixed_formula,
 )
 from gui_qt.i18n import protect_user_text
+from gui_qt.theme import set_button_role
 
 
 class FormulaQuickTemplatePanel(QWidget):
@@ -98,7 +99,7 @@ class FormulaQuickTemplatePanel(QWidget):
         self.generate_button = QPushButton("生成公式", self)
         self.generate_button.setObjectName("generateQuickFormula")
         self.generate_button.setAccessibleName("用快捷模板生成公式")
-        self.generate_button.setProperty("role", "primary")
+        set_button_role(self.generate_button, "primary")
         action_row.addWidget(self.generate_button)
         layout.addLayout(action_row)
         layout.addStretch(1)

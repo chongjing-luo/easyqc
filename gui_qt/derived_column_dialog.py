@@ -30,7 +30,9 @@ from core.formula_engine import (
 )
 from core.formula_parser import FormulaError, ParsedFormula
 from gui_qt.formula_editor import FormulaEditorWidget
+from gui_qt.i18n import set_translatable_table_columns
 from gui_qt.task_runner import RevisionedTaskController
+from gui_qt.theme import set_button_role
 from models.derived_formula import DerivedColumnFormula
 
 
@@ -102,6 +104,7 @@ class DerivedColumnDialog(QDialog):
         preview_header.addStretch(1)
         self.preview_button = QPushButton("预览结果", self)
         self.preview_button.setAccessibleName("预览新增列结果和逐行错误")
+        set_button_role(self.preview_button, "secondary")
         preview_header.addWidget(self.preview_button)
         layout.addLayout(preview_header)
 
@@ -138,7 +141,8 @@ class DerivedColumnDialog(QDialog):
         self.cancel_button.setText("取消")
         self.generate_button.setAccessibleName("确认计算完整数据并写入新列")
         self.cancel_button.setAccessibleName("取消新增列")
-        self.generate_button.setProperty("role", "primary")
+        set_button_role(self.generate_button, "primary")
+        set_button_role(self.cancel_button, "secondary")
         layout.addWidget(self.button_box)
 
         self.preview_button.clicked.connect(self.preview)
@@ -194,6 +198,25 @@ class DerivedColumnDialog(QDialog):
         self.preview_table.clear()
         self.preview_table.setColumnCount(len(headers))
         self.preview_table.setHorizontalHeaderLabels(headers)
+        if has_identity:
+            self.preview_table.horizontalHeaderItem(0).setData(
+                Qt.ItemDataRole.UserRole,
+                "ezqcid",
+            )
+        for column_index, column in enumerate(referenced, start=1):
+            self.preview_table.horizontalHeaderItem(column_index).setData(
+                Qt.ItemDataRole.UserRole,
+                column,
+            )
+        result_column_index = 1 + len(referenced)
+        self.preview_table.horizontalHeaderItem(result_column_index).setData(
+            Qt.ItemDataRole.UserRole,
+            request.name,
+        )
+        set_translatable_table_columns(
+            self.preview_table,
+            len(headers) - 1,
+        )
         self.preview_table.setRowCount(len(self._preview_source))
 
         for row in range(len(self._preview_source)):
