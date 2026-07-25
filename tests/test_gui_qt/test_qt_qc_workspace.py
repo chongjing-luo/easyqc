@@ -111,7 +111,7 @@ def test_compact_qc_controller_is_top_level_with_exact_table_and_action_order(
     assert isinstance(controller, QMainWindow)
     assert controller.isWindow()
     assert controller.parent() is None
-    assert controller.windowTitle() == "EasyQC"
+    assert controller.windowTitle() == "EasyQC · AnatQC · rater1"
     assert controller.centralWidget() is workspace
     assert isinstance(workspace.queue_table, QTableView)
     assert workspace.queue_table.model() is workspace.queue_model
@@ -720,7 +720,7 @@ def test_qc_layout_reserves_eight_rows_and_gives_added_height_to_queue(
     )
 
 
-def test_score_and_tag_growth_raise_preferred_height_with_scroll_fallback(
+def test_score_growth_raises_height_and_tags_use_one_scrollable_row(
     qtbot,
     tmp_path,
 ) -> None:
@@ -755,6 +755,26 @@ def test_score_and_tag_growth_raise_preferred_height_with_scroll_fallback(
     )
     assert rich.height() > simple.height()
     assert rich.height() <= rich.screen().availableGeometry().height()
+    tag_centers = {
+        checkbox.mapTo(
+            rich.workspace.tags_scroll.widget(),
+            checkbox.rect().center(),
+        ).y()
+        for checkbox in rich.workspace.tag_boxes.values()
+    }
+    assert tag_centers == {next(iter(tag_centers))}
+    assert (
+        rich.workspace.tags_scroll.verticalScrollBarPolicy()
+        == Qt.ScrollBarAlwaysOff
+    )
+    assert (
+        rich.workspace.tags_scroll.horizontalScrollBarPolicy()
+        == Qt.ScrollBarAsNeeded
+    )
+    assert (
+        rich.workspace.tags_scroll.widget().minimumWidth()
+        > rich.workspace.tags_scroll.viewport().width()
+    )
 
     rich.resize(rich.width(), 560)
     qtbot.wait(0)

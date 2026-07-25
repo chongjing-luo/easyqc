@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QFrame,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -43,7 +42,6 @@ DEFAULT_VISIBLE_QUEUE_ROWS = 8
 DEFAULT_CONTROLLER_WIDTH = 560
 DEFAULT_CONTROLLER_HEIGHT = 720
 SCREEN_EDGE_MARGIN = 48
-TAG_GRID_COLUMNS = 2
 
 
 class _QcEditorScrollArea(QScrollArea):
@@ -385,9 +383,20 @@ class QtQcWorkspace(QWidget):
         if module.tags:
             tags_box = QGroupBox("标签", editor)
             tags_box.setObjectName("tagGroup")
-            tags_layout = QGridLayout(tags_box)
-            for index, (key, tag) in enumerate(module.tags.items()):
-                checkbox = QCheckBox(tag.label, tags_box)
+            tags_box_layout = QVBoxLayout(tags_box)
+            self.tags_scroll = QScrollArea(tags_box)
+            self.tags_scroll.setObjectName("qcTagsScroll")
+            self.tags_scroll.setAccessibleName("质控标签")
+            self.tags_scroll.setFrameShape(QFrame.NoFrame)
+            self.tags_scroll.setWidgetResizable(True)
+            self.tags_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.tags_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+            tags_content = QWidget(self.tags_scroll)
+            tags_layout = QHBoxLayout(tags_content)
+            tags_layout.setContentsMargins(0, 0, 0, 0)
+            for key, tag in module.tags.items():
+                checkbox = QCheckBox(tag.label, tags_content)
                 protect_user_text(
                     checkbox,
                     "text",
@@ -399,15 +408,18 @@ class QtQcWorkspace(QWidget):
                     lambda checked, tag_key=key: self._tag_changed(tag_key, checked)
                 )
                 self.tag_boxes[key] = checkbox
-                row, column = divmod(index, TAG_GRID_COLUMNS)
-                tags_layout.addWidget(
-                    checkbox,
-                    row,
-                    column,
-                    Qt.AlignLeft | Qt.AlignVCenter,
-                )
-            for column in range(TAG_GRID_COLUMNS):
-                tags_layout.setColumnStretch(column, 1)
+                tags_layout.addWidget(checkbox)
+            tags_layout.addStretch(1)
+            tags_layout.activate()
+            tags_content.setMinimumSize(tags_content.sizeHint())
+            self.tags_scroll.setWidget(tags_content)
+            tags_scroll_height = (
+                tags_content.sizeHint().height()
+                + self.tags_scroll.horizontalScrollBar().sizeHint().height()
+                + 2 * self.tags_scroll.frameWidth()
+            )
+            self.tags_scroll.setFixedHeight(tags_scroll_height)
+            tags_box_layout.addWidget(self.tags_scroll)
             editor_layout.addWidget(tags_box)
 
         notes_box = QGroupBox("备注", editor)
@@ -809,7 +821,9 @@ class QtQcControllerWindow(QMainWindow):
         self.setObjectName("qtQcControllerWindow")
         self.setAccessibleName("EasyQC 质控控制器窗口")
         self.setAttribute(Qt.WA_DeleteOnClose, True)
-        self.setWindowTitle("EasyQC")
+        module = workflow.current_module
+        rater = str(module.rater).strip() if module.rater is not None else ""
+        self.setWindowTitle(f"EasyQC · {module.name} · {rater or '—'}")
         self.workspace = QtQcWorkspace(
             workflow,
             self,

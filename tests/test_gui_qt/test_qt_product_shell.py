@@ -1182,7 +1182,7 @@ def test_module_rows_are_the_sole_visible_qc_launch_and_use_exact_module_name(
     assert window.qc_controller is not None
     assert window.qc_controller.isWindow()
     assert window.qc_controller.parent() is None
-    assert window.qc_controller.windowTitle() == "EasyQC"
+    assert window.qc_controller.windowTitle() == "EasyQC · FuncQC · rater2"
     assert window.qc_controller.centralWidget() is window.qc_workspace
     assert window.qc_controller.isVisible()
     assert window.module_combo.currentData() == "FuncQC"
