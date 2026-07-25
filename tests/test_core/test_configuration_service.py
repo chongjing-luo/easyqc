@@ -12,7 +12,7 @@ from core.module_filter import resolve_module_filter_identities
 from core.project_service import ProjectService
 from core.table_service import TableService
 from core.table_view_service import TableViewService
-from models.column_recipe import ColumnRecipe, RecipeStep, RecipeValue
+from models.derived_formula import DerivedColumnFormula
 from models.table_view_state import (
     FilterCondition,
     FilterExpression,
@@ -92,18 +92,9 @@ def test_derive_subject_column_persists_values_once_and_publishes_change(
         EventType.SUBJECTS_CHANGED,
         events.append,
     )
-    recipe = ColumnRecipe(
-        name="age_next",
-        source_column="age",
-        steps=(
-            RecipeStep.create(
-                "add",
-                value=RecipeValue.literal(1),
-            ),
-        ),
-    )
+    request = DerivedColumnFormula("age_next", "[age] + 1")
 
-    result = service.derive_subject_column(recipe)
+    result = service.derive_subject_column(request)
 
     assert result == "age_next"
     assert len(save_calls) == 1
@@ -117,34 +108,26 @@ def test_derive_subject_column_persists_values_once_and_publishes_change(
 
 
 @pytest.mark.parametrize(
-    ("recipe", "match"),
+    ("formula_request", "match"),
     [
         (
-            ColumnRecipe(name="age", source_column="age", steps=()),
+            DerivedColumnFormula("age", "[age]"),
             "已存在",
         ),
         (
-            ColumnRecipe(
-                name="unsafe",
-                source_column="age",
-                steps=(RecipeStep.create("python", code="open('/tmp/x', 'w')"),),
-            ),
-            "不支持的新增列操作",
+            DerivedColumnFormula("unsafe", 'PYTHON("[age]")'),
+            "未知函数",
         ),
         (
-            ColumnRecipe(name="ezqcid", source_column="age", steps=()),
+            DerivedColumnFormula("ezqcid", "[age]"),
             "ezqcid",
         ),
-        (
-            ColumnRecipe(name="class", source_column="age", steps=()),
-            "有效字段名",
-        ),
-        (None, "ColumnRecipe"),
+        (None, "DerivedColumnFormula"),
     ],
 )
 def test_derive_subject_column_rejects_invalid_request_without_writing(
     tmp_path,
-    recipe,
+    formula_request,
     match,
 ) -> None:
     service, projects = _service(tmp_path)
@@ -153,7 +136,7 @@ def test_derive_subject_column_rejects_invalid_request_without_writing(
     before = table_path.read_bytes()
 
     with pytest.raises(ConfigurationError, match=match):
-        service.derive_subject_column(recipe)
+        service.derive_subject_column(formula_request)
 
     assert table_path.read_bytes() == before
     pd.testing.assert_frame_equal(service.subjects(), _subjects())
@@ -167,27 +150,20 @@ def test_derive_subject_column_failed_row_policy_keeps_csv_byte_identical(
         pd.DataFrame(
             {
                 "ezqcid": ["SUB001", "SUB002"],
-                "label": ["site_SUB001", "SUB002"],
+                "label": ["4", "bad"],
             }
         ),
         notify=False,
     )
     table_path = projects.current_project.table_dir / "ezqc_all.csv"
     before = table_path.read_bytes()
-    recipe = ColumnRecipe(
-        name="identifier",
-        source_column="label",
-        steps=(
-            RecipeStep.create(
-                "split_take",
-                delimiter="_",
-                index=1,
-            ),
-        ),
+    request = DerivedColumnFormula(
+        "identifier",
+        "VALUE([label])",
     )
 
-    with pytest.raises(ConfigurationError, match=r"第 1 步.*1 行"):
-        service.derive_subject_column(recipe)
+    with pytest.raises(ConfigurationError, match=r"1 行"):
+        service.derive_subject_column(request)
 
     assert table_path.read_bytes() == before
 

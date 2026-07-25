@@ -44,7 +44,7 @@ from gui_qt.sort_dialog import SortDialog
 from gui_qt.table_model import QtTableModel
 from gui_qt.task_runner import RevisionedTaskController
 from gui_qt.theme import set_button_role
-from models.column_recipe import ColumnRecipe
+from models.derived_formula import DerivedColumnFormula
 from models.folder_match import FolderMatchRequest
 from models.table_view_state import (
     ColumnViewState,
@@ -903,8 +903,8 @@ class QtQcListImportPage(QWidget):
             preview_source = draft_source.head(20).copy(deep=True)
             dialog = DerivedColumnDialog(
                 preview_source,
-                lambda recipe: self._derive_import_draft_column(
-                    recipe,
+                lambda request: self._derive_import_draft_column(
+                    request,
                     source=draft_source,
                     draft_revision=draft_revision,
                 ),
@@ -927,19 +927,19 @@ class QtQcListImportPage(QWidget):
 
     def _derive_import_draft_column(
         self,
-        recipe: ColumnRecipe,
+        request: DerivedColumnFormula,
         *,
         source: pd.DataFrame,
         draft_revision: int,
     ) -> str:
-        """Materialize one safe recipe in a detached import draft only."""
+        """Materialize one formula in the captured detached import draft."""
 
-        result = TableTransformEngine().derive_column_from_recipe(
+        result = TableTransformEngine().derive_column_from_formula(
             source,
-            recipe,
+            request,
         )
-        self._derived_draft_result = (draft_revision, recipe.name, result)
-        return recipe.name
+        self._derived_draft_result = (draft_revision, request.name, result)
+        return request.name
 
     @Slot(bool)
     def _set_derive_busy(self, busy: bool) -> None:

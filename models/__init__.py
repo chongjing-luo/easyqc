@@ -1,6 +1,11 @@
 """Typed data models for EasyQC."""
 
 from models.column_recipe import ColumnRecipe, RecipeStep, RecipeValue
+from models.derived_formula import DerivedColumnFormula
+from models.formula_function import (
+    FORMULA_FUNCTION_CATALOG,
+    FormulaFunctionSpec,
+)
 from models.project import Project, ProjectRegistry
 from models.qcmodule import QCModule, Score, Tag
 from models.qc_row_context import QcModuleMenuEntry, QcRecordMenuEntry, QcRowContext
@@ -8,6 +13,9 @@ from models.rating import Rating
 
 __all__ = [
     "ColumnRecipe",
+    "DerivedColumnFormula",
+    "FORMULA_FUNCTION_CATALOG",
+    "FormulaFunctionSpec",
     "Project",
     "ProjectRegistry",
     "QCModule",

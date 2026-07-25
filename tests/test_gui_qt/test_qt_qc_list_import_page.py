@@ -223,12 +223,12 @@ def test_derived_column_updates_only_latest_import_draft(
     dialog = page.derived_column_dialog
     assert dialog is not None and dialog.isVisible()
     assert [
-        dialog.editor.source_combo.itemData(index)
-        for index in range(dialog.editor.source_combo.count())
+        dialog.editor.column_combo.itemData(index)
+        for index in range(dialog.editor.column_combo.count())
     ] == ["ezqcid", "batch"]
 
     dialog.name_edit.setText("batch_copy")
-    dialog.editor.set_source_column("batch")
+    dialog.editor.set_formula("[batch]")
     qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
     qtbot.waitUntil(
         lambda: (
@@ -243,6 +243,62 @@ def test_derived_column_updates_only_latest_import_draft(
     pd.testing.assert_frame_equal(configuration.subjects(), current)
     assert table_path.read_bytes() == before_bytes
     assert events == []
+
+
+def test_stale_formula_worker_result_cannot_replace_newer_import_draft(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from core.table_transform import TableTransformEngine
+
+    page, configuration, current = _page(qtbot, tmp_path)
+    page._install_draft(
+        pd.DataFrame(
+            {
+                "ezqcid": ["OLD001", "OLD002"],
+                "batch": ["A", "B"],
+            }
+        )
+    )
+    real_derive = TableTransformEngine.derive_column_from_formula
+    started = Event()
+    release = Event()
+
+    def delayed_derive(engine, source, request):
+        started.set()
+        release.wait(2)
+        return real_derive(engine, source, request)
+
+    monkeypatch.setattr(
+        TableTransformEngine,
+        "derive_column_from_formula",
+        delayed_derive,
+    )
+
+    qtbot.mouseClick(page.derive_button, Qt.LeftButton)
+    dialog = page.derived_column_dialog
+    assert dialog is not None
+    dialog.name_edit.setText("batch_copy")
+    dialog.editor.set_formula("[batch]")
+    qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
+    qtbot.waitUntil(started.is_set, timeout=2000)
+
+    newer = pd.DataFrame(
+        {
+            "ezqcid": ["NEW001"],
+            "batch": ["Z"],
+        }
+    )
+    page._install_draft(newer)
+    release.set()
+    qtbot.waitUntil(
+        lambda: "导入草稿已变化" in page.error_text,
+        timeout=3000,
+    )
+
+    pd.testing.assert_frame_equal(page.draft, newer)
+    pd.testing.assert_frame_equal(configuration.subjects(), current)
 
 
 def test_import_preview_context_actions_edit_correct_draft_rows(
@@ -339,7 +395,7 @@ def test_import_row_edits_feed_the_next_derived_column(qtbot, tmp_path) -> None:
     dialog = page.derived_column_dialog
     assert dialog is not None
     dialog.name_edit.setText("batch_copy")
-    dialog.editor.set_source_column("batch")
+    dialog.editor.set_formula("[batch]")
     qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
     qtbot.waitUntil(lambda: "batch_copy" in page.draft.columns, timeout=3000)
 
@@ -492,7 +548,7 @@ def test_import_draft_can_generate_missing_ezqcid_then_merge(qtbot, tmp_path) ->
     dialog = page.derived_column_dialog
     assert dialog is not None
     dialog.name_edit.setText("ezqcid")
-    dialog.editor.set_source_column("raw_id")
+    dialog.editor.set_formula("TRIM([raw_id])")
     qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
     qtbot.waitUntil(lambda: "ezqcid" in page.draft.columns, timeout=3000)
 

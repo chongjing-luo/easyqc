@@ -637,7 +637,7 @@ def test_pre_qc_derived_column_action_persists_and_refreshes_both_tables(
     dialog = window.table_workspace.derived_column_dialog
     assert dialog is not None and dialog.isVisible()
     dialog.name_edit.setText("site_copy")
-    dialog.editor.set_source_column("site")
+    dialog.editor.set_formula("[site]")
     qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
 
     qtbot.waitUntil(
@@ -681,16 +681,16 @@ def test_results_page_derived_action_persists_from_subject_columns_only(
     dialog = window.results_workspace.derived_column_dialog
     assert dialog is not None and dialog.isVisible()
     assert [
-        dialog.editor.source_combo.itemData(index)
-        for index in range(dialog.editor.source_combo.count())
+        dialog.editor.column_combo.itemData(index)
+        for index in range(dialog.editor.column_combo.count())
     ] == list(window.current_context.subjects.columns)
     assert (
-        dialog.editor.source_combo.findData("AnatQC.rater1.score1")
+        dialog.editor.column_combo.findData("AnatQC.rater1.score1")
         == -1
     )
 
     dialog.name_edit.setText("site_from_results")
-    dialog.editor.set_source_column("site")
+    dialog.editor.set_formula("[site]")
     qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
     qtbot.waitUntil(
         lambda: "site_from_results" in window.current_context.subjects.columns,

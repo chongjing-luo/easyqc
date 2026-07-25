@@ -8,7 +8,10 @@ from typing import Any, Callable
 import pandas as pd
 
 from core.expression_parser import ExpressionError, ExpressionParser
+from core.formula_engine import FormulaEngine
+from core.formula_parser import FormulaError
 from models.column_recipe import ColumnRecipe, RecipeStep, RecipeValue
+from models.derived_formula import DerivedColumnFormula
 from utils.logger import log_warning
 
 
@@ -247,6 +250,33 @@ class TableTransformEngine:
             raise TableTransformError("派生列名不能为空")
         result = df.copy()
         result[name] = self.expression_parser.evaluate(expression, result)
+        return result
+
+    def derive_column_from_formula(
+        self,
+        df: pd.DataFrame,
+        request: DerivedColumnFormula,
+    ) -> pd.DataFrame:
+        """Return a detached table with one strict EasyQC Formula column."""
+
+        if not isinstance(df, pd.DataFrame):
+            raise TableTransformError("新增列来源必须是表格")
+        if not isinstance(request, DerivedColumnFormula):
+            raise TableTransformError("新增列请求必须是 DerivedColumnFormula")
+        if request.name in df.columns:
+            raise TableTransformError(f"新列已存在: {request.name}")
+        try:
+            evaluation = FormulaEngine().evaluate(df, request.expression)
+            evaluation.raise_for_errors()
+        except FormulaError as exc:
+            raise TableTransformError(str(exc)) from exc
+        if (
+            len(evaluation.values) != len(df)
+            or not evaluation.values.index.equals(df.index)
+        ):
+            raise TableTransformError("公式结果与原表行数或顺序不一致")
+        result = df.copy()
+        result[request.name] = evaluation.values
         return result
 
     def derive_column_from_recipe(
