@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -36,6 +37,24 @@ from gui_qt.i18n import (
 from gui_qt.qc_row_context_menu import QcRowContextMenu
 from gui_qt.theme import CONTROL_HEIGHT, set_button_role
 from models.qc_row_context import QcModuleMenuEntry, QcRecordMenuEntry, QcRowContext
+
+
+DEFAULT_VISIBLE_QUEUE_ROWS = 8
+DEFAULT_CONTROLLER_WIDTH = 560
+DEFAULT_CONTROLLER_HEIGHT = 720
+SCREEN_EDGE_MARGIN = 48
+TAG_GRID_COLUMNS = 2
+
+
+class _QcEditorScrollArea(QScrollArea):
+    """Prefer the full editor height while retaining a scrollable zero minimum."""
+
+    def sizeHint(self):  # noqa: N802
+        hint = super().sizeHint()
+        editor = self.widget()
+        if editor is not None:
+            hint.setHeight(editor.sizeHint().height() + 2 * self.frameWidth())
+        return hint
 
 
 class QtQcQueueModel(QAbstractTableModel):
@@ -169,7 +188,7 @@ class QtQcWorkspace(QWidget):
         self.workflow = workflow
         self.language = language or get_or_create_language_controller()
         self._loading = False
-        self._manual_read_only = False
+        self._manual_read_only = workflow.initial_read_only
         self._filter_busy = False
         self._score_groups: dict[str, QButtonGroup] = {}
         self.score_buttons: dict[str, dict[str | None, QPushButton]] = {}
@@ -222,7 +241,21 @@ class QtQcWorkspace(QWidget):
         header.setSectionResizeMode(1, QHeaderView.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.queue_table.setMinimumHeight(210)
+        queue_row_height = self.queue_table.verticalHeader().defaultSectionSize()
+        queue_header_height = header.sizeHint().height()
+        horizontal_scroll_height = (
+            self.queue_table.horizontalScrollBar().sizeHint().height()
+        )
+        self.queue_table.setMinimumHeight(
+            queue_header_height
+            + DEFAULT_VISIBLE_QUEUE_ROWS * queue_row_height
+            + horizontal_scroll_height
+            + 2 * self.queue_table.frameWidth()
+        )
+        self.queue_table.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding,
+        )
         top_layout.addWidget(self.queue_table, 1)
 
         self.action_column = QWidget(top)
@@ -273,14 +306,30 @@ class QtQcWorkspace(QWidget):
             for control in self.action_controls
         )
         self.action_column.setMinimumWidth(widest + 40)
-        action_layout.addStretch(1)
+        action_control_height = max(CONTROL_HEIGHT, queue_row_height)
+        for index, control in enumerate(self.action_controls):
+            control.setMinimumHeight(action_control_height)
+            if control is self.read_only_box:
+                control.setMaximumHeight(action_control_height)
+                control.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            else:
+                control.setSizePolicy(
+                    QSizePolicy.Preferred,
+                    QSizePolicy.Expanding,
+                )
+                action_layout.setStretch(index, 1)
         top_layout.addWidget(self.action_column)
-        layout.addWidget(top, 3)
+        top.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout.addWidget(top, 1)
 
-        self.editor_scroll = QScrollArea(self)
+        self.editor_scroll = _QcEditorScrollArea(self)
         self.editor_scroll.setObjectName("qcEditorScroll")
         self.editor_scroll.setWidgetResizable(True)
         self.editor_scroll.setFrameShape(QFrame.NoFrame)
+        self.editor_scroll.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Preferred,
+        )
         editor = QWidget(self.editor_scroll)
         editor.setObjectName("qcEditor")
         editor_layout = QVBoxLayout(editor)
@@ -336,8 +385,8 @@ class QtQcWorkspace(QWidget):
         if module.tags:
             tags_box = QGroupBox("标签", editor)
             tags_box.setObjectName("tagGroup")
-            tags_layout = QHBoxLayout(tags_box)
-            for key, tag in module.tags.items():
+            tags_layout = QGridLayout(tags_box)
+            for index, (key, tag) in enumerate(module.tags.items()):
                 checkbox = QCheckBox(tag.label, tags_box)
                 protect_user_text(
                     checkbox,
@@ -350,8 +399,15 @@ class QtQcWorkspace(QWidget):
                     lambda checked, tag_key=key: self._tag_changed(tag_key, checked)
                 )
                 self.tag_boxes[key] = checkbox
-                tags_layout.addWidget(checkbox)
-            tags_layout.addStretch(1)
+                row, column = divmod(index, TAG_GRID_COLUMNS)
+                tags_layout.addWidget(
+                    checkbox,
+                    row,
+                    column,
+                    Qt.AlignLeft | Qt.AlignVCenter,
+                )
+            for column in range(TAG_GRID_COLUMNS):
+                tags_layout.setColumnStretch(column, 1)
             editor_layout.addWidget(tags_box)
 
         notes_box = QGroupBox("备注", editor)
@@ -366,7 +422,7 @@ class QtQcWorkspace(QWidget):
         editor_layout.addWidget(notes_box)
         editor_layout.addStretch(1)
         self.editor_scroll.setWidget(editor)
-        layout.addWidget(self.editor_scroll, 2)
+        layout.addWidget(self.editor_scroll)
 
         self.error_label = QLabel("", self)
         self.error_label.setObjectName("qcError")
@@ -382,6 +438,27 @@ class QtQcWorkspace(QWidget):
         )
         self.read_only_box.toggled.connect(self._read_only_changed)
         self.notes_edit.textChanged.connect(self._notes_changed)
+
+    def recommended_initial_height(self) -> int:
+        """Return content-led height before the controller applies screen bounds."""
+
+        editor = self.editor_scroll.widget()
+        editor.layout().activate()
+        own_layout = self.layout()
+        margins = own_layout.contentsMargins()
+        visible_error_height = (
+            self.error_label.sizeHint().height()
+            if self.error_label.isVisible()
+            else 0
+        )
+        return (
+            margins.top()
+            + self.queue_table.minimumHeight()
+            + own_layout.spacing()
+            + editor.sizeHint().height()
+            + visible_error_height
+            + margins.bottom()
+        )
 
     def _add_action_button(
         self,
@@ -739,7 +816,18 @@ class QtQcControllerWindow(QMainWindow):
             language=self.language,
         )
         self.setCentralWidget(self.workspace)
-        self.resize(560, 720)
+        available = self.screen().availableGeometry()
+        width_cap = max(1, available.width() - SCREEN_EDGE_MARGIN)
+        height_cap = max(1, available.height() - SCREEN_EDGE_MARGIN)
+        target_width = min(DEFAULT_CONTROLLER_WIDTH, width_cap)
+        target_height = min(
+            max(
+                DEFAULT_CONTROLLER_HEIGHT,
+                self.workspace.recommended_initial_height(),
+            ),
+            height_cap,
+        )
+        self.resize(target_width, target_height)
         self.language.register_root(self)
 
     @property
@@ -772,4 +860,9 @@ class QtQcControllerWindow(QMainWindow):
         super().closeEvent(event)
 
 
-__all__ = ["QtQcControllerWindow", "QtQcQueueModel", "QtQcWorkspace"]
+__all__ = [
+    "DEFAULT_VISIBLE_QUEUE_ROWS",
+    "QtQcControllerWindow",
+    "QtQcQueueModel",
+    "QtQcWorkspace",
+]

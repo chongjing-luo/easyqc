@@ -76,6 +76,7 @@ def _workflow(
     module=None,
     executor=None,
     queue_summaries=None,
+    initial_read_only=False,
 ) -> QcWorkflowService:
     return QcWorkflowService(
         module or _module(),
@@ -84,6 +85,7 @@ def _workflow(
         constants={"project": "synthetic"},
         code_executor=executor or _FakeExecutor(),
         queue_summaries=queue_summaries,
+        initial_read_only=initial_read_only,
     )
 
 
@@ -167,6 +169,26 @@ def test_watch_mode_without_rater_rejects_edits_and_writes_nothing(tmp_path) -> 
         workflow.save()
     assert not target.exists()
     assert workflow.viewer_plan().commands
+
+
+def test_initial_read_only_is_a_presentation_hint_not_a_core_write_block(
+    tmp_path,
+) -> None:
+    workflow = _workflow(tmp_path, initial_read_only=True)
+
+    assert workflow.initial_read_only
+    assert not workflow.watch_mode
+    assert workflow.read_only_reason == ""
+
+    workflow.set_score("1", "Good")
+    workflow.set_tag("1", True)
+    workflow.set_notes("corrected after review")
+    saved = workflow.save()
+
+    assert saved.exists()
+    assert workflow.current_module.scores["1"].value == "Good"
+    assert workflow.current_module.tags["1"].value is True
+    assert workflow.current_module.notes == "corrected after review"
 
 
 def test_save_preserves_full_module_payload_and_schema_version(tmp_path) -> None:

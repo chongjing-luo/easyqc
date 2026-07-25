@@ -9,13 +9,14 @@ import pytest
 import core.project_context_service as project_context_module
 from core.app_services import build_app_services
 from core.project_context_service import ProjectContextError
-from core.qc_workflow_service import QcReadOnlyError, QcWorkflowService
+from core.qc_workflow_service import QcWorkflowService
 from core.event_bus import EventType
 from models.qc_row_context import QcRowContext
 from models.table_view_state import (
     FilterCondition,
     FilterExpression,
     FilterGroup,
+    filter_expression_to_json_object,
 )
 from utils.file_utils import FileUtils
 
@@ -515,26 +516,37 @@ def test_qc_row_context_and_record_workflow_use_the_snapshot_rating_index(
     assert workflow.current_module.scores["1"].value == "Good"
 
 
-def test_historical_record_workflow_uses_saved_schema_and_is_forced_read_only(
+def test_historical_record_workflow_uses_saved_schema_complete_queue_and_ratings(
     tmp_path,
-    monkeypatch,
 ) -> None:
     services = build_app_services(tmp_path / "projects.json")
     project = _add_project(services, tmp_path, "SAMPLE")
+    saved_module = _module_payload()
+    saved_module["qc_filter"] = filter_expression_to_json_object(
+        _filter_expression("site", "!=", "B")
+    )
     seed = QcWorkflowService(
-        _module_payload(),
+        saved_module,
         _subjects(),
         rating_dir=project.rating_dir / "AnatQC" / "rater1",
         code_executor=services.code_executor,
     )
     seed.set_score("1", "Good")
+    seed.set_tag("1", True)
     seed.set_notes("saved note")
+    seed.save()
+    seed.navigate_to("SUB003")
+    seed.set_score("1", "Poor")
+    seed.set_notes("third note")
     seed.save()
 
     changed = _module_payload()
     changed["scores"]["1"]["label"] = "Changed quality"
     changed["scores"]["1"]["num"] = "No,Yes"
     changed["scores"]["1"]["num_"] = "No,Yes"
+    changed["qc_filter"] = filter_expression_to_json_object(
+        _filter_expression("site", "==", "B")
+    )
     services.configuration_service.save_module(
         changed,
         original_name="AnatQC",
@@ -546,14 +558,6 @@ def test_historical_record_workflow_uses_saved_schema_and_is_forced_read_only(
     )
     record = context.records[0]
 
-    def unexpected_find(*_args, **_kwargs):
-        raise AssertionError("historical workflow must use snapshot payload")
-
-    monkeypatch.setattr(
-        services.rating_service,
-        "find_rating_files_in_rater_dir",
-        unexpected_find,
-    )
     workflow = services.project_context_service.create_qc_record_workflow(
         snapshot,
         ezqcid=record.ezqcid,
@@ -561,10 +565,11 @@ def test_historical_record_workflow_uses_saved_schema_and_is_forced_read_only(
         rater=record.rater,
     )
 
-    assert workflow.subject_ids == ("SUB001",)
+    assert workflow.subject_ids == ("SUB001", "SUB003")
     assert workflow.current_ezqcid == "SUB001"
-    assert workflow.watch_mode
-    assert "Historical" in workflow.read_only_reason
+    assert workflow.initial_read_only
+    assert not workflow.watch_mode
+    assert workflow.read_only_reason == ""
     assert workflow.current_module.scores["1"].label == "Quality"
     assert workflow.current_module.scores["1"].allowed_values == [
         "Poor",
@@ -572,9 +577,20 @@ def test_historical_record_workflow_uses_saved_schema_and_is_forced_read_only(
         "Good",
     ]
     assert workflow.current_module.scores["1"].value == "Good"
+    assert workflow.current_module.tags["1"].value is True
     assert workflow.current_module.notes == "saved note"
-    with pytest.raises(QcReadOnlyError):
-        workflow.set_score("1", "Fair")
+
+    assert workflow.navigate_to("SUB003")
+    assert workflow.current_module.scores["1"].value == "Poor"
+    assert workflow.current_module.tags["1"].value is False
+    assert workflow.current_module.notes == "third note"
+    workflow.set_score("1", "Fair")
+    workflow.set_notes("edited third note")
+    saved = workflow.save()
+
+    assert saved.parent == project.rating_dir / "AnatQC" / "rater1"
+    assert workflow.current_module.scores["1"].value == "Fair"
+    assert workflow.current_module.notes == "edited third note"
 
 
 def test_historical_record_remains_available_after_module_is_removed(
@@ -611,7 +627,9 @@ def test_historical_record_remains_available_after_module_is_removed(
 
     assert [entry.module_name for entry in context.modules] == ["FuncQC"]
     assert [entry.module_name for entry in context.records] == ["AnatQC"]
-    assert workflow.watch_mode
+    assert workflow.subject_ids == ("SUB001", "SUB002", "SUB003")
+    assert workflow.initial_read_only
+    assert not workflow.watch_mode
     assert workflow.current_module.name == "AnatQC"
     assert workflow.current_module.scores["1"].value == "Good"
 

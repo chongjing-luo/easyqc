@@ -436,7 +436,7 @@ class ProjectContextService:
         module_name: str,
         rater: str,
     ) -> QcWorkflowService:
-        """Create a forced-read-only workflow from one accepted rating payload."""
+        """Create a complete saved-schema workflow for one accepted rating."""
 
         self._validate_current_snapshot(snapshot)
         identity = self._normalize_identity(ezqcid)
@@ -477,10 +477,45 @@ class ProjectContextService:
             raise ProjectContextError(
                 "Historical QC payload does not match its snapshot identity"
             )
+        saved_module = QCModule.from_legacy_dict(deepcopy(payload))
+        try:
+            expression = normalize_module_filter(payload)
+            requested = resolve_module_filter_identities(
+                snapshot.subjects,
+                expression,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ProjectContextError(
+                f"Invalid saved QC module filter for '{module_key}': {exc}"
+            ) from exc
+        if not requested:
+            raise ProjectContextError(
+                f"Saved QC module filter matches no subjects: {module_key}"
+            )
+        if identity not in requested:
+            raise ProjectContextError(
+                "Historical QC ezqcid is not in the saved module queue: "
+                f"{identity}"
+            )
+        source_ids = tuple(
+            self._normalize_identity(value) for value in snapshot.subjects["ezqcid"]
+        )
+        positions = {
+            subject_identity: index
+            for index, subject_identity in enumerate(source_ids)
+        }
+        ordered_subjects = snapshot.subjects.iloc[
+            [positions[subject_identity] for subject_identity in requested]
+        ].reset_index(drop=True)
+        rating_dir = (
+            snapshot.project_path / "RatingFiles" / module_key / rater_key
+            if snapshot.project_path is not None and rater_key
+            else None
+        )
         return QcWorkflowService(
-            payload,
-            matching_rows.reset_index(drop=True),
-            rating_dir=None,
+            saved_module,
+            ordered_subjects,
+            rating_dir=rating_dir,
             constants=snapshot.constants,
             rating_service=self.rating_service,
             code_executor=self.code_executor,
@@ -491,7 +526,12 @@ class ProjectContextService:
                 "project_name": snapshot.project_name,
                 "project_path": str(snapshot.project_path),
             },
-            historical_rating_payload=payload,
+            queue_summaries=self._qc_queue_summaries(
+                snapshot,
+                saved_module,
+                requested,
+            ),
+            initial_read_only=True,
         )
 
     def create_qc_workflow(

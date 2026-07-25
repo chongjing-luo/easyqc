@@ -695,7 +695,7 @@ def test_row_context_menus_cover_pre_qc_results_and_active_qc_queue(
     )
 
 
-def test_row_record_action_is_read_only_and_dirty_draft_blocks_replacement(
+def test_row_record_action_starts_toggleable_read_only_and_dirty_draft_blocks_replacement(
     qtbot,
     tmp_path,
     monkeypatch,
@@ -729,8 +729,14 @@ def test_row_record_action_is_read_only_and_dirty_draft_blocks_replacement(
     record_menu = window.table_workspace.active_row_context_menu
     record_menu.record_actions[("SUB001", "AnatQC", "rater1")].trigger()
 
-    assert window.active_workflow.watch_mode
+    assert window.active_workflow.subject_ids == ("SUB001", "SUB002", "SUB003")
+    assert window.active_workflow.initial_read_only
+    assert not window.active_workflow.watch_mode
     assert window.active_workflow.current_module.scores["1"].value == "Good"
+    assert window.qc_workspace.read_only_box.isChecked()
+    assert window.qc_workspace.read_only_box.isEnabled()
+    window.qc_workspace.read_only_box.click()
+    assert window.qc_workspace.score_buttons["1"]["Fair"].isEnabled()
 
     window.table_workspace._open_row_context_menu(
         window.table_workspace.pinned_view,

@@ -9,6 +9,7 @@ from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QGroupBox,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -75,6 +76,7 @@ def _workflow(
     executor=None,
     subjects=None,
     initial_ezqcid=None,
+    initial_read_only=False,
 ):
     return QcWorkflowService(
         module or _module(),
@@ -86,6 +88,7 @@ def _workflow(
         rating_dir=tmp_path / "ratings",
         code_executor=executor or _FakeExecutor(),
         initial_ezqcid=initial_ezqcid,
+        initial_read_only=initial_read_only,
     )
 
 
@@ -473,6 +476,39 @@ def test_manual_and_core_read_only_use_the_single_top_control_but_keep_viewer(
     ) == 1
 
 
+def test_initial_history_read_only_can_be_cleared_then_edited_and_saved(
+    qtbot,
+    tmp_path,
+) -> None:
+    controller = _controller_class()(
+        _workflow(tmp_path, initial_read_only=True)
+    )
+    qtbot.addWidget(controller)
+    controller.show()
+    workspace = controller.workspace
+
+    assert workspace.read_only_box.isChecked()
+    assert workspace.read_only_box.isEnabled()
+    assert not workspace.workflow.watch_mode
+    assert not workspace.score_buttons["1"]["Good"].isEnabled()
+    assert not workspace.tag_boxes["1"].isEnabled()
+    assert workspace.notes_edit.isReadOnly()
+    assert not workspace.save_button.isEnabled()
+
+    workspace.read_only_box.click()
+    qtbot.mouseClick(workspace.score_buttons["1"]["Good"], Qt.LeftButton)
+    qtbot.mouseClick(workspace.tag_boxes["1"], Qt.LeftButton)
+    workspace.notes_edit.setPlainText("edited historical note")
+    qtbot.mouseClick(workspace.save_button, Qt.LeftButton)
+
+    assert not workspace.read_only_box.isChecked()
+    assert workspace.score_buttons["1"]["Good"].isEnabled()
+    assert workspace.workflow.current_module.scores["1"].value == "Good"
+    assert workspace.workflow.current_module.tags["1"].value is True
+    assert workspace.workflow.current_module.notes == "edited historical note"
+    assert list((tmp_path / "ratings").glob("AnatQC._.SUB001*.json"))
+
+
 def test_dirty_controller_close_rejects_without_cleanup_then_accepts_once(
     qtbot,
     tmp_path,
@@ -634,6 +670,99 @@ def test_qt_qc_workspace_resizes_with_long_text_and_keyboard_actions(
     assert executor.started
     assert all(control.isVisible() for control in workspace.action_controls)
     assert controller.minimumSizeHint().width() <= 640
+
+
+def test_qc_layout_reserves_eight_rows_and_gives_added_height_to_queue(
+    qtbot,
+    tmp_path,
+) -> None:
+    subjects = pd.DataFrame(
+        {
+            "ezqcid": [f"SUB{index:03d}" for index in range(12)],
+            "image": [f"{index}.nii" for index in range(12)],
+        }
+    )
+    controller = _controller_class()(
+        _workflow(tmp_path, subjects=subjects)
+    )
+    qtbot.addWidget(controller)
+    controller.show()
+    workspace = controller.workspace
+    qtbot.wait(0)
+
+    row_height = workspace.queue_table.verticalHeader().defaultSectionSize()
+    required_table_height = (
+        workspace.queue_table.horizontalHeader().height()
+        + row_height * 8
+        + 2 * workspace.queue_table.frameWidth()
+    )
+    assert workspace.queue_table.minimumHeight() >= required_table_height
+
+    action_layout = workspace.action_column.layout()
+    occupied_height = sum(
+        control.height() for control in workspace.action_controls
+    ) + action_layout.spacing() * (len(workspace.action_controls) - 1)
+    assert all(
+        control.minimumHeight() >= row_height
+        for control in workspace.action_controls
+    )
+    assert abs(occupied_height - workspace.action_column.contentsRect().height()) <= 2
+    assert abs(workspace.action_column.height() - workspace.queue_table.height()) <= 2
+
+    initial_table_height = workspace.queue_table.height()
+    initial_editor_height = workspace.editor_scroll.height()
+    controller.resize(controller.width(), controller.height() + 160)
+    qtbot.wait(0)
+
+    assert workspace.queue_table.height() > initial_table_height
+    assert workspace.queue_table.height() - initial_table_height >= (
+        workspace.editor_scroll.height() - initial_editor_height
+    )
+
+
+def test_score_and_tag_growth_raise_preferred_height_with_scroll_fallback(
+    qtbot,
+    tmp_path,
+) -> None:
+    simple = _controller_class()(_workflow(tmp_path / "simple"))
+    qtbot.addWidget(simple)
+    simple.show()
+
+    rich_module = _module()
+    rich_module["scores"] = {
+        str(index): {
+            "label": f"Score {index}",
+            "num": "Poor,Fair,Good",
+            "num_": "Poor,Fair,Good",
+            "value": None,
+        }
+        for index in range(1, 7)
+    }
+    rich_module["tags"] = {
+        str(index): {"label": f"Tag {index}", "value": False}
+        for index in range(1, 13)
+    }
+    rich = _controller_class()(
+        _workflow(tmp_path / "rich", module=rich_module)
+    )
+    qtbot.addWidget(rich)
+    rich.show()
+    qtbot.wait(0)
+
+    assert (
+        rich.workspace.editor_scroll.widget().sizeHint().height()
+        > simple.workspace.editor_scroll.widget().sizeHint().height()
+    )
+    assert rich.height() > simple.height()
+    assert rich.height() <= rich.screen().availableGeometry().height()
+
+    rich.resize(rich.width(), 560)
+    qtbot.wait(0)
+    notes_group = rich.workspace.findChild(QGroupBox, "notesGroup")
+    assert notes_group is not None
+    assert rich.workspace.editor_scroll.verticalScrollBar().maximum() > 0
+    rich.workspace.editor_scroll.ensureWidgetVisible(notes_group)
+    assert rich.workspace.editor_scroll.verticalScrollBar().value() > 0
 
 
 def test_qt_schema_drift_shows_reused_legacy_score_then_restores_editing(

@@ -53,10 +53,13 @@ class QcWorkflowService:
         event_bus: EventBus | None = None,
         event_context: Mapping[str, Any] | None = None,
         queue_summaries: Mapping[str, tuple[str, str]] | None = None,
+        initial_read_only: bool = False,
         historical_rating_payload: Mapping[str, Any] | None = None,
     ) -> None:
         if not isinstance(subjects, pd.DataFrame):
             raise TypeError("QC subjects must be a pandas DataFrame")
+        if not isinstance(initial_read_only, bool):
+            raise TypeError("Initial read-only state must be a boolean")
         if historical_rating_payload is not None and not isinstance(
             historical_rating_payload,
             Mapping,
@@ -77,6 +80,7 @@ class QcWorkflowService:
         self._event_bus = event_bus
         self._event_context = dict(event_context or {})
         self._queue_summaries = self._validated_queue_summaries(queue_summaries)
+        self._initial_read_only = initial_read_only
         self._historical_rating_payload = (
             deepcopy(dict(historical_rating_payload))
             if historical_rating_payload is not None
@@ -188,6 +192,12 @@ class QcWorkflowService:
     @property
     def current_module(self) -> QCModule:
         return deepcopy(self._working_module)
+
+    @property
+    def initial_read_only(self) -> bool:
+        """Return the presentation hint without weakening Core write guards."""
+
+        return self._initial_read_only
 
     @property
     def watch_mode(self) -> bool:
