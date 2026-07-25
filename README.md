@@ -284,8 +284,8 @@ freeview -v $SUBJECTS_DIR/{ezqcid}/mri/T1.mgz \
 ## 表格操作
 
 EasyQC 的统一表格工作区直接提供结构化筛选、多列排序、列显示和新增列。
-用户不需要查看、粘贴或编辑 JSON。底层 `TableTransformEngine` 还支持 8
-种类型化操作：
+用户无需查看、粘贴或编辑 JSON。视觉表格界面通过结构化 Core 契约调用
+底层 `TableTransformEngine`；Core 还支持 8 种类型化操作：
 
 | 操作 | 说明 | 示例 |
 |---|---|---|
