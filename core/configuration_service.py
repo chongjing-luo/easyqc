@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 import keyword
 from pathlib import Path
 import re
@@ -23,6 +24,7 @@ from core.table_service import TABLE_ALL, TableService
 from core.table_transform import TableTransformEngine
 from core.table_view_service import TableViewError
 from models.column_recipe import ColumnRecipe
+from models.folder_match import FolderMatchRequest
 from models.project import Project
 from models.qcmodule import QCModule, Score, Tag
 from models.table_view_state import (
@@ -147,6 +149,110 @@ class ConfigurationService:
         name = self._import_column_name(column_name)
         values = sorted(entry.name for entry in directory.iterdir() if entry.is_dir())
         return self._normalize_import_frame(pd.DataFrame({name: values}))
+
+    def draft_from_folder_matches(
+        self,
+        path: str | Path,
+        request: FolderMatchRequest,
+    ) -> pd.DataFrame:
+        """Discover safe basename matches as a deterministic detached draft."""
+
+        directory = Path(path)
+        if not directory.is_dir() or directory.is_symlink():
+            raise ConfigurationError(f"导入目录不存在或不可用: {directory}")
+        if not isinstance(request, FolderMatchRequest):
+            raise ConfigurationError("文件夹匹配请求必须是 FolderMatchRequest")
+
+        compiled_regex: re.Pattern[str] | None = None
+        if request.match_kind == "regex":
+            try:
+                compiled_regex = re.compile(request.pattern)
+            except re.error as exc:
+                raise ConfigurationError(f"正则表达式无效: {exc}") from exc
+
+        def name_matches(name: str) -> bool:
+            if request.match_kind == "starts_with":
+                return name.startswith(request.pattern)
+            if request.match_kind == "ends_with":
+                return name.endswith(request.pattern)
+            if request.match_kind == "contains":
+                return request.pattern in name
+            if request.match_kind == "wildcard":
+                return fnmatchcase(name, request.pattern)
+            assert compiled_regex is not None
+            return compiled_regex.search(name) is not None
+
+        matches: list[tuple[str, str, str]] = []
+        pending: list[tuple[Path, int]] = [(directory, 0)]
+        while pending:
+            parent, parent_depth = pending.pop()
+            try:
+                entries = sorted(parent.iterdir(), key=lambda entry: entry.name)
+            except OSError as exc:
+                raise ConfigurationError(f"无法读取目录 {parent}: {exc}") from exc
+
+            for entry in entries:
+                try:
+                    if entry.is_symlink():
+                        continue
+                    is_directory = entry.is_dir()
+                    is_file = entry.is_file()
+                except OSError as exc:
+                    raise ConfigurationError(f"无法读取路径 {entry}: {exc}") from exc
+
+                depth = parent_depth + 1
+                in_scope = (
+                    request.scope == "all"
+                    or (request.scope == "direct" and depth == 1)
+                    or (
+                        request.scope == "exact"
+                        and depth == request.exact_depth
+                    )
+                )
+                target_matches = (
+                    request.target_kind == "both"
+                    or (request.target_kind == "directory" and is_directory)
+                    or (request.target_kind == "file" and is_file)
+                )
+                relative = entry.relative_to(directory)
+                relative_posix = relative.as_posix()
+                if in_scope and target_matches and name_matches(entry.name):
+                    parent_value = (
+                        ""
+                        if relative.parent == Path(".")
+                        else relative.parent.as_posix()
+                    )
+                    matches.append((relative_posix, parent_value, entry.name))
+
+                should_descend = is_directory and (
+                    request.scope == "all"
+                    or (
+                        request.scope == "exact"
+                        and depth < request.exact_depth
+                    )
+                )
+                if should_descend:
+                    pending.append((entry, depth))
+
+        if not matches:
+            raise ConfigurationError("没有找到符合条件的匹配项")
+        matches.sort(key=lambda item: item[0])
+        if request.parent_column is None:
+            frame = pd.DataFrame(
+                {request.item_column: [item_name for _, _, item_name in matches]}
+            )
+        else:
+            frame = pd.DataFrame(
+                {
+                    request.parent_column: [
+                        parent_value for _, parent_value, _ in matches
+                    ],
+                    request.item_column: [
+                        item_name for _, _, item_name in matches
+                    ],
+                }
+            )
+        return self._normalize_import_frame(frame)
 
     def draft_from_file(
         self,

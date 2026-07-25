@@ -454,3 +454,74 @@ def test_recipe_division_by_zero_obeys_explicit_error_policy() -> None:
     result = TableTransformEngine().derive_column_from_recipe(source, blank)
     assert result["quotient"].iloc[0] == 2
     assert pd.isna(result["quotient"].iloc[1])
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("site-A", ["site-A", "site-A"]),
+        (7, [7, 7]),
+        (2.5, [2.5, 2.5]),
+        (True, [True, True]),
+    ],
+)
+def test_recipe_supports_typed_fixed_initial_values(value, expected) -> None:
+    source = pd.DataFrame({"ezqcid": ["ROW1", "ROW2"]})
+    recipe = ColumnRecipe(
+        name="fixed_value",
+        initial_value=RecipeValue.literal(value),
+        steps=(),
+    )
+
+    result = TableTransformEngine().derive_column_from_recipe(source, recipe)
+
+    assert result["fixed_value"].tolist() == expected
+    assert recipe.source_column is None
+
+
+def test_recipe_supports_blank_fixed_start_and_later_steps() -> None:
+    source = pd.DataFrame({"ezqcid": ["ROW1", "ROW2"]})
+    blank = ColumnRecipe(
+        name="blank_value",
+        initial_value=RecipeValue.literal(None),
+        steps=(),
+    )
+    transformed = ColumnRecipe(
+        name="constant_label",
+        initial_value=RecipeValue.literal("  qc  "),
+        steps=(_step("trim"), _step("upper")),
+    )
+    engine = TableTransformEngine()
+
+    blank_result = engine.derive_column_from_recipe(source, blank)
+    transformed_result = engine.derive_column_from_recipe(source, transformed)
+
+    assert blank_result["blank_value"].isna().all()
+    assert transformed_result["constant_label"].tolist() == ["QC", "QC"]
+
+
+def test_recipe_initial_value_rejects_current_step_reference() -> None:
+    with pytest.raises(ValueError, match="起始值"):
+        ColumnRecipe(
+            name="invalid",
+            initial_value=RecipeValue.current(),
+            steps=(),
+        )
+
+
+def test_recipe_can_create_missing_identity_but_never_replace_existing_identity() -> None:
+    source_without_identity = pd.DataFrame(
+        {"raw_id": ["SUB001", "SUB002"], "site": ["A", "B"]}
+    )
+    recipe = ColumnRecipe(
+        name="ezqcid",
+        source_column="raw_id",
+        steps=(_step("trim"),),
+    )
+    engine = TableTransformEngine()
+
+    created = engine.derive_column_from_recipe(source_without_identity, recipe)
+
+    assert created["ezqcid"].tolist() == ["SUB001", "SUB002"]
+    with pytest.raises(TableTransformError, match="已存在"):
+        engine.derive_column_from_recipe(created, recipe)

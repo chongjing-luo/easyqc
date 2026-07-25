@@ -369,6 +369,197 @@ def test_list_import_draft_readers_fail_loud_on_invalid_sources(tmp_path) -> Non
         service.draft_from_text("SUB001", "not a valid field")
 
 
+def _folder_match_tree(tmp_path):
+    root = tmp_path / "pattern-root"
+    (root / "direct_T1").mkdir(parents=True)
+    (root / "direct_report.txt").write_text("direct", encoding="utf-8")
+    (root / "siteA" / "sub01").mkdir(parents=True)
+    (root / "siteA" / "sub01" / "scan_T1.nii.gz").write_text(
+        "scan",
+        encoding="utf-8",
+    )
+    (root / "siteA" / "sub01" / "notes.txt").write_text(
+        "notes",
+        encoding="utf-8",
+    )
+    (root / "siteB" / "sub02" / "QC_T1_folder").mkdir(parents=True)
+    (root / "siteB" / "sub02" / "scan_T2.nii").write_text(
+        "scan",
+        encoding="utf-8",
+    )
+    return root
+
+
+def _folder_request(**changes):
+    from models.folder_match import FolderMatchRequest
+
+    values = {
+        "target_kind": "both",
+        "match_kind": "contains",
+        "pattern": "T1",
+        "scope": "all",
+        "exact_depth": 1,
+        "item_column": "matched_item",
+        "parent_column": "relative_parent",
+    }
+    values.update(changes)
+    return FolderMatchRequest(**values)
+
+
+@pytest.mark.parametrize(
+    ("match_kind", "pattern", "target_kind", "expected"),
+    [
+        (
+            "starts_with",
+            "scan_",
+            "file",
+            {"scan_T1.nii.gz", "scan_T2.nii"},
+        ),
+        ("ends_with", ".nii.gz", "file", {"scan_T1.nii.gz"}),
+        (
+            "contains",
+            "T1",
+            "both",
+            {"direct_T1", "scan_T1.nii.gz", "QC_T1_folder"},
+        ),
+        (
+            "wildcard",
+            "scan_T?.nii*",
+            "file",
+            {"scan_T1.nii.gz", "scan_T2.nii"},
+        ),
+        ("regex", r"^QC_.*_folder$", "directory", {"QC_T1_folder"}),
+    ],
+)
+def test_folder_pattern_reader_supports_all_match_and_target_kinds(
+    tmp_path,
+    match_kind,
+    pattern,
+    target_kind,
+    expected,
+) -> None:
+    service, _projects = _service(tmp_path)
+    root = _folder_match_tree(tmp_path)
+    request = _folder_request(
+        match_kind=match_kind,
+        pattern=pattern,
+        target_kind=target_kind,
+    )
+
+    result = service.draft_from_folder_matches(root, request)
+
+    assert set(result["matched_item"]) == expected
+
+
+def test_folder_pattern_reader_supports_direct_exact_all_and_optional_parent(
+    tmp_path,
+) -> None:
+    service, _projects = _service(tmp_path)
+    root = _folder_match_tree(tmp_path)
+
+    direct = service.draft_from_folder_matches(
+        root,
+        _folder_request(
+            scope="direct",
+            match_kind="starts_with",
+            pattern="direct_",
+        ),
+    )
+    exact = service.draft_from_folder_matches(
+        root,
+        _folder_request(
+            target_kind="file",
+            scope="exact",
+            exact_depth=3,
+            match_kind="ends_with",
+            pattern=".nii",
+        ),
+    )
+    all_without_parent = service.draft_from_folder_matches(
+        root,
+        _folder_request(
+            target_kind="file",
+            match_kind="starts_with",
+            pattern="scan_",
+            parent_column=None,
+        ),
+    )
+
+    assert direct.to_dict("records") == [
+        {"relative_parent": "", "matched_item": "direct_T1"},
+        {"relative_parent": "", "matched_item": "direct_report.txt"},
+    ]
+    assert exact.to_dict("records") == [
+        {"relative_parent": "siteB/sub02", "matched_item": "scan_T2.nii"}
+    ]
+    assert all_without_parent.to_dict("records") == [
+        {"matched_item": "scan_T1.nii.gz"},
+        {"matched_item": "scan_T2.nii"},
+    ]
+
+
+def test_folder_pattern_reader_rejects_invalid_regex_and_empty_result(
+    tmp_path,
+) -> None:
+    service, _projects = _service(tmp_path)
+    root = _folder_match_tree(tmp_path)
+
+    with pytest.raises(ConfigurationError, match="正则"):
+        service.draft_from_folder_matches(
+            root,
+            _folder_request(match_kind="regex", pattern="("),
+        )
+    with pytest.raises(ConfigurationError, match="匹配"):
+        service.draft_from_folder_matches(
+            root,
+            _folder_request(pattern="NEVER_MATCHES"),
+        )
+
+
+def test_folder_pattern_reader_skips_symbolic_links(tmp_path) -> None:
+    service, _projects = _service(tmp_path)
+    root = _folder_match_tree(tmp_path)
+    link = root / "linked_T1"
+    try:
+        link.symlink_to(root / "siteA", target_is_directory=True)
+    except OSError:
+        pytest.skip("symbolic links are unavailable in this environment")
+
+    result = service.draft_from_folder_matches(
+        root,
+        _folder_request(pattern="T1"),
+    )
+
+    assert "linked_T1" not in set(result["matched_item"])
+    assert result["matched_item"].tolist().count("scan_T1.nii.gz") == 1
+
+
+@pytest.mark.parametrize(
+    ("changes", "match"),
+    [
+        ({"target_kind": "link"}, "目标类型"),
+        ({"match_kind": "python"}, "匹配方式"),
+        ({"pattern": ""}, "匹配模式"),
+        ({"scope": "nearby"}, "查找范围"),
+        ({"exact_depth": 0}, "精确层级"),
+        ({"item_column": "not a field"}, "字段名"),
+        (
+            {
+                "item_column": "same_name",
+                "parent_column": "same_name",
+            },
+            "不能相同",
+        ),
+    ],
+)
+def test_folder_match_request_rejects_ambiguous_or_unsafe_rules(
+    changes,
+    match,
+) -> None:
+    with pytest.raises((TypeError, ValueError), match=match):
+        _folder_request(**changes)
+
+
 def test_list_import_merge_columns_and_append_rows_use_exact_normalized_ezqcid(
     tmp_path,
 ) -> None:

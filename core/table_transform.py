@@ -265,14 +265,10 @@ class TableTransformEngine:
             raise TableTransformError("新增列来源必须是表格")
         if not isinstance(recipe, ColumnRecipe):
             raise TableTransformError("新增列请求必须是 ColumnRecipe")
-        if recipe.name == "ezqcid":
-            raise TableTransformError("不能改写关键列 ezqcid")
         if recipe.name in df.columns:
             raise TableTransformError(f"新列已存在: {recipe.name}")
-        if recipe.source_column not in df.columns:
-            raise TableTransformError(f"未知来源列: {recipe.source_column}")
 
-        current = df[recipe.source_column].copy()
+        current = self.recipe_initial_values(df, recipe)
         original_index = df.index.copy()
         for step_number, step in enumerate(recipe.steps, start=1):
             self._validate_recipe_step(step, step_number)
@@ -314,6 +310,28 @@ class TableTransformEngine:
         result = df.copy()
         result[recipe.name] = current
         return result
+
+    def recipe_initial_values(
+        self,
+        df: pd.DataFrame,
+        recipe: ColumnRecipe,
+    ) -> pd.Series:
+        """Resolve one safe recipe start into a detached, row-aligned Series."""
+
+        if not isinstance(df, pd.DataFrame):
+            raise TableTransformError("新增列来源必须是表格")
+        if not isinstance(recipe, ColumnRecipe):
+            raise TableTransformError("新增列请求必须是 ColumnRecipe")
+
+        value = recipe.initial_value
+        if value.kind == "column":
+            column = str(value.value)
+            if column not in df.columns:
+                raise TableTransformError(f"未知来源列: {column}")
+            return df[column].copy()
+        if value.kind == "literal":
+            return _broadcast(value.value, df.index)
+        raise TableTransformError("新增列起始值只能选择已有列或固定值")
 
     def _validate_recipe_step(self, step: RecipeStep, step_number: int) -> None:
         if not isinstance(step, RecipeStep):
