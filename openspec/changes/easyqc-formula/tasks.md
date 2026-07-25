@@ -9,4 +9,4 @@
 - [x] EF-07: Add bilingual/accessibility/responsive Qt coverage.
 - [x] EF-08: Pin Lark in requirements/target locks and verify clean imports.
 - [x] EF-09: Run 100,000-row, security, no-persistence, focused and full suites.
-- [ ] EF-10: Update project/Paper documentation and close consistency review.
+- [x] EF-10: Update project/Paper documentation and close consistency review.
