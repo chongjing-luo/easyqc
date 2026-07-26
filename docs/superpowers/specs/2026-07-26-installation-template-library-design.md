@@ -1,7 +1,7 @@
 # Installation-scoped template library design
 
-Date: 2026-07-26  
-Status: pending written-spec review  
+Date: 2026-07-26
+Status: approved
 Task index: `../../../../dev/cross-project-settings/PROJECT_INDEX.md`
 
 ## Goal
@@ -199,4 +199,3 @@ extended or reused rather than duplicated.
 6. Cross-project settings page and execution-mode integration.
 7. Project copy actions, navigation alignment, and bilingual strings.
 8. Integration tests and documentation updates.
-
