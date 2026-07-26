@@ -114,6 +114,10 @@ query/load/export 已移出 GUI 线程；但四个平台的真实 CI、三平台
 与人工可访问性门禁尚未完成，因此仍需显式选择 Preview，默认入口继续使用 tkinter。
 两种 GUI 读取同一套现有 JSON/CSV 事实，Qt 层不会另建权威数据库。
 
+Qt Preview 的七个导航页依次为：项目选择、质控名单导入、质控前名单、
+常量设置、质控模块、质控结果和跨项目设置。最后一页集中管理当前 EasyQC
+安装的常量模板、质控模块模板和命令执行模式；它不会把模板隐式注入项目。
+
 ### CLI 模式（直接打开指定 QC 页面）
 
 ```bash
@@ -142,7 +146,8 @@ EasyQC 会自动创建项目目录结构：
 
 ```text
 easyqc_<project>/
-├── settings_<project>.json    # 项目配置（模块、常量、变量）
+├── settings_<project>.json    # 项目常量、变量和 legacy 模块兼容快照
+├── modules/                   # 项目模块权威文件（每个模块一个 JSON）
 ├── Table/
 │   ├── ezqc_all.csv           # 受试者主表
 │   ├── ezqc_qctable.csv       # 聚合后的 QC 结果宽表
@@ -165,7 +170,7 @@ easyqc_<project>/
 
 ### 3. 定义项目常量
 
-在 **设置变量** 对话框中定义项目常量（key-value 对），例如：
+在 **常量设置** 中定义项目常量（key-value 对），例如：
 
 | 常量名 | 示例值 | 用途 |
 |---|---|---|
@@ -174,6 +179,11 @@ easyqc_<project>/
 | `WB_VIEW` | `/usr/bin/wb_view` | wb_view 可执行文件路径 |
 
 常量在命令模板中通过占位符 `$变量名` / `${变量名}` / `{变量名}` 引用。
+
+Qt Preview 还可在 **跨项目设置 → 常量模板** 中保存常用起点，再在
+**常量设置 → 从模板添加** 中复制到当前项目。复制前可以修改名称和值；
+复制成功后它就是普通的项目常量，与原模板完全脱离。模板不会自动应用、
+同步或参与 View 命令的变量解析。
 
 ### 4. 创建 QC 模块
 
@@ -189,6 +199,10 @@ easyqc_<project>/
 | **命令模板** | 启动外部查看器的命令 | 见下方详细说明 |
 | **受试者筛选** | 限定哪些受试者进入此模块 | `batch == "baseline"` |
 | **进程控制** | 切换受试者时自动关闭上一进程 | `true` / `false` |
+
+常用模块可在 **跨项目设置 → 质控模块模板** 中创建、导入、编辑、导出和
+删除，再从项目的 **质控模块 → 从模板添加** 复制。每次复制都会生成新的
+项目模块 ID；项目副本可独立编辑，后续模板修改不会回写项目。
 
 ### 5. 执行 QC 评分
 
@@ -256,12 +270,18 @@ freeview -v $SUBJECTS_DIR/{ezqcid}/mri/T1.mgz \
 | `${变量名}` | `${ezqcid}` | 受试者主表行 |
 | `{变量名}` | `{ezqcid}` | 同上 |
 
-**多个命令模板**：一个模块可配置多条命令模板（如不同的叠加设置、对比度、视角），评分时通过下拉菜单选择执行哪个模板。
+每个模块保存一个命令模板；需要有序启动多个命令时，使用受支持的
+`MULTICMD` 形式表达一个命令计划。
 
-**安全机制**：
-- 命令可执行文件必须在白名单内（默认：`freeview`, `wb_view`, `fslview`, `mricron`, `itksnap`, `mricroGL`, `MRIcroGL`, `open`, `python`, `python3`）
-- 所有命令以 `shell=False` 执行
-- 拒绝 shell 控制操作符（`;`, `&&`, `||`, `|`）
+**执行边界**：
+
+- 不设置命令名称白名单或黑名单；
+- 新安装默认直接执行（`shell=False`）；
+- 用户可在 **跨项目设置 → 命令执行** 中明确选择 `shell=True`，以使用
+  管道、重定向、变量展开或命令串联；
+- 该执行器负责命令解析、启动错误和进程生命周期，不是权限控制或沙箱。
+  两种模式都以当前操作系统用户权限运行；Shell 模式还会让操作系统解释
+  整条命令及替换后的值，因此命令模板应由本地用户审核。
 
 ### 受试者筛选（Subject Filter）
 
@@ -329,12 +349,18 @@ easyqc/
 ├── start.sh                    # 启动脚本（setup.sh 自动生成）
 ├── requirements.txt            # Python 依赖
 ├── projects.json               # 项目注册表
+├── constant_templates.json      # 当前安装的常量模板
+├── app_settings.json            # 当前安装的命令执行模式
+├── modules/                     # 当前安装的模块模板（每个模块一个 JSON）
 │
 ├── core/                       # 核心服务层（不依赖 GUI）
 │   ├── project_service.py      # 项目 CRUD + 模块管理 + 观察者通知
+│   ├── module_repository.py     # 每模块一个 JSON 的加载、迁移与原子发布
+│   ├── template_service.py      # 安装级模板与命令设置
+│   ├── project_template_service.py # 复制模板为项目自有配置
 │   ├── rating_service.py       # 评分 JSON 扫描/验证/保存/聚合/透视
 │   ├── table_service.py        # CSV 表格加载/保存（原子写入）
-│   ├── code_executor.py        # 受控外部命令执行（白名单 + shell=False）
+│   ├── code_executor.py        # 用户可选 direct/Shell 的外部进程控制
 │   ├── table_transform.py      # 结构化表格操作引擎（8 种操作）
 │   ├── expression_parser.py    # 安全表达式解析器（AST 白名单）
 │   ├── formula_parser.py       # EasyQC Formula 封闭语法与 AST
@@ -357,6 +383,11 @@ easyqc/
 │   ├── dialog_main.py          # 对话框（设置变量、命令模板、筛选等）
 │   ├── dialogs.py              # 新对话框组件
 │   └── widgets.py              # 通用 GUI 组件
+│
+├── gui_qt/                     # PySide6/Qt Widgets 迁移目标
+│   ├── main_window.py          # 七页导航与共享应用上下文
+│   ├── cross_project_settings_page.py # 模板库和命令执行设置
+│   └── template_copy_dialogs.py # 从模板添加到项目
 │
 ├── utils/                      # 工具模块
 │   ├── data_manager.py         # 数据管理（主表构建、导入）
