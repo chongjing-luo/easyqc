@@ -20,7 +20,7 @@ from core.project_service import (
     ProjectStateConflictError,
 )
 from core.table_service import TABLE_ALL, TableService
-from core.table_transform import TableTransformEngine
+from core.table_transform import TableTransformEngine, TableTransformError
 from core.table_view_service import TableViewError
 from models.derived_formula import DerivedColumnFormula
 from models.folder_match import FolderMatchRequest
@@ -57,6 +57,20 @@ class ProjectListEntry:
     path: Path
     is_current: bool
     is_most_recent: bool
+
+
+@dataclass(frozen=True)
+class SubjectImportSummary:
+    """Stable counts describing one validated subject-list import candidate."""
+
+    mode: str
+    conflict_policy: str | None
+    current_rows: int
+    incoming_rows: int
+    result_rows: int
+    matching_identities: int
+    new_identities: int
+    overlapping_columns: tuple[str, ...]
 
 
 class ConfigurationService:
@@ -358,6 +372,80 @@ class ConfigurationService:
         if notify:
             self.publish_subjects_changed()
 
+    def delete_subject_rows(
+        self,
+        ezqcids: tuple[str, ...],
+        *,
+        notify: bool = True,
+    ) -> int:
+        """Atomically remove exact identities from the authoritative QC list.
+
+        Input is one nonempty tuple of unique, nonblank ``ezqcid`` strings.
+        Output is the number of rows removed. The only side effect is replacing
+        ``TABLE_ALL`` and publishing after that save succeeds; rating storage is
+        intentionally outside this contract.
+        """
+
+        if not isinstance(ezqcids, tuple):
+            raise TypeError("删除名单行必须提供 ezqcid 元组")
+        normalized = tuple(
+            value.strip() if isinstance(value, str) else ""
+            for value in ezqcids
+        )
+        if not normalized or any(not value for value in normalized):
+            raise ConfigurationError("删除名单行必须提供非空 ezqcid")
+        if len(set(normalized)) != len(normalized):
+            raise ConfigurationError("删除名单行包含重复 ezqcid")
+        frame = self._validated_subjects(self.subjects())
+        available = set(frame["ezqcid"])
+        missing = tuple(value for value in normalized if value not in available)
+        if missing:
+            raise ConfigurationError(f"质控前名单行不存在或已变化: {missing}")
+        candidate = frame.loc[~frame["ezqcid"].isin(normalized)].reset_index(
+            drop=True
+        )
+        self.replace_subjects(candidate, notify=notify)
+        return len(normalized)
+
+    def delete_subject_columns(
+        self,
+        columns: tuple[str, ...],
+        *,
+        notify: bool = True,
+    ) -> int:
+        """Atomically remove exact ordinary columns from the authoritative list.
+
+        ``ezqcid`` is always protected. The only persistent side effect is the
+        validated ``TABLE_ALL`` replacement; no formula or rating data is read
+        or changed.
+        """
+
+        if not isinstance(columns, tuple):
+            raise TypeError("删除名单列必须提供列名元组")
+        normalized = tuple(
+            value if isinstance(value, str) else ""
+            for value in columns
+        )
+        if not normalized or any(not value for value in normalized):
+            raise ConfigurationError("删除名单列必须提供非空列名")
+        if len(set(normalized)) != len(normalized):
+            raise ConfigurationError("删除名单列包含重复列名")
+        if "ezqcid" in normalized:
+            raise ConfigurationError("质控前名单不能删除 ezqcid")
+        frame = self._validated_subjects(self.subjects())
+        missing = tuple(value for value in normalized if value not in frame.columns)
+        if missing:
+            raise ConfigurationError(f"质控前名单列不存在或已变化: {missing}")
+        try:
+            candidate = TableTransformEngine().drop_columns(
+                frame,
+                list(normalized),
+            )
+        except TableTransformError as exc:
+            raise ConfigurationError(str(exc)) from exc
+        self.replace_subjects(candidate, notify=notify)
+        return len(normalized)
+
     def derive_subject_column(
         self,
         request: DerivedColumnFormula,
@@ -401,6 +489,206 @@ class ConfigurationService:
             self.replace_subjects(frame, notify=notify)
         else:
             self.merge_subjects(frame, mode=mode, notify=notify)
+
+    def preview_subject_import(
+        self,
+        incoming: pd.DataFrame,
+        *,
+        mode: str,
+        conflict_policy: str | None,
+    ) -> SubjectImportSummary:
+        """Validate one explicit import policy without changing project data."""
+
+        _candidate, summary = self._subject_import_candidate(
+            incoming,
+            mode=mode,
+            conflict_policy=conflict_policy,
+        )
+        return summary
+
+    def import_subjects(
+        self,
+        incoming: pd.DataFrame,
+        *,
+        mode: str,
+        conflict_policy: str | None,
+        notify: bool = True,
+    ) -> SubjectImportSummary:
+        """Atomically apply one explicit subject-list import policy.
+
+        Input is one detached table plus a compatible mode/policy pair. Output
+        is the validated impact summary. The only persistent side effect is one
+        ``TABLE_ALL`` replacement followed by an optional success event.
+        """
+
+        candidate, summary = self._subject_import_candidate(
+            incoming,
+            mode=mode,
+            conflict_policy=conflict_policy,
+        )
+        self.replace_subjects(candidate, notify=notify)
+        return summary
+
+    def _subject_import_candidate(
+        self,
+        incoming: pd.DataFrame,
+        *,
+        mode: str,
+        conflict_policy: str | None,
+    ) -> tuple[pd.DataFrame, SubjectImportSummary]:
+        policies = {
+            "replace": {None},
+            "append": {"deduplicate", "replace"},
+            "merge_columns": {"preserve", "update"},
+        }
+        if mode not in policies:
+            raise ConfigurationError(f"不支持的质控名单导入方式: {mode}")
+        if conflict_policy not in policies[mode]:
+            raise ConfigurationError(
+                f"质控名单导入方式 {mode} 不支持冲突策略: {conflict_policy}"
+            )
+        incoming = self._validated_subjects(incoming)
+        current = self._validated_subjects(self.subjects())
+        current_ids = current["ezqcid"].tolist()
+        incoming_ids = incoming["ezqcid"].tolist()
+        current_id_set = set(current_ids)
+        matching = tuple(
+            identity for identity in incoming_ids if identity in current_id_set
+        )
+        new_ids = tuple(
+            identity for identity in incoming_ids if identity not in current_id_set
+        )
+        overlapping = tuple(
+            str(column)
+            for column in incoming.columns
+            if column != "ezqcid" and column in current.columns
+        )
+
+        if mode == "replace" or (
+            current.empty and tuple(current.columns) == ("ezqcid",)
+        ):
+            candidate = incoming.copy(deep=True)
+        elif mode == "append":
+            candidate = self._append_subject_import(
+                current,
+                incoming,
+                conflict_policy=str(conflict_policy),
+            )
+        else:
+            candidate = self._merge_subject_import_columns(
+                current,
+                incoming,
+                conflict_policy=str(conflict_policy),
+            )
+        candidate = self._validated_subjects(candidate)
+        summary = SubjectImportSummary(
+            mode=mode,
+            conflict_policy=conflict_policy,
+            current_rows=len(current),
+            incoming_rows=len(incoming),
+            result_rows=len(candidate),
+            matching_identities=len(matching),
+            new_identities=len(new_ids),
+            overlapping_columns=overlapping,
+        )
+        return candidate, summary
+
+    def _append_subject_import(
+        self,
+        current: pd.DataFrame,
+        incoming: pd.DataFrame,
+        *,
+        conflict_policy: str,
+    ) -> pd.DataFrame:
+        """Append schema-compatible rows using one duplicate-identity policy."""
+
+        if set(current.columns) != set(incoming.columns):
+            raise ConfigurationError("追加行要求导入名单与现有名单包含相同字段")
+        ordered = incoming.loc[:, current.columns]
+        current_ids = current["ezqcid"].tolist()
+        current_id_set = set(current_ids)
+        new_rows = ordered.loc[~ordered["ezqcid"].isin(current_id_set)]
+        if conflict_policy == "deduplicate":
+            base = current
+        else:
+            base = current.set_index("ezqcid", drop=False)
+            replacements = ordered.set_index("ezqcid", drop=False)
+            matching = [
+                identity
+                for identity in current_ids
+                if identity in replacements.index
+            ]
+            if matching:
+                base.loc[matching, current.columns] = replacements.loc[
+                    matching,
+                    current.columns,
+                ].to_numpy()
+            base = base.reset_index(drop=True)
+        return pd.concat([base, new_rows], ignore_index=True)
+
+    @staticmethod
+    def _incoming_value_is_present(value: object) -> bool:
+        if value is None or pd.isna(value):
+            return False
+        return not (isinstance(value, str) and not value.strip())
+
+    def _merge_subject_import_columns(
+        self,
+        current: pd.DataFrame,
+        incoming: pd.DataFrame,
+        *,
+        conflict_policy: str,
+    ) -> pd.DataFrame:
+        """Merge columns by identity without ambiguous suffix columns."""
+
+        current_ids = current["ezqcid"].tolist()
+        incoming_ids = incoming["ezqcid"].tolist()
+        current_id_set = set(current_ids)
+        new_ids = [
+            identity for identity in incoming_ids if identity not in current_id_set
+        ]
+        result_ids = [*current_ids, *new_ids]
+        current_by_id = current.set_index("ezqcid", drop=False)
+        incoming_by_id = incoming.set_index("ezqcid", drop=False)
+        output_columns = [
+            *current.columns,
+            *(
+                column
+                for column in incoming.columns
+                if column not in current.columns
+            ),
+        ]
+        candidate = pd.DataFrame({"ezqcid": result_ids})
+        for column in output_columns:
+            if column == "ezqcid":
+                continue
+            values = pd.Series(pd.NA, index=result_ids, dtype="object")
+            if column in current_by_id.columns:
+                values.loc[current_ids] = current_by_id[column].tolist()
+            if column in incoming_by_id.columns:
+                if column not in current_by_id.columns:
+                    values.loc[incoming_ids] = incoming_by_id[column].tolist()
+                else:
+                    if new_ids:
+                        values.loc[new_ids] = incoming_by_id.loc[
+                            new_ids,
+                            column,
+                        ].tolist()
+                    if conflict_policy == "update":
+                        matching = [
+                            identity
+                            for identity in incoming_ids
+                            if identity in current_id_set
+                        ]
+                        updates = incoming_by_id.loc[matching, column]
+                        accepted = updates.map(self._incoming_value_is_present)
+                        accepted_ids = updates.index[accepted].tolist()
+                        if accepted_ids:
+                            values.loc[accepted_ids] = updates.loc[
+                                accepted_ids
+                            ].tolist()
+            candidate[column] = values.tolist()
+        return candidate.loc[:, output_columns]
 
     def merge_subjects(
         self,
@@ -683,4 +971,5 @@ __all__ = [
     "ConfigurationService",
     "ConfigurationSnapshot",
     "ProjectListEntry",
+    "SubjectImportSummary",
 ]

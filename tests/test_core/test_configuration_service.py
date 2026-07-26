@@ -856,3 +856,378 @@ def test_failed_module_filter_commit_restores_memory_and_disk(
 
     assert dict(projects.settings) == before_settings
     assert projects.current_project.settings_path.read_bytes() == before_bytes
+
+
+def test_subject_row_deletion_atomically_persists_and_retains_ratings(
+    tmp_path,
+) -> None:
+    service, projects = _service(tmp_path)
+    service.replace_subjects(_subjects(), notify=False)
+    rating_path = (
+        projects.current_project.path
+        / "RatingFiles"
+        / "AnatQC"
+        / "rater1"
+        / "rating.json"
+    )
+    rating_path.parent.mkdir(parents=True)
+    rating_path.write_bytes(b'{"ezqcid":"SUB001","score":"Good"}')
+    rating_before = rating_path.read_bytes()
+    events = []
+    service.project_service.event_bus.subscribe(
+        EventType.SUBJECTS_CHANGED,
+        events.append,
+    )
+
+    removed = service.delete_subject_rows(("SUB001",))
+
+    assert removed == 1
+    assert service.subjects()["ezqcid"].tolist() == ["SUB002"]
+    assert rating_path.read_bytes() == rating_before
+    assert events and events[-1].type is EventType.SUBJECTS_CHANGED
+    table_after = (
+        projects.current_project.table_dir / "ezqc_all.csv"
+    ).read_bytes()
+
+    with pytest.raises(ConfigurationError, match="不存在"):
+        service.delete_subject_rows(("MISSING",))
+
+    assert (
+        projects.current_project.table_dir / "ezqc_all.csv"
+    ).read_bytes() == table_after
+    assert rating_path.read_bytes() == rating_before
+
+
+def test_subject_column_deletion_protects_identity_and_retains_ratings(
+    tmp_path,
+) -> None:
+    service, projects = _service(tmp_path)
+    service.replace_subjects(_subjects(), notify=False)
+    table_path = projects.current_project.table_dir / "ezqc_all.csv"
+    rating_path = (
+        projects.current_project.path
+        / "RatingFiles"
+        / "AnatQC"
+        / "rater1"
+        / "rating.json"
+    )
+    rating_path.parent.mkdir(parents=True)
+    rating_path.write_bytes(b'{"ezqcid":"SUB001","notes":"retain"}')
+    rating_before = rating_path.read_bytes()
+
+    removed = service.delete_subject_columns(("site", "age"))
+
+    assert removed == 2
+    assert service.subjects().columns.tolist() == ["ezqcid"]
+    assert rating_path.read_bytes() == rating_before
+    table_before = table_path.read_bytes()
+
+    with pytest.raises(ConfigurationError, match="ezqcid"):
+        service.delete_subject_columns(("ezqcid",))
+    with pytest.raises(ConfigurationError, match="不存在"):
+        service.delete_subject_columns(("missing",))
+
+    assert table_path.read_bytes() == table_before
+    assert rating_path.read_bytes() == rating_before
+
+
+def test_subject_deletion_save_failure_leaves_table_ratings_and_events_unchanged(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    service, projects = _service(tmp_path)
+    service.replace_subjects(_subjects(), notify=False)
+    table_path = projects.current_project.table_dir / "ezqc_all.csv"
+    rating_path = (
+        projects.current_project.path
+        / "RatingFiles"
+        / "AnatQC"
+        / "rater1"
+        / "rating.json"
+    )
+    rating_path.parent.mkdir(parents=True)
+    rating_path.write_bytes(b'{"ezqcid":"SUB001","tag":true}')
+    table_before = table_path.read_bytes()
+    rating_before = rating_path.read_bytes()
+    events = []
+    service.project_service.event_bus.subscribe(
+        EventType.SUBJECTS_CHANGED,
+        events.append,
+    )
+
+    def fail_save(*_args, **_kwargs):
+        raise OSError("synthetic table replace failure")
+
+    monkeypatch.setattr(service.table_service, "save_table", fail_save)
+
+    with pytest.raises(OSError, match="synthetic table replace failure"):
+        service.delete_subject_rows(("SUB001",))
+
+    assert table_path.read_bytes() == table_before
+    assert rating_path.read_bytes() == rating_before
+    assert events == []
+
+
+def test_explicit_subject_import_append_policies_preserve_order_and_report(
+    tmp_path,
+) -> None:
+    service, _projects = _service(tmp_path)
+    current = pd.DataFrame(
+        {
+            "ezqcid": ["SUB001", "SUB002"],
+            "site": ["A", "B"],
+            "age": [20, 30],
+        }
+    )
+    incoming = pd.DataFrame(
+        {
+            "age": [31, 40],
+            "site": ["B2", "C"],
+            "ezqcid": ["SUB002", "SUB003"],
+        }
+    )
+    service.replace_subjects(current, notify=False)
+
+    preview = service.preview_subject_import(
+        incoming,
+        mode="append",
+        conflict_policy="deduplicate",
+    )
+    assert preview.mode == "append"
+    assert preview.conflict_policy == "deduplicate"
+    assert preview.matching_identities == 1
+    assert preview.new_identities == 1
+    assert preview.result_rows == 3
+
+    result = service.import_subjects(
+        incoming,
+        mode="append",
+        conflict_policy="deduplicate",
+        notify=False,
+    )
+    assert result == preview
+    pd.testing.assert_frame_equal(
+        service.subjects(),
+        pd.DataFrame(
+            {
+                "ezqcid": ["SUB001", "SUB002", "SUB003"],
+                "site": ["A", "B", "C"],
+                "age": [20, 30, 40],
+            }
+        ),
+        check_dtype=False,
+    )
+
+    service.replace_subjects(current, notify=False)
+    service.import_subjects(
+        incoming,
+        mode="append",
+        conflict_policy="replace",
+        notify=False,
+    )
+    pd.testing.assert_frame_equal(
+        service.subjects(),
+        pd.DataFrame(
+            {
+                "ezqcid": ["SUB001", "SUB002", "SUB003"],
+                "site": ["A", "B2", "C"],
+                "age": [20, 31, 40],
+            }
+        ),
+        check_dtype=False,
+    )
+
+
+def test_explicit_subject_import_merge_policies_avoid_suffixes_and_blank_clears(
+    tmp_path,
+) -> None:
+    service, _projects = _service(tmp_path)
+    current = pd.DataFrame(
+        {
+            "ezqcid": ["SUB001", "SUB002"],
+            "site": ["A", "B"],
+            "age": [20, 30],
+            "passed": [True, True],
+        }
+    )
+    incoming = pd.DataFrame(
+        {
+            "ezqcid": ["SUB001", "SUB002", "SUB003"],
+            "site": ["  ", "B2", "C"],
+            "age": [0, pd.NA, 40],
+            "passed": [False, pd.NA, True],
+            "batch": ["X", "Y", "Z"],
+        }
+    )
+    service.replace_subjects(current, notify=False)
+
+    preview = service.preview_subject_import(
+        incoming,
+        mode="merge_columns",
+        conflict_policy="preserve",
+    )
+    assert preview.overlapping_columns == ("site", "age", "passed")
+    service.import_subjects(
+        incoming,
+        mode="merge_columns",
+        conflict_policy="preserve",
+        notify=False,
+    )
+    preserved = service.subjects()
+    assert preserved.columns.tolist() == [
+        "ezqcid",
+        "site",
+        "age",
+        "passed",
+        "batch",
+    ]
+    assert not any(
+        str(column).endswith(("_x", "_y")) for column in preserved.columns
+    )
+    preserved_by_id = preserved.set_index("ezqcid")
+    assert preserved_by_id.loc["SUB001", "site"] == "A"
+    assert preserved_by_id.loc["SUB001", "age"] == 20
+    assert bool(preserved_by_id.loc["SUB001", "passed"]) is True
+    assert preserved_by_id.loc["SUB003", "site"] == "C"
+    assert preserved_by_id.loc["SUB003", "batch"] == "Z"
+
+    service.replace_subjects(current, notify=False)
+    service.import_subjects(
+        incoming,
+        mode="merge_columns",
+        conflict_policy="update",
+        notify=False,
+    )
+    updated = service.subjects().set_index("ezqcid")
+    assert updated.loc["SUB001", "site"] == "A"
+    assert updated.loc["SUB001", "age"] == 0
+    assert bool(updated.loc["SUB001", "passed"]) is False
+    assert updated.loc["SUB002", "site"] == "B2"
+    assert updated.loc["SUB002", "age"] == 30
+    assert bool(updated.loc["SUB002", "passed"]) is True
+    assert updated.loc["SUB003", "site"] == "C"
+
+
+def test_explicit_subject_import_replace_is_atomic_and_retains_ratings(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    service, projects = _service(tmp_path)
+    current = pd.DataFrame(
+        {"ezqcid": ["SUB001", "SUB002"], "site": ["A", "B"]}
+    )
+    replacement = pd.DataFrame(
+        {"ezqcid": ["NEW001"], "batch": ["X"]}
+    )
+    service.replace_subjects(current, notify=False)
+    table_path = projects.current_project.table_dir / "ezqc_all.csv"
+    rating_path = (
+        projects.current_project.path
+        / "RatingFiles"
+        / "AnatQC"
+        / "rater1"
+        / "rating.json"
+    )
+    rating_path.parent.mkdir(parents=True)
+    rating_path.write_bytes(b'{"ezqcid":"SUB001","score":"Good"}')
+    rating_before = rating_path.read_bytes()
+    events = []
+    service.project_service.event_bus.subscribe(
+        EventType.SUBJECTS_CHANGED,
+        events.append,
+    )
+
+    summary = service.import_subjects(
+        replacement,
+        mode="replace",
+        conflict_policy=None,
+    )
+    assert summary.current_rows == 2
+    assert summary.incoming_rows == 1
+    assert summary.result_rows == 1
+    pd.testing.assert_frame_equal(service.subjects(), replacement)
+    assert rating_path.read_bytes() == rating_before
+    assert len(events) == 1
+
+    before_table = table_path.read_bytes()
+
+    def fail_save(*_args, **_kwargs):
+        raise OSError("synthetic explicit import failure")
+
+    monkeypatch.setattr(service.table_service, "save_table", fail_save)
+    with pytest.raises(OSError, match="synthetic explicit import failure"):
+        service.import_subjects(
+            current,
+            mode="replace",
+            conflict_policy=None,
+        )
+
+    assert table_path.read_bytes() == before_table
+    assert rating_path.read_bytes() == rating_before
+    assert len(events) == 1
+
+
+@pytest.mark.parametrize(
+    "incoming, mode, policy, match",
+    [
+        (
+            pd.DataFrame(
+                {"ezqcid": ["SUB003", "SUB003"], "site": ["C", "D"]}
+            ),
+            "append",
+            "deduplicate",
+            "重复",
+        ),
+        (
+            pd.DataFrame(
+                [["SUB003", "C", "D"]],
+                columns=["ezqcid", "site", "site"],
+            ),
+            "replace",
+            None,
+            "重复字段",
+        ),
+        (
+            pd.DataFrame({"ezqcid": ["SUB003"], "other": ["C"]}),
+            "append",
+            "replace",
+            "相同字段",
+        ),
+        (
+            pd.DataFrame({"ezqcid": ["SUB003"], "site": ["C"]}),
+            "append",
+            "update",
+            "冲突策略",
+        ),
+        (
+            pd.DataFrame({"ezqcid": ["SUB003"], "site": ["C"]}),
+            "replace",
+            "deduplicate",
+            "冲突策略",
+        ),
+    ],
+)
+def test_explicit_subject_import_rejects_ambiguous_inputs_before_write(
+    tmp_path,
+    incoming,
+    mode,
+    policy,
+    match,
+) -> None:
+    service, projects = _service(tmp_path)
+    current = pd.DataFrame(
+        {"ezqcid": ["SUB001", "SUB002"], "site": ["A", "B"]}
+    )
+    service.replace_subjects(current, notify=False)
+    table_path = projects.current_project.table_dir / "ezqc_all.csv"
+    before_bytes = table_path.read_bytes()
+
+    with pytest.raises(ConfigurationError, match=match):
+        service.import_subjects(
+            incoming,
+            mode=mode,
+            conflict_policy=policy,
+        )
+
+    assert table_path.read_bytes() == before_bytes
+    pd.testing.assert_frame_equal(service.subjects(), current)
