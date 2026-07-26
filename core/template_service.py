@@ -162,6 +162,57 @@ class TemplateService:
         except ModuleRepositoryError as exc:
             raise TemplateServiceError(str(exc)) from exc
 
+    def import_module(self, path: str | Path) -> ModuleRecord:
+        """Import one legacy or schema-versioned module as a detached template."""
+
+        source_path = Path(path)
+        try:
+            payload = FileUtils.safe_json_load(source_path)
+        except (OSError, ValueError, TypeError) as exc:
+            raise TemplateServiceError(f"{source_path}: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise TemplateServiceError(
+                f"module import must contain one object: {source_path}"
+            )
+        try:
+            if "schema_version" in payload or "module" in payload:
+                source = ModuleRecord.from_json_object(
+                    payload,
+                    expected_scope="template",
+                )
+                module = source.module
+                display_order = source.display_order
+            else:
+                module = QCModule.from_legacy_dict(deepcopy(payload))
+                snapshot = self.modules()
+                self._require_clean_modules(snapshot)
+                display_order = (
+                    max(
+                        (
+                            record.display_order
+                            for record in snapshot.records
+                        ),
+                        default=0,
+                    )
+                    + 10
+                )
+            return self.add_module(module, display_order=display_order)
+        except (KeyError, TypeError, ValueError, ModuleRepositoryError) as exc:
+            if isinstance(exc, TemplateServiceError):
+                raise
+            raise TemplateServiceError(f"{source_path}: {exc}") from exc
+
+    def export_module(self, module_id: str, path: str | Path) -> Path:
+        """Atomically export one complete schema-versioned template record."""
+
+        target = Path(path)
+        record = self.module(module_id)
+        try:
+            FileUtils.safe_json_save(target, record.to_json_object())
+        except (OSError, ValueError, TypeError) as exc:
+            raise TemplateServiceError(f"{target}: {exc}") from exc
+        return target
+
     def shell_enabled(self) -> bool:
         """Return this installation's viewer Shell choice; default is false."""
 

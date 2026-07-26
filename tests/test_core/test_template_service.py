@@ -155,6 +155,25 @@ def test_copying_template_module_obeys_destination_first_name_rule(
     ]
 
 
+def test_template_module_import_export_creates_detached_record(tmp_path) -> None:
+    source = TemplateService(tmp_path / "source")
+    module = _module("AnatQC", "Anatomical template")
+    module.rater = "template-rater"
+    module.qc_filter = {"groups": [{"id": "kept"}]}
+    module.button = {"help": "SOP"}
+    original = source.add_module(module, display_order=10)
+    exported_path = tmp_path / "exports" / "anat-template.json"
+
+    source.export_module(original.module_id, exported_path)
+    destination = TemplateService(tmp_path / "destination")
+    imported = destination.import_module(exported_path)
+
+    assert imported.module_id != original.module_id
+    assert imported.scope == "template"
+    assert imported.display_order == 10
+    assert imported.module.to_legacy_dict() == original.module.to_legacy_dict()
+
+
 def test_legacy_module_migration_publishes_only_a_complete_directory(
     tmp_path,
 ) -> None:

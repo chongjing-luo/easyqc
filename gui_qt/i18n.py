@@ -135,6 +135,161 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
             "viewers."
         ),
     },
+    "cross.add_constant": {"zh_CN": "添加模板", "en": "Add template"},
+    "cross.add_score": {"zh_CN": "添加评分项", "en": "Add score"},
+    "cross.add_tag": {"zh_CN": "添加标签", "en": "Add tag"},
+    "cross.cancel": {"zh_CN": "取消", "en": "Cancel"},
+    "cross.constant_name": {
+        "zh_CN": "常量名",
+        "en": "Constant name",
+    },
+    "cross.constant_value": {
+        "zh_CN": "模板值",
+        "en": "Template value",
+    },
+    "cross.constants_tab": {
+        "zh_CN": "常量模板",
+        "en": "Constant templates",
+    },
+    "cross.delete_constant": {
+        "zh_CN": "删除选中模板",
+        "en": "Delete selected template",
+    },
+    "cross.delete_module": {
+        "zh_CN": "删除模块",
+        "en": "Delete module",
+    },
+    "cross.delete_module_confirm": {
+        "zh_CN": "删除选中的质控模块模板？项目中的既有副本不会改变。",
+        "en": (
+            "Delete the selected QC module template? Existing project copies "
+            "will not change."
+        ),
+    },
+    "cross.discard": {"zh_CN": "放弃更改", "en": "Discard changes"},
+    "cross.execution_saved": {
+        "zh_CN": "执行方式已保存",
+        "en": "Execution mode saved",
+    },
+    "cross.execution_tab": {
+        "zh_CN": "命令执行",
+        "en": "Command execution",
+    },
+    "cross.export_module": {
+        "zh_CN": "导出模块",
+        "en": "Export module",
+    },
+    "cross.import_module": {
+        "zh_CN": "导入模块",
+        "en": "Import module",
+    },
+    "cross.json_files": {
+        "zh_CN": "JSON 文件 (*.json)",
+        "en": "JSON files (*.json)",
+    },
+    "cross.label": {"zh_CN": "显示标签", "en": "Display label"},
+    "cross.module_editor": {
+        "zh_CN": "模块编辑",
+        "en": "Module editor",
+    },
+    "cross.module_editor_accessible": {
+        "zh_CN": "质控模块模板编辑器",
+        "en": "QC module template editor",
+    },
+    "cross.module_label_placeholder": {
+        "zh_CN": "界面中显示的名称",
+        "en": "Name shown in the interface",
+    },
+    "cross.module_list": {
+        "zh_CN": "模块模板",
+        "en": "Module templates",
+    },
+    "cross.module_name_placeholder": {
+        "zh_CN": "模块名称（内部 ID）",
+        "en": "Module name (internal ID)",
+    },
+    "cross.module_name_required": {
+        "zh_CN": "模块名称不能为空",
+        "en": "Module name is required",
+    },
+    "cross.module_rater_placeholder": {
+        "zh_CN": "可留空，复制后仍可修改",
+        "en": "Optional and editable after copying",
+    },
+    "cross.modules_tab": {
+        "zh_CN": "质控模块模板",
+        "en": "QC module templates",
+    },
+    "cross.name": {"zh_CN": "名称", "en": "Name"},
+    "cross.new_module": {
+        "zh_CN": "新建模块",
+        "en": "New module",
+    },
+    "cross.no_constants": {
+        "zh_CN": "还没有常量模板",
+        "en": "No constant templates yet",
+    },
+    "cross.no_modules": {
+        "zh_CN": "还没有质控模块模板",
+        "en": "No QC module templates yet",
+    },
+    "cross.page_accessible": {
+        "zh_CN": "EasyQC 跨项目设置",
+        "en": "EasyQC cross-project settings",
+    },
+    "cross.rater": {"zh_CN": "质控员", "en": "Rater"},
+    "cross.refresh": {"zh_CN": "刷新", "en": "Refresh"},
+    "cross.remove_score": {
+        "zh_CN": "删除评分项",
+        "en": "Remove score",
+    },
+    "cross.remove_tag": {
+        "zh_CN": "删除标签",
+        "en": "Remove tag",
+    },
+    "cross.save_changes": {
+        "zh_CN": "保存更改",
+        "en": "Save changes",
+    },
+    "cross.save_execution": {
+        "zh_CN": "保存执行方式",
+        "en": "Save execution mode",
+    },
+    "cross.save_module": {
+        "zh_CN": "保存模块",
+        "en": "Save module",
+    },
+    "cross.score_label": {
+        "zh_CN": "评分项",
+        "en": "Score label",
+    },
+    "cross.score_values": {
+        "zh_CN": "选项（逗号分隔）",
+        "en": "Options (comma-separated)",
+    },
+    "cross.scores": {"zh_CN": "评分项", "en": "Scores"},
+    "cross.search_constants": {
+        "zh_CN": "搜索常量名或值",
+        "en": "Search names or values",
+    },
+    "cross.tag_label": {"zh_CN": "标签", "en": "Tag label"},
+    "cross.tags": {"zh_CN": "标签", "en": "Tags"},
+    "cross.value": {"zh_CN": "值", "en": "Value"},
+    "cross.viewer": {
+        "zh_CN": "外部图像查看器",
+        "en": "External image viewer",
+    },
+    "cross.viewer_control": {
+        "zh_CN": "重新启动前关闭由 EasyQC 管理的查看器",
+        "en": "Close EasyQC-managed viewers before restarting",
+    },
+    "cross.viewer_placeholder": {
+        "zh_CN": "查看器命令模板，例如：freeview {{image}} --title {{ezqcid}}",
+        "en": (
+            "Viewer command template, for example: "
+            "freeview {{image}} --title {{ezqcid}}"
+        ),
+    },
     "nav.constants": {"zh_CN": "常量设置", "en": "Constants"},
     "nav.import": {"zh_CN": "质控名单导入", "en": "QC list import"},
     "nav.modules": {"zh_CN": "质控模块", "en": "QC modules"},
