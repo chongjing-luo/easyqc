@@ -4,13 +4,21 @@ from __future__ import annotations
 
 import re
 
-from PySide6.QtWidgets import QAbstractButton, QApplication
+from PySide6.QtCore import QEvent, QObject
+from PySide6.QtWidgets import (
+    QAbstractButton,
+    QApplication,
+    QComboBox,
+    QStyle,
+)
 
 CONTENT_MARGIN = 20
 SECTION_SPACING = 16
 CONTROL_SPACING = 8
 CONTROL_HEIGHT = 34
 NAVIGATION_ROW_HEIGHT = 44
+COMBO_POPUP_MIN_VISIBLE_ITEMS = 5
+COMBO_POPUP_MAX_VISIBLE_ITEMS = 8
 _THEME_BLOCK_START = "/* EasyQC managed theme: start */"
 _THEME_BLOCK_END = "/* EasyQC managed theme: end */"
 _THEME_BLOCK_PATTERN = re.compile(
@@ -287,9 +295,119 @@ def configure_application_identity(app: QApplication) -> None:
     app.setOrganizationName("EasyQC")
 
 
+def configure_combo_box_presentation(combo: QComboBox) -> None:
+    """Give one combo a readable, platform-derived popup viewport."""
+
+    if not isinstance(combo, QComboBox):
+        raise TypeError("configure_combo_box_presentation requires QComboBox")
+    count = combo.count()
+    if count <= 0:
+        return
+
+    visible_items = (
+        count
+        if count < COMBO_POPUP_MIN_VISIBLE_ITEMS
+        else min(count, COMBO_POPUP_MAX_VISIBLE_ITEMS)
+    )
+    combo.setMaxVisibleItems(visible_items)
+    view = combo.view()
+    row_height = max(
+        (
+            view.sizeHintForRow(index)
+            for index in range(min(count, visible_items))
+        ),
+        default=-1,
+    )
+    row_height = max(
+        row_height,
+        view.fontMetrics().lineSpacing() + CONTROL_SPACING,
+    )
+    frame_width = view.style().pixelMetric(
+        QStyle.PixelMetric.PM_DefaultFrameWidth,
+        None,
+        view,
+    )
+    view.setMinimumHeight(
+        visible_items * row_height + 2 * max(0, frame_width)
+    )
+
+    text_width = max(
+        view.fontMetrics().horizontalAdvance(combo.itemText(index))
+        for index in range(count)
+    )
+    icon_width = max(
+        (
+            combo.iconSize().width()
+            for index in range(count)
+            if not combo.itemIcon(index).isNull()
+        ),
+        default=0,
+    )
+    scrollbar_width = (
+        view.style().pixelMetric(
+            QStyle.PixelMetric.PM_ScrollBarExtent,
+            None,
+            view,
+        )
+        if count > visible_items
+        else 0
+    )
+    desired_width = (
+        text_width
+        + icon_width
+        + scrollbar_width
+        + 2 * CONTROL_SPACING
+        + 2 * max(0, frame_width)
+    )
+    screen = combo.screen()
+    if screen is not None:
+        desired_width = min(
+            desired_width,
+            max(
+                combo.width(),
+                screen.availableGeometry().width() - 2 * CONTENT_MARGIN,
+            ),
+        )
+    view.setMinimumWidth(max(combo.width(), desired_width))
+
+
+class _ComboBoxPresentationFilter(QObject):
+    """Apply the shared popup policy to existing and future combo boxes."""
+
+    _CONFIGURE_EVENTS = frozenset(
+        {
+            QEvent.Type.Polish,
+            QEvent.Type.Show,
+            QEvent.Type.FocusIn,
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.KeyPress,
+        }
+    )
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            isinstance(watched, QComboBox)
+            and event.type() in self._CONFIGURE_EVENTS
+        ):
+            configure_combo_box_presentation(watched)
+        return False
+
+
+def _install_combo_box_presentation(app: QApplication) -> None:
+    existing = getattr(app, "_easyqc_combo_box_presentation_filter", None)
+    if not isinstance(existing, _ComboBoxPresentationFilter):
+        existing = _ComboBoxPresentationFilter(app)
+        app.installEventFilter(existing)
+        setattr(app, "_easyqc_combo_box_presentation_filter", existing)
+    for widget in app.allWidgets():
+        if isinstance(widget, QComboBox):
+            configure_combo_box_presentation(widget)
+
+
 def apply_easyqc_theme(app: QApplication) -> None:
     """Apply the focused EasyQC widget theme once per application."""
 
+    _install_combo_box_presentation(app)
     theme = THEME_STYLESHEET.strip()
     managed_theme = (
         f"{_THEME_BLOCK_START}\n{theme}\n{_THEME_BLOCK_END}"
@@ -319,6 +437,8 @@ def set_button_role(button: QAbstractButton, role: str = "secondary") -> None:
 
 
 __all__ = [
+    "COMBO_POPUP_MAX_VISIBLE_ITEMS",
+    "COMBO_POPUP_MIN_VISIBLE_ITEMS",
     "CONTROL_HEIGHT",
     "CONTROL_SPACING",
     "CONTENT_MARGIN",
@@ -326,6 +446,7 @@ __all__ = [
     "SECTION_SPACING",
     "THEME_STYLESHEET",
     "apply_easyqc_theme",
+    "configure_combo_box_presentation",
     "configure_application_identity",
     "set_button_role",
 ]

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent
-from PySide6.QtWidgets import QPushButton, QWidget
+from PySide6.QtWidgets import QComboBox, QPushButton, QWidget
 
 from gui_qt.theme import (
+    COMBO_POPUP_MAX_VISIBLE_ITEMS,
+    COMBO_POPUP_MIN_VISIBLE_ITEMS,
     CONTROL_HEIGHT,
     CONTENT_MARGIN,
     NAVIGATION_ROW_HEIGHT,
@@ -16,6 +18,52 @@ def test_theme_uses_stable_logical_metrics():
     assert CONTENT_MARGIN == 20
     assert CONTROL_HEIGHT >= 32
     assert NAVIGATION_ROW_HEIGHT >= 42
+
+
+def test_theme_combo_popups_show_all_short_lists_and_a_useful_long_window(qapp):
+    apply_easyqc_theme(qapp)
+    short_combo = QComboBox()
+    short_combo.addItems(
+        (
+            "按 ezqcid 合并列",
+            "追加行",
+            "替换现有名单",
+        )
+    )
+    long_combo = QComboBox()
+    long_combo.addItems(tuple(f"Option {index}" for index in range(12)))
+
+    try:
+        short_combo.show()
+        long_combo.show()
+        qapp.processEvents()
+
+        short_row_height = max(
+            short_combo.view().sizeHintForRow(0),
+            short_combo.fontMetrics().lineSpacing(),
+        )
+        long_row_height = max(
+            long_combo.view().sizeHintForRow(0),
+            long_combo.fontMetrics().lineSpacing(),
+        )
+        longest_short_text = max(
+            short_combo.fontMetrics().horizontalAdvance(short_combo.itemText(index))
+            for index in range(short_combo.count())
+        )
+
+        assert short_combo.maxVisibleItems() == short_combo.count()
+        assert short_combo.view().minimumHeight() >= (
+            short_row_height * short_combo.count()
+        )
+        assert short_combo.view().minimumWidth() >= longest_short_text
+        assert long_combo.maxVisibleItems() == COMBO_POPUP_MAX_VISIBLE_ITEMS
+        assert long_combo.maxVisibleItems() >= COMBO_POPUP_MIN_VISIBLE_ITEMS
+        assert long_combo.view().minimumHeight() >= (
+            long_row_height * COMBO_POPUP_MIN_VISIBLE_ITEMS
+        )
+    finally:
+        short_combo.close()
+        long_combo.close()
 
 
 def test_semantic_button_roles_are_properties_not_absolute_geometry(qapp):
