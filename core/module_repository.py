@@ -225,68 +225,110 @@ class ModuleRepository:
         """Publish one complete module directory from a legacy qcmodule mapping."""
 
         if self.root.exists():
-            snapshot = self.snapshot()
-            if snapshot.errors:
-                raise ModuleRepositoryError(
-                    "existing module catalog contains errors: "
-                    + "; ".join(error.message for error in snapshot.errors)
-                )
-            return snapshot.records
-        if not isinstance(modules, Mapping):
-            raise ModuleRepositoryError("legacy qcmodule must be an object")
+            return self._strict_records()
+        return self.replace_legacy(modules)
 
-        try:
-            ordered = sorted(modules.items(), key=lambda item: int(item[0]))
-        except (TypeError, ValueError) as exc:
-            raise ModuleRepositoryError("legacy module keys must be integers") from exc
-        if not ordered:
+    def replace_legacy(
+        self,
+        modules: Mapping[str, Mapping[str, Any]],
+    ) -> tuple[ModuleRecord, ...]:
+        """Atomically replace this catalog from one complete legacy mapping."""
+
+        records = self._records_from_legacy(modules)
+        self.replace_records(records)
+        return self._strict_records()
+
+    def replace_records(
+        self,
+        records: tuple[ModuleRecord, ...] | list[ModuleRecord],
+    ) -> tuple[ModuleRecord, ...]:
+        """Atomically replace the complete directory with validated records."""
+
+        normalized = tuple(self._validated_record(record) for record in records)
+        if not normalized:
             raise ModuleRepositoryError(
-                "legacy qcmodule must contain at least one module"
+                "module catalog must contain at least one module"
             )
-
         self.root.parent.mkdir(parents=True, exist_ok=True)
-        staging = self.root.parent / f".{self.root.name}.migration.{uuid4()}"
+        transaction_id = str(uuid4())
+        staging = self.root.parent / f".{self.root.name}.stage.{transaction_id}"
+        backup = self.root.parent / f".{self.root.name}.backup.{transaction_id}"
         staging_repository = ModuleRepository(staging, scope=self.scope)
+        moved_original = False
         try:
-            for index, (key, payload) in enumerate(ordered, start=1):
-                if str(int(key)) != str(key):
-                    raise ModuleRepositoryError(
-                        f"legacy module key is not canonical: {key}"
-                    )
-                if not isinstance(payload, Mapping):
-                    raise ModuleRepositoryError(
-                        f"legacy module {key} must be an object"
-                    )
-                try:
-                    module = QCModule.from_legacy_dict(deepcopy(dict(payload)))
-                except (KeyError, TypeError, ValueError) as exc:
-                    raise ModuleRepositoryError(
-                        f"invalid legacy module {key}: {exc}"
-                    ) from exc
-                staging_repository.save(
-                    ModuleRecord.create(
-                        module,
-                        scope=self.scope,
-                        display_order=index * 10,
-                    )
-                )
+            for record in normalized:
+                staging_repository.save(record)
             staged = staging_repository.snapshot()
-            if staged.errors or len(staged.records) != len(ordered):
+            if staged.errors or len(staged.records) != len(normalized):
                 raise ModuleRepositoryError(
-                    "staged module migration did not validate completely"
+                    "staged module replacement did not validate completely"
                 )
-            os.replace(staging, self.root)
+            if self.root.exists():
+                if not self.root.is_dir() or self.root.is_symlink():
+                    raise ModuleRepositoryError(
+                        f"module repository is not a regular directory: {self.root}"
+                    )
+                os.replace(self.root, backup)
+                moved_original = True
+            try:
+                os.replace(staging, self.root)
+            except Exception:
+                if moved_original and backup.exists() and not self.root.exists():
+                    os.replace(backup, self.root)
+                    moved_original = False
+                raise
+            published = self.snapshot()
+            if published.errors or len(published.records) != len(normalized):
+                raise ModuleRepositoryError(
+                    "published module replacement did not validate completely"
+                )
+            if backup.exists():
+                shutil.rmtree(backup)
+                moved_original = False
+            return published.records
+        except Exception:
+            if moved_original and backup.exists():
+                if self.root.exists():
+                    shutil.rmtree(self.root)
+                os.replace(backup, self.root)
+                moved_original = False
+            raise
         finally:
             if staging.exists():
                 shutil.rmtree(staging)
+            if backup.exists() and not moved_original:
+                shutil.rmtree(backup)
 
-        migrated = self.snapshot()
-        if migrated.errors:
+    def remove_catalog(self) -> bool:
+        """Remove this exact owned module directory for transaction rollback."""
+
+        if not self.root.exists():
+            return False
+        if not self.root.is_dir() or self.root.is_symlink():
             raise ModuleRepositoryError(
-                "published module migration failed validation: "
-                + "; ".join(error.message for error in migrated.errors)
+                f"module repository is not a regular directory: {self.root}"
             )
-        return migrated.records
+        shutil.rmtree(self.root)
+        return True
+
+    @staticmethod
+    def legacy_mapping(
+        records: tuple[ModuleRecord, ...] | list[ModuleRecord],
+    ) -> dict[str, dict[str, Any]]:
+        """Return one ordered compatibility qcmodule mapping."""
+
+        ordered = sorted(
+            records,
+            key=lambda record: (
+                record.display_order,
+                record.module.name.casefold(),
+                record.module_id,
+            ),
+        )
+        return {
+            str(index): deepcopy(record.module).to_legacy_dict()
+            for index, record in enumerate(ordered, start=1)
+        }
 
     def _read_path(self, path: Path) -> ModuleRecord:
         payload = FileUtils.safe_json_load(path)
@@ -314,6 +356,77 @@ class ModuleRepository:
             display_order=record.display_order,
             module_id=record.module_id,
         )
+
+    def _strict_records(self) -> tuple[ModuleRecord, ...]:
+        snapshot = self.snapshot()
+        if snapshot.errors:
+            raise ModuleRepositoryError(
+                "module catalog contains errors: "
+                + "; ".join(error.message for error in snapshot.errors)
+            )
+        if not snapshot.records:
+            raise ModuleRepositoryError(
+                "module catalog must contain at least one module"
+            )
+        return snapshot.records
+
+    def _records_from_legacy(
+        self,
+        modules: Mapping[str, Mapping[str, Any]],
+    ) -> tuple[ModuleRecord, ...]:
+        if not isinstance(modules, Mapping):
+            raise ModuleRepositoryError("legacy qcmodule must be an object")
+        try:
+            ordered = sorted(modules.items(), key=lambda item: int(item[0]))
+        except (TypeError, ValueError) as exc:
+            raise ModuleRepositoryError("legacy module keys must be integers") from exc
+        if not ordered:
+            raise ModuleRepositoryError(
+                "legacy qcmodule must contain at least one module"
+            )
+        for key, _ in ordered:
+            if str(int(key)) != str(key):
+                raise ModuleRepositoryError(
+                    f"legacy module key is not canonical: {key}"
+                )
+
+        existing = self._strict_records() if self.root.exists() else ()
+        existing_by_name = {
+            record.module.name: record
+            for record in existing
+        }
+        used_ids: set[str] = set()
+        records: list[ModuleRecord] = []
+        for index, (_, payload) in enumerate(ordered, start=1):
+            if not isinstance(payload, Mapping):
+                raise ModuleRepositoryError(
+                    f"legacy module {index} must be an object"
+                )
+            try:
+                module = QCModule.from_legacy_dict(deepcopy(dict(payload)))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ModuleRepositoryError(
+                    f"invalid legacy module {index}: {exc}"
+                ) from exc
+            matched = existing_by_name.get(module.name)
+            if matched is None and len(existing) == len(ordered):
+                positional = existing[index - 1]
+                if positional.module_id not in used_ids:
+                    matched = positional
+            module_id = (
+                matched.module_id
+                if matched is not None and matched.module_id not in used_ids
+                else None
+            )
+            record = ModuleRecord.create(
+                module,
+                scope=self.scope,
+                display_order=index * 10,
+                module_id=module_id,
+            )
+            used_ids.add(record.module_id)
+            records.append(record)
+        return tuple(records)
 
 
 def _canonical_module_id(value: Any) -> str:

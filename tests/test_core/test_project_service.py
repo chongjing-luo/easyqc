@@ -1,9 +1,13 @@
+from copy import deepcopy
 import json
+import shutil
 
 import pytest
 
+from core.module_repository import ModuleRepository
 from core.project_service import ProjectService
 from models.project import Project
+from utils.file_utils import FileUtils
 
 
 def test_project_service_creates_project_registry_and_default_settings(tmp_path) -> None:
@@ -31,6 +35,98 @@ def test_project_service_loads_existing_project_without_recursion(tmp_path) -> N
     assert project.name == "SAMPLE"
     assert loaded_service.current_project == project
     assert loaded_service.settings["qcmodule"]["1"]["name"] == "example"
+
+
+def test_project_create_publishes_one_file_per_module(tmp_path) -> None:
+    service = ProjectService(tmp_path / "projects.json")
+
+    project = service.create("SAMPLE", tmp_path)
+
+    repository = ModuleRepository(project.path / "modules", scope="project")
+    snapshot = repository.snapshot()
+    assert snapshot.errors == ()
+    assert [record.module.name for record in snapshot.records] == ["example"]
+    assert len(list(repository.root.glob("*.json"))) == 1
+
+
+def test_project_load_migrates_legacy_modules_then_uses_files_as_authority(
+    tmp_path,
+) -> None:
+    registry = tmp_path / "projects.json"
+    creator = ProjectService(registry)
+    project = creator.create("SAMPLE", tmp_path)
+    shutil.rmtree(project.path / "modules")
+    settings = json.loads(project.settings_path.read_text(encoding="utf-8"))
+    settings["qcmodule"]["1"]["label"] = "Legacy label"
+    FileUtils.safe_json_save(project.settings_path, settings)
+
+    migrated_service = ProjectService(registry)
+    migrated_service.load("SAMPLE")
+
+    repository = ModuleRepository(project.path / "modules", scope="project")
+    migrated = repository.snapshot()
+    assert migrated.errors == ()
+    assert [record.module.label for record in migrated.records] == ["Legacy label"]
+
+    record = migrated.records[0]
+    record.module.label = "File authority"
+    repository.save(record)
+    stale_settings = json.loads(project.settings_path.read_text(encoding="utf-8"))
+    stale_settings["qcmodule"]["1"]["label"] = "Stale settings snapshot"
+    FileUtils.safe_json_save(project.settings_path, stale_settings)
+
+    reloaded = ProjectService(registry)
+    reloaded.load("SAMPLE")
+
+    assert reloaded.settings["qcmodule"]["1"]["label"] == "File authority"
+
+
+def test_project_settings_commit_updates_module_files_and_legacy_snapshot(
+    tmp_path,
+) -> None:
+    service = ProjectService(tmp_path / "projects.json")
+    project = service.create("SAMPLE", tmp_path)
+    candidate = deepcopy(dict(service.settings))
+    candidate["qcmodule"]["1"]["label"] = "Updated label"
+
+    service.commit_settings(candidate, notify=False)
+
+    repository = ModuleRepository(project.path / "modules", scope="project")
+    assert repository.snapshot().records[0].module.label == "Updated label"
+    stored = json.loads(project.settings_path.read_text(encoding="utf-8"))
+    assert stored["qcmodule"]["1"]["label"] == "Updated label"
+
+
+def test_project_settings_failure_restores_module_files_and_memory(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    service = ProjectService(tmp_path / "projects.json")
+    project = service.create("SAMPLE", tmp_path)
+    repository = ModuleRepository(project.path / "modules", scope="project")
+    before_record = repository.snapshot().records[0]
+    before_settings = deepcopy(dict(service.settings))
+    before_bytes = project.settings_path.read_bytes()
+    candidate = deepcopy(before_settings)
+    candidate["qcmodule"]["1"]["label"] = "Must roll back"
+    real_save = FileUtils.safe_json_save
+
+    def fail_settings(path, payload, *args, **kwargs):
+        if path == project.settings_path:
+            raise OSError("settings publication failed")
+        return real_save(path, payload, *args, **kwargs)
+
+    monkeypatch.setattr(FileUtils, "safe_json_save", fail_settings)
+
+    with pytest.raises(OSError, match="settings publication failed"):
+        service.commit_settings(candidate, notify=False)
+
+    restored = repository.snapshot()
+    assert restored.errors == ()
+    assert restored.records[0].module_id == before_record.module_id
+    assert restored.records[0].module.label == before_record.module.label
+    assert dict(service.settings) == before_settings
+    assert project.settings_path.read_bytes() == before_bytes
 
 
 def test_loading_durable_last_project_does_not_rewrite_registry(

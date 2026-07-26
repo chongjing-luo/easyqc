@@ -10,6 +10,11 @@ from types import MappingProxyType
 from typing import Any, Callable
 
 from core.event_bus import EventBus, Event, EventType
+from core.module_repository import (
+    ModuleRecord,
+    ModuleRepository,
+    ModuleRepositoryError,
+)
 from models.project import Project, ProjectRegistry
 from models.qcmodule import QCModule, Score, Tag
 from utils.file_utils import FileUtils
@@ -102,6 +107,10 @@ class ProjectService:
         candidate_settings = FileUtils.safe_json_load(project.settings_path)
         if not isinstance(candidate_settings, dict):
             raise ValueError(f"项目设置必须是对象: {project.settings_path}")
+        repository = self._module_repository(project)
+        if repository.root.exists():
+            records = self._strict_project_module_records(repository)
+            candidate_settings["qcmodule"] = repository.legacy_mapping(records)
         return PreparedProjectLoad(project=project, settings=deepcopy(candidate_settings))
 
     def commit_load(
@@ -114,6 +123,24 @@ class ProjectService:
 
         if not isinstance(prepared, PreparedProjectLoad):
             raise TypeError("commit_load requires PreparedProjectLoad")
+        registered = self.registry.projects.get(prepared.project.name)
+        if registered is None or registered.path != prepared.project.path:
+            raise ValueError("Prepared project is no longer registered")
+        repository = self._module_repository(prepared.project)
+        accepted_settings = deepcopy(prepared.settings)
+        if repository.root.exists():
+            module_records = self._strict_project_module_records(repository)
+        else:
+            modules = accepted_settings.get("qcmodule")
+            if not isinstance(modules, dict):
+                raise ValueError("qcmodule must be an object")
+            try:
+                module_records = repository.migrate_legacy(modules)
+            except ModuleRepositoryError as exc:
+                raise ValueError(
+                    f"项目模块迁移失败 {repository.root}: {exc}"
+                ) from exc
+        accepted_settings["qcmodule"] = repository.legacy_mapping(module_records)
         with self._state_lock:
             registered = self.registry.projects.get(prepared.project.name)
             if registered is None or registered.path != prepared.project.path:
@@ -124,7 +151,7 @@ class ProjectService:
             previous_settings = self._settings
             self.current = project
             self.registry.last_project = project.name
-            self._settings = deepcopy(prepared.settings)
+            self._settings = accepted_settings
             try:
                 if previous_last_project != project.name:
                     self._save_registry()
@@ -473,7 +500,40 @@ class ProjectService:
         self._save_registry()
         if self.current is not None:
             self._ensure_schema_version(self._settings)
-            FileUtils.safe_json_save(self.current.settings_path, self._settings)
+            repository = self._module_repository(self.current)
+            repository_existed = repository.root.exists()
+            prior_records = (
+                self._strict_project_module_records(repository)
+                if repository_existed
+                else ()
+            )
+            modules = self._settings.get("qcmodule")
+            if not isinstance(modules, dict):
+                raise ValueError("qcmodule must be an object")
+            try:
+                published = repository.replace_legacy(modules)
+            except ModuleRepositoryError as exc:
+                raise ValueError(
+                    f"项目模块写入失败 {repository.root}: {exc}"
+                ) from exc
+            self._settings["qcmodule"] = repository.legacy_mapping(published)
+            try:
+                FileUtils.safe_json_save(
+                    self.current.settings_path,
+                    self._settings,
+                )
+            except Exception:
+                try:
+                    if repository_existed:
+                        repository.replace_records(prior_records)
+                    else:
+                        repository.remove_catalog()
+                except Exception as rollback_exc:
+                    raise RuntimeError(
+                        "项目设置写入失败，且模块目录回滚失败: "
+                        f"{rollback_exc}"
+                    ) from rollback_exc
+                raise
             # SETTINGS_SAVED is a typed-only event (new in P1-C). It is emitted
             # directly rather than via _notify so it does not fire the legacy
             # string observers, which only expect project/modules events.
@@ -568,6 +628,24 @@ class ProjectService:
         if not self.registry_path.exists():
             return ProjectRegistry()
         return ProjectRegistry.from_legacy_dict(FileUtils.safe_json_load(self.registry_path))
+
+    @staticmethod
+    def _module_repository(project: Project) -> ModuleRepository:
+        return ModuleRepository(Path(project.path) / "modules", scope="project")
+
+    @staticmethod
+    def _strict_project_module_records(
+        repository: ModuleRepository,
+    ) -> tuple[ModuleRecord, ...]:
+        snapshot = repository.snapshot()
+        if snapshot.errors:
+            raise ValueError(
+                "项目模块目录包含错误: "
+                + "; ".join(error.message for error in snapshot.errors)
+            )
+        if not snapshot.records:
+            raise ValueError("项目至少需要一个 QC 模块")
+        return snapshot.records
 
     def _save_registry(self) -> None:
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
