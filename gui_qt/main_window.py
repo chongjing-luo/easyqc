@@ -92,22 +92,22 @@ class QtMainWindow(QMainWindow):
 
     initializationFinished = Signal(bool)
     NAVIGATION_KEYS = (
+        "nav.cross_project",
         "nav.projects",
         "nav.import",
         "nav.pre_qc",
         "nav.constants",
         "nav.modules",
         "nav.results",
-        "nav.cross_project",
     )
     NAVIGATION_LABELS = (
+        "跨项目设置",
         "项目选择",
         "质控名单导入",
         "质控前名单",
         "常量设置",
         "质控模块",
         "质控结果",
-        "跨项目设置",
     )
     EXPANDED_NAVIGATION_MIN_WIDTH = 202
     EXPANDED_NAVIGATION_MAX_WIDTH = 248
@@ -510,24 +510,24 @@ class QtMainWindow(QMainWindow):
         )
 
         self.direct_pages = (
+            self.cross_project_settings_page,
             self.project_page,
             self.qc_list_import_page,
             self.pre_qc_list_page,
             self.constants_page,
             self.modules_page,
             self.results_page,
-            self.cross_project_settings_page,
         )
         for page in self.direct_pages:
             self.workspace_stack.addWidget(page)
         (
+            self.cross_project_settings_page_index,
             self.project_page_index,
             self.qc_list_import_page_index,
             self.pre_qc_list_page_index,
             self.constants_page_index,
             self.modules_page_index,
             self.results_page_index,
-            self.cross_project_settings_page_index,
         ) = range(len(self.direct_pages))
         self.variables_page_index = self.qc_list_import_page_index
         self.subjects_page_index = self.pre_qc_list_page_index

@@ -270,17 +270,21 @@ def test_qt_main_window_uses_seven_direct_navigation_pages(qtbot, tmp_path) -> N
     assert getattr(window, "qc_controller", None) is None
     assert window.config_workspace.configuration is services.configuration_service
     assert _primary_navigation_labels(window) == [
+        "跨项目设置",
         "项目选择",
         "质控名单导入",
         "质控前名单",
         "常量设置",
         "质控模块",
         "质控结果",
-        "跨项目设置",
     ]
-    assert window.navigation.item(0).text() == ""
+    assert window.cross_project_settings_page_index == 0
+    assert window.project_page_index == 1
+    assert window.navigation.item(window.project_page_index).text() == ""
     assert (
-        window.navigation.itemWidget(window.navigation.item(0))
+        window.navigation.itemWidget(
+            window.navigation.item(window.project_page_index)
+        )
         is window.project_navigation_content
     )
     assert window.project_navigation_label.text() == "项目选择"
@@ -300,21 +304,29 @@ def test_qt_main_window_uses_seven_direct_navigation_pages(qtbot, tmp_path) -> N
     if host_font.pointSizeF() > 0:
         assert window.navigation.font().pointSizeF() == host_font.pointSizeF() + 1
     line_height = window.navigation.fontMetrics().lineSpacing()
-    assert window.navigation.item(1).sizeHint().height() >= line_height + 16
-    assert window.navigation.item(0).sizeHint().height() >= 2 * line_height + 16
+    assert (
+        window.navigation.item(
+            window.cross_project_settings_page_index
+        ).sizeHint().height()
+        >= line_height + 16
+    )
+    assert (
+        window.navigation.item(window.project_page_index).sizeHint().height()
+        >= 2 * line_height + 16
+    )
 
 
 def test_qt_main_window_navigation_switches_exact_page(qtbot, tmp_path) -> None:
     window, _services = _window(qtbot, tmp_path)
 
     assert window.direct_pages == (
+        window.cross_project_settings_page,
         window.project_page,
         window.qc_list_import_page,
         window.pre_qc_list_page,
         window.constants_page,
         window.modules_page,
         window.results_page,
-        window.cross_project_settings_page,
     )
     for row, page in enumerate(window.direct_pages):
         window.navigation.setCurrentRow(row)
@@ -366,15 +378,15 @@ def test_runtime_language_switch_updates_seven_pages_and_preserves_context(
     assert isinstance(window.language, LanguageController)
     assert window.language.language == "en"
     assert _primary_navigation_labels(window) == [
+        "Cross-project settings",
         "Project selection",
         "QC list import",
         "Pre-QC list",
-            "Constants",
-            "QC modules",
-            "QC results",
-            "Cross-project settings",
-        ]
-    assert window.navigation.item(0).text() == ""
+        "Constants",
+        "QC modules",
+        "QC results",
+    ]
+    assert window.navigation.item(window.project_page_index).text() == ""
     assert window.project_navigation_label.text() == "Project selection"
     assert window.project_navigation_context.text() == "SAMPLE"
     assert window.navigation.accessibleName() == "EasyQC feature navigation"
@@ -421,7 +433,7 @@ def test_runtime_language_switch_updates_seven_pages_and_preserves_context(
     )
 
     qtbot.mouseClick(window.language_button, Qt.LeftButton)
-    assert _primary_navigation_labels(window)[0] == "项目选择"
+    assert _primary_navigation_labels(window)[0] == "跨项目设置"
     assert table.applied_state is applied_state
     assert table.result is table_result
     assert table.row_window is table_window
