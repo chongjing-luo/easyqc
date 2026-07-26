@@ -105,6 +105,8 @@ class DeleteRowsDialog(QDialog):
             self.accept()
 
     def reject(self) -> None:
+        if self._delete_pending:
+            return
         self._delete_pending = False
         super().reject()
 

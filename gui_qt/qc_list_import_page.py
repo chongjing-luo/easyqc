@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -304,9 +305,9 @@ class QtQcListImportPage(QWidget):
         separator.setFrameShape(QFrame.HLine)
         layout.addWidget(separator)
 
-        preview_toolbar = QHBoxLayout()
-        preview_toolbar.addWidget(QLabel("导入预览", self))
-        preview_toolbar.addStretch(1)
+        preview_header = QHBoxLayout()
+        preview_header.addWidget(QLabel("导入预览", self))
+        preview_header.addStretch(1)
         self.preview_search = QLineEdit(self)
         self.preview_search.setObjectName("qcListPreviewSearch")
         self.preview_search.setAccessibleName("搜索导入预览")
@@ -315,7 +316,12 @@ class QtQcListImportPage(QWidget):
         self.preview_search.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self.preview_search.setMinimumWidth(0)
         self.preview_search.returnPressed.connect(self.run_preview_search)
-        preview_toolbar.addWidget(self.preview_search)
+        preview_header.addWidget(self.preview_search)
+        layout.addLayout(preview_header)
+
+        preview_actions = QGridLayout()
+        preview_actions.setContentsMargins(0, 0, 0, 0)
+        preview_actions.setColumnStretch(0, 1)
         self.filter_button = QPushButton("筛选", self)
         self.sort_button = QPushButton("排序", self)
         self.columns_button = QPushButton("列显示", self)
@@ -340,13 +346,13 @@ class QtQcListImportPage(QWidget):
         self.derive_button.clicked.connect(self.open_derived_column_dialog)
         self.delete_rows_button.clicked.connect(self.open_delete_rows_dialog)
         self.delete_column_button.clicked.connect(self.open_delete_columns_dialog)
-        preview_toolbar.addWidget(self.filter_button)
-        preview_toolbar.addWidget(self.sort_button)
-        preview_toolbar.addWidget(self.columns_button)
-        preview_toolbar.addWidget(self.derive_button)
-        preview_toolbar.addWidget(self.delete_rows_button)
-        preview_toolbar.addWidget(self.delete_column_button)
-        layout.addLayout(preview_toolbar)
+        preview_actions.addWidget(self.filter_button, 0, 1)
+        preview_actions.addWidget(self.sort_button, 0, 2)
+        preview_actions.addWidget(self.columns_button, 0, 3)
+        preview_actions.addWidget(self.derive_button, 1, 1)
+        preview_actions.addWidget(self.delete_rows_button, 1, 2)
+        preview_actions.addWidget(self.delete_column_button, 1, 3)
+        layout.addLayout(preview_actions)
 
         self.preview_table = QTableView(self)
         self.preview_table.setObjectName("qcListImportPreview")
@@ -381,8 +387,16 @@ class QtQcListImportPage(QWidget):
         apply_panel.setProperty("surface", "subtle")
         apply_layout = QVBoxLayout(apply_panel)
         apply_layout.setContentsMargins(8, 8, 8, 8)
+        apply_header_row = QHBoxLayout()
+        apply_header_row.addWidget(QLabel("写入：质控前名单", apply_panel))
+        apply_header_row.addStretch(1)
+        self.stats_label = QLabel("尚未读取导入数据", apply_panel)
+        self.stats_label.setObjectName("qcListImportStats")
+        self.stats_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        apply_header_row.addWidget(self.stats_label)
+        apply_layout.addLayout(apply_header_row)
+
         apply_mode_row = QHBoxLayout()
-        apply_mode_row.addWidget(QLabel("写入：质控前名单", apply_panel))
         self.write_mode_label = QLabel("写入方式", apply_panel)
         self.write_mode_combo = QComboBox(apply_panel)
         self.write_mode_label.setBuddy(self.write_mode_combo)
@@ -398,10 +412,7 @@ class QtQcListImportPage(QWidget):
         self.conflict_policy_combo.setAccessibleName("质控名单冲突处理")
         apply_mode_row.addWidget(self.conflict_policy_label)
         apply_mode_row.addWidget(self.conflict_policy_combo)
-        self.stats_label = QLabel("尚未读取导入数据", apply_panel)
-        self.stats_label.setObjectName("qcListImportStats")
-        self.stats_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        apply_mode_row.addWidget(self.stats_label, 1)
+        apply_mode_row.addStretch(1)
         apply_layout.addLayout(apply_mode_row)
         self.write_mode_combo.currentIndexChanged.connect(
             self._sync_import_policy_controls

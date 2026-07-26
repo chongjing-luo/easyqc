@@ -416,10 +416,29 @@ class QtMainWindow(QMainWindow):
                 if self._injected_preview
                 else self._derived_subject_column_committed
             ),
+            delete_rows_callback=(
+                None
+                if self._injected_preview
+                else self._delete_pre_qc_rows
+            ),
+            delete_columns_callback=(
+                None
+                if self._injected_preview
+                else self._delete_pre_qc_columns
+            ),
+            on_data_mutation_committed=(
+                None
+                if self._injected_preview
+                else self._subject_data_mutation_committed
+            ),
+            protected_delete_columns=("ezqcid",),
             language=self.language,
             parent=self.pre_qc_list_page,
         )
         self.table_workspace.deriveBusyChanged.connect(
+            lambda _busy: self._update_context_controls()
+        )
+        self.table_workspace.mutationBusyChanged.connect(
             lambda _busy: self._update_context_controls()
         )
         self.config_workspace.subjects_tab.deriveBusyChanged.connect(
@@ -939,6 +958,27 @@ class QtMainWindow(QMainWindow):
         """Return ordinary subject columns, excluding rebuildable result fields."""
 
         return self.current_context.subjects.head(10).copy(deep=True)
+
+    def _delete_pre_qc_rows(self, identities: tuple[str, ...]) -> int:
+        """Worker-side list-only deletion; UI publication follows on success."""
+
+        return self.services.configuration_service.delete_subject_rows(
+            identities,
+            notify=False,
+        )
+
+    def _delete_pre_qc_columns(self, columns: tuple[str, ...]) -> int:
+        """Worker-side column deletion without rating cleanup or Qt access."""
+
+        return self.services.configuration_service.delete_subject_columns(
+            columns,
+            notify=False,
+        )
+
+    def _subject_data_mutation_committed(self) -> None:
+        """Publish the existing subject event from the Qt thread."""
+
+        self.services.configuration_service.publish_subjects_changed()
 
     @Slot(str)
     def _derived_subject_column_committed(self, _name: str) -> None:
@@ -1603,12 +1643,14 @@ class QtMainWindow(QMainWindow):
             or self.results_workspace.derive_busy
             or self.config_workspace.subjects_tab.derive_busy
         )
+        mutation_busy = self.table_workspace.mutation_busy
         dirty = bool(self.active_workflow is not None and self.active_workflow.dirty)
         enabled = (
             not busy
             and not self.qc_filter_task_controller.busy
             and not self.config_workspace.module_filter_write_busy
             and not derive_busy
+            and not mutation_busy
             and not dirty
             and not self._injected_preview
         )
@@ -1616,6 +1658,9 @@ class QtMainWindow(QMainWindow):
         self.reload_action.setEnabled(enabled and self.current_context.has_project)
         self.module_combo.setEnabled(enabled and bool(self.current_context.modules))
         self.table_workspace.set_derive_column_enabled(
+            enabled and self.current_context.has_project
+        )
+        self.table_workspace.set_data_mutation_enabled(
             enabled and self.current_context.has_project
         )
         self.results_workspace.set_derive_column_enabled(
@@ -1663,6 +1708,10 @@ class QtMainWindow(QMainWindow):
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self.table_workspace.mutation_busy:
+            self._set_error("名单删除正在完成，请稍候")
+            event.ignore()
+            return
         if (
             self.qc_filter_task_controller.busy
             or self.config_workspace.module_filter_write_busy

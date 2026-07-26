@@ -8,11 +8,20 @@ import time
 
 import pandas as pd
 from pandas.testing import assert_frame_equal
-from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QSettings, QTimer, Qt
+from PySide6.QtCore import (
+    QCoreApplication,
+    QEvent,
+    QPoint,
+    QSettings,
+    QTimer,
+    Qt,
+)
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QDialogButtonBox,
     QFileDialog,
     QLabel,
+    QMessageBox,
     QScrollArea,
     QScrollBar,
     QSplitter,
@@ -42,6 +51,25 @@ def _source() -> pd.DataFrame:
             "age": [29, 31, 27, 30, 35],
             "passed": [True, False, True, False, True],
         }
+    )
+
+
+def _site_filter(value: str, *, operator: str = "==") -> FilterExpression:
+    return FilterExpression(
+        groups=(
+            FilterGroup(
+                group_id="site-filter",
+                join="all",
+                conditions=(
+                    FilterCondition(
+                        column="site",
+                        operator=operator,
+                        value=value,
+                        condition_id="site-condition",
+                    ),
+                ),
+            ),
+        ),
     )
 
 
@@ -1568,3 +1596,230 @@ def test_prepared_source_replacement_preserves_compatible_view_and_identity(qtbo
     ]
     assert "AnatQC.rater1.score1" in workspace.applied_state.columns.order
     assert workspace.table_model.row_reference(2).ezqcid == "SUB003"
+
+
+def test_optional_list_deletion_actions_use_filter_and_multi_column_dialogs(
+    qtbot,
+    monkeypatch,
+) -> None:
+    deleted_rows = []
+    deleted_columns = []
+    workspace = QtTableWorkspace(
+        _source(),
+        delete_rows_callback=lambda identities: deleted_rows.append(identities)
+        or len(identities),
+        delete_columns_callback=lambda columns: deleted_columns.append(columns)
+        or len(columns),
+        protected_delete_columns=("ezqcid",),
+    )
+    qtbot.addWidget(workspace)
+    prompts = []
+
+    def accept(_parent, title, text, _buttons, _default):
+        prompts.append((title, text))
+        return QMessageBox.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", accept)
+
+    assert workspace.table_view.selectionMode() == QAbstractItemView.SingleSelection
+    assert workspace.delete_rows_action.text() == "删除行"
+    assert workspace.delete_columns_action.text() == "删除列"
+    workspace.table_view.clearSelection()
+    workspace.table_view.setCurrentIndex(workspace.table_model.index(-1, -1))
+    assert workspace.delete_rows_action.isEnabled()
+    assert workspace.delete_columns_action.isEnabled()
+
+    rows_dialog = workspace.open_delete_rows_dialog()
+    assert rows_dialog is not None
+    rows_dialog.editor.set_expression(_site_filter("A"))
+    qtbot.mouseClick(rows_dialog.delete_button, Qt.LeftButton)
+    qtbot.waitUntil(lambda: bool(deleted_rows), timeout=2000)
+    qtbot.waitUntil(
+        lambda: not workspace.mutation_task_controller.busy,
+        timeout=2000,
+    )
+    assert deleted_rows == [("SUB001", "SUB003", "SUB005")]
+    assert "3" in workspace.mutation_status_label.text()
+    assert workspace.delete_rows_dialog is None
+
+    columns_dialog = workspace.open_delete_columns_dialog()
+    assert columns_dialog is not None
+    assert not bool(
+        columns_dialog.item_for_column("ezqcid").flags() & Qt.ItemIsEnabled
+    )
+    columns_dialog.item_for_column("site").setCheckState(Qt.Checked)
+    columns_dialog.item_for_column("age").setCheckState(Qt.Checked)
+    qtbot.mouseClick(columns_dialog.delete_button, Qt.LeftButton)
+    qtbot.waitUntil(lambda: bool(deleted_columns), timeout=2000)
+    qtbot.waitUntil(
+        lambda: not workspace.mutation_task_controller.busy,
+        timeout=2000,
+    )
+    assert deleted_columns == [("site", "age")]
+    assert workspace.delete_columns_dialog is None
+    assert len(prompts) == 2
+    assert "3" in prompts[0][1]
+    assert "2" in prompts[1][1]
+    assert "site" in prompts[1][1]
+    assert "age" in workspace.mutation_status_label.text()
+
+
+def test_list_deletion_zero_match_and_confirmation_cancel_write_nothing(
+    qtbot,
+    monkeypatch,
+) -> None:
+    deleted = []
+    workspace = QtTableWorkspace(
+        _source(),
+        delete_rows_callback=lambda identities: deleted.append(identities)
+        or len(identities),
+        delete_columns_callback=lambda columns: len(columns),
+        protected_delete_columns=("ezqcid",),
+    )
+    qtbot.addWidget(workspace)
+    prompts = []
+
+    def cancel(_parent, title, text, _buttons, _default):
+        prompts.append((title, text))
+        return QMessageBox.No
+
+    monkeypatch.setattr(QMessageBox, "question", cancel)
+
+    dialog = workspace.open_delete_rows_dialog()
+    assert dialog is not None
+    dialog.editor.set_expression(_site_filter("Z"))
+    qtbot.mouseClick(dialog.delete_button, Qt.LeftButton)
+    assert deleted == []
+    assert prompts == []
+    assert "没有匹配" in dialog.error_text
+    assert dialog.isVisible()
+
+    dialog.editor.set_expression(_site_filter("A"))
+    qtbot.mouseClick(dialog.delete_button, Qt.LeftButton)
+    assert deleted == []
+    assert prompts
+    assert "3" in prompts[0][1]
+    assert "评分记录" in prompts[0][1]
+    assert dialog.delete_button.isEnabled()
+    assert dialog.isVisible()
+
+
+def test_list_deletion_write_failure_stays_in_dialog_and_can_retry(
+    qtbot,
+    monkeypatch,
+) -> None:
+    calls = []
+
+    def fail_delete(identities):
+        calls.append(identities)
+        raise OSError("list storage unavailable")
+
+    workspace = QtTableWorkspace(
+        _source(),
+        delete_rows_callback=fail_delete,
+        delete_columns_callback=lambda columns: len(columns),
+        protected_delete_columns=("ezqcid",),
+    )
+    qtbot.addWidget(workspace)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args: QMessageBox.Yes,
+    )
+
+    dialog = workspace.open_delete_rows_dialog()
+    assert dialog is not None
+    dialog.editor.set_expression(_site_filter("A"))
+    qtbot.mouseClick(dialog.delete_button, Qt.LeftButton)
+    qtbot.waitUntil(
+        lambda: not workspace.mutation_task_controller.busy,
+        timeout=3000,
+    )
+
+    assert calls == [("SUB001", "SUB003", "SUB005")]
+    assert workspace.delete_rows_dialog is dialog
+    assert dialog.isVisible()
+    assert dialog.delete_button.isEnabled()
+    assert "list storage unavailable" in dialog.error_text
+    assert "list storage unavailable" in workspace.error_text
+
+
+def test_list_deletion_actions_disable_during_unsafe_state_and_translate(
+    qtbot,
+    tmp_path,
+) -> None:
+    controller = LanguageController(
+        settings=QSettings(str(tmp_path / "language.ini"), QSettings.IniFormat)
+    )
+    workspace = QtTableWorkspace(
+        _source(),
+        delete_rows_callback=lambda identities: len(identities),
+        delete_columns_callback=lambda columns: len(columns),
+        protected_delete_columns=("ezqcid",),
+        language=controller,
+    )
+    qtbot.addWidget(workspace)
+    controller.register_root(workspace)
+
+    workspace.set_data_mutation_enabled(False)
+    assert not workspace.delete_rows_action.isEnabled()
+    assert not workspace.delete_columns_action.isEnabled()
+    workspace.set_data_mutation_enabled(True)
+    assert workspace.delete_rows_action.isEnabled()
+    assert workspace.delete_columns_action.isEnabled()
+
+    controller.set_language("en")
+    workspace.retranslate_ui()
+    assert workspace.delete_rows_action.text() == "Delete rows"
+    assert workspace.delete_columns_action.text() == "Delete columns"
+
+
+def test_list_deletion_runs_core_write_off_the_qt_thread(
+    qtbot,
+    monkeypatch,
+) -> None:
+    started = Event()
+    release = Event()
+    ui_progress = []
+
+    def delayed_delete(identities):
+        started.set()
+        release.wait(2)
+        return len(identities)
+
+    workspace = QtTableWorkspace(
+        _source(),
+        delete_rows_callback=delayed_delete,
+        delete_columns_callback=lambda columns: len(columns),
+        protected_delete_columns=("ezqcid",),
+    )
+    qtbot.addWidget(workspace)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args: QMessageBox.Yes,
+    )
+    dialog = workspace.open_delete_rows_dialog()
+    assert dialog is not None
+    dialog.editor.set_expression(_site_filter("A"))
+    QTimer.singleShot(0, lambda: ui_progress.append(True))
+
+    started_at = time.monotonic()
+    qtbot.mouseClick(dialog.delete_button, Qt.LeftButton)
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < 0.5
+    qtbot.waitUntil(started.is_set, timeout=1000)
+    qtbot.waitUntil(lambda: bool(ui_progress), timeout=1000)
+    assert workspace.mutation_task_controller.busy
+    assert not workspace.delete_rows_action.isEnabled()
+    dialog.reject()
+    assert dialog.isVisible()
+
+    release.set()
+    qtbot.waitUntil(
+        lambda: not workspace.mutation_task_controller.busy,
+        timeout=3000,
+    )
+    assert "3" in workspace.mutation_status_label.text()
+    assert workspace.delete_rows_dialog is None

@@ -124,20 +124,39 @@ def test_translation_formatting_is_strict_and_keeps_business_identifiers(tmp_pat
             "QC module does not exist: 常量设置",
         ),
         ("删除行", "Delete rows"),
-        ("删除列", "Delete column"),
+        ("删除列", "Delete columns"),
         ("按条件删除行", "Delete rows by condition"),
         ("删除匹配行", "Delete matching rows"),
         ("至少添加一个删除条件", "Add at least one deletion condition."),
         ("site   · 受保护", "site   · protected"),
         ("删除所选列", "Delete checked columns"),
         (
+            "按条件删除质控前名单行",
+            "Delete Pre-QC list rows by condition",
+        ),
+        (
+            "选择删除质控前名单列",
+            "Select Pre-QC list columns to delete",
+        ),
+        (
             "已从质控前名单删除 2 行；评分记录已保留",
             "Deleted 2 Pre-QC list rows; rating records were retained.",
+        ),
+        (
+            "已从质控前名单删除 2 列：site、age；评分记录已保留",
+            "Deleted 2 Pre-QC list columns: site、age; "
+            "rating records were retained.",
         ),
         (
             "将从质控前名单删除列“site”。\n"
             "现有评分记录不会被删除。是否继续？",
             "Delete column “site” from the Pre-QC list.\n"
+            "Existing rating records will be retained. Continue?",
+        ),
+        (
+            "将从质控前名单删除 2 列：site、age。\n"
+            "现有评分记录不会被删除。是否继续？",
+            "Delete 2 columns from the Pre-QC list: site、age.\n"
             "Existing rating records will be retained. Continue?",
         ),
     ),

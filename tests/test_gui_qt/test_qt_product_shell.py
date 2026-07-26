@@ -2111,3 +2111,54 @@ def test_initial_project_materialization_runs_without_blocking_qt(
     release.set()
     qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
     assert window.current_context.project_name == "SAMPLE"
+
+
+def test_pre_qc_row_and_column_deletion_persists_without_touching_rating_files(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    window, services = _window(qtbot, tmp_path)
+    configuration = services.configuration_service
+    rating_path = (
+        configuration.current_project.path
+        / "RatingFiles"
+        / "AnatQC"
+        / "rater1"
+        / "retained-rating.json"
+    )
+    rating_path.parent.mkdir(parents=True, exist_ok=True)
+    rating_path.write_bytes(b'{"ezqcid":"SUB001","score":"Good","tag":true}')
+    rating_before = rating_path.read_bytes()
+    workspace = window.table_workspace
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args: QMessageBox.Yes,
+    )
+
+    rows_dialog = workspace.open_delete_rows_dialog()
+    assert rows_dialog is not None
+    rows_dialog.editor.set_expression(_site_filter("A", operator="=="))
+    qtbot.mouseClick(rows_dialog.delete_button, Qt.LeftButton)
+    qtbot.waitUntil(
+        lambda: window.current_context.subjects["ezqcid"].tolist()
+        == ["SUB002", "SUB003"],
+        timeout=5000,
+    )
+    assert configuration.subjects()["ezqcid"].tolist() == ["SUB002", "SUB003"]
+    assert rating_path.read_bytes() == rating_before
+
+    columns_dialog = workspace.open_delete_columns_dialog()
+    assert columns_dialog is not None
+    columns_dialog.item_for_column("site").setCheckState(Qt.Checked)
+    qtbot.mouseClick(columns_dialog.delete_button, Qt.LeftButton)
+    qtbot.waitUntil(
+        lambda: window.current_context.subjects.columns.tolist()
+        == ["ezqcid", "image"],
+        timeout=5000,
+    )
+    assert configuration.subjects().columns.tolist() == ["ezqcid", "image"]
+    assert rating_path.read_bytes() == rating_before
+    assert window.results_workspace.delete_rows_action is None
+    assert window.results_workspace.delete_columns_action is None

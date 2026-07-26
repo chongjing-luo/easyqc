@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLayout,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QScrollBar,
@@ -47,6 +48,8 @@ from core.table_export_service import (
 from core.table_view_service import QcIdentityError, TableViewError, TableViewService
 from gui_qt.columns_dialog import ColumnsDialog
 from gui_qt.columns_panel import ColumnsPanel
+from gui_qt.delete_columns_dialog import DeleteColumnsDialog
+from gui_qt.delete_rows_dialog import DeleteRowsDialog
 from gui_qt.derived_column_dialog import DerivedColumnDialog
 from gui_qt.filter_dialog import FilterDialog
 from gui_qt.filter_panel import FilterPanel, operator_label
@@ -75,6 +78,7 @@ class QtTableWorkspace(QWidget):
 
     exportProgress = Signal(int, int, int)
     deriveBusyChanged = Signal(bool)
+    mutationBusyChanged = Signal(bool)
     PINNED_SURFACE_FRACTION = 0.45
 
     def __init__(
@@ -87,6 +91,10 @@ class QtTableWorkspace(QWidget):
         ) = None,
         derive_preview_source: Callable[[], pd.DataFrame] | None = None,
         on_derived_column_committed: Callable[[str], None] | None = None,
+        delete_rows_callback: Callable[[tuple[str, ...]], int] | None = None,
+        delete_columns_callback: Callable[[tuple[str, ...]], int] | None = None,
+        on_data_mutation_committed: Callable[[], None] | None = None,
+        protected_delete_columns: tuple[str, ...] = (),
         row_context_provider: Callable[[str], QcRowContext] | None = None,
         on_open_qc_module: (
             Callable[[str, QcModuleMenuEntry], None] | None
@@ -102,6 +110,22 @@ class QtTableWorkspace(QWidget):
             raise TypeError("QtTableWorkspace source must be a pandas DataFrame")
         if derive_preview_source is not None and not callable(derive_preview_source):
             raise TypeError("derive_preview_source must be callable")
+        deletion_callbacks = (delete_rows_callback, delete_columns_callback)
+        if any(callback is not None for callback in deletion_callbacks) and not all(
+            callable(callback) for callback in deletion_callbacks
+        ):
+            raise TypeError("Table deletion callbacks must be both callable or both None")
+        if not isinstance(protected_delete_columns, tuple) or not all(
+            isinstance(column, str) and column
+            for column in protected_delete_columns
+        ):
+            raise TypeError("protected_delete_columns must be a tuple of column names")
+        if len(set(protected_delete_columns)) != len(protected_delete_columns):
+            raise ValueError("protected_delete_columns cannot contain duplicates")
+        if on_data_mutation_committed is not None and not callable(
+            on_data_mutation_committed
+        ):
+            raise TypeError("on_data_mutation_committed must be callable")
         self.setObjectName("qtTableWorkspace")
         self.setAccessibleName("EasyQC 表格工作区")
         self.language = language
@@ -125,6 +149,26 @@ class QtTableWorkspace(QWidget):
         self.task_controller.resultReady.connect(self._accept_background_result)
         self.task_controller.errorRaised.connect(self._handle_background_error)
         self.task_controller.busyChanged.connect(self._set_background_busy)
+        self.mutation_task_controller = RevisionedTaskController(self)
+        self.mutation_task_controller.resultReady.connect(
+            self._accept_mutation_result
+        )
+        self.mutation_task_controller.errorRaised.connect(
+            self._handle_mutation_error
+        )
+        self.mutation_task_controller.busyChanged.connect(
+            self._set_mutation_busy
+        )
+        self._mutation_revision = 0
+        self._pending_mutation: (
+            tuple[
+                int,
+                str,
+                tuple[str, ...],
+                DeleteRowsDialog | DeleteColumnsDialog,
+            ]
+            | None
+        ) = None
         self.export_task_controller = RevisionedTaskController(self)
         self.export_task_controller.resultReady.connect(self._accept_export_result)
         self.export_task_controller.errorRaised.connect(self._handle_export_error)
@@ -139,6 +183,13 @@ class QtTableWorkspace(QWidget):
         self.derive_column_callback = derive_column_callback
         self.derive_preview_source = derive_preview_source
         self.on_derived_column_committed = on_derived_column_committed
+        self.delete_rows_callback = delete_rows_callback
+        self.delete_columns_callback = delete_columns_callback
+        self.on_data_mutation_committed = on_data_mutation_committed
+        self.protected_delete_columns = frozenset(protected_delete_columns)
+        self._data_mutation_enabled = bool(
+            delete_rows_callback is not None and delete_columns_callback is not None
+        )
         self.row_context_provider = row_context_provider
         self.on_open_qc_module = on_open_qc_module
         self.on_open_qc_record = on_open_qc_record
@@ -150,6 +201,8 @@ class QtTableWorkspace(QWidget):
         self.sort_dialog: SortDialog | None = None
         self.columns_dialog: ColumnsDialog | None = None
         self.derived_column_dialog: DerivedColumnDialog | None = None
+        self.delete_rows_dialog: DeleteRowsDialog | None = None
+        self.delete_columns_dialog: DeleteColumnsDialog | None = None
         self._derive_busy = False
         self._inspector_origin_revision: int | None = None
         self.result = self.service.apply_state(self.applied_state)
@@ -163,6 +216,7 @@ class QtTableWorkspace(QWidget):
         self.selection_outside_view = False
         self._rendering = False
         self._build_ui()
+        self._update_data_mutation_actions()
         self._render_result()
 
     def _build_ui(self) -> None:
@@ -206,6 +260,26 @@ class QtTableWorkspace(QWidget):
             if self.derive_column_callback is not None
             else None
         )
+        self.delete_rows_action = (
+            self._add_toolbar_action(
+                self.action_toolbar,
+                "删除行",
+                QKeySequence("Ctrl+Shift+Backspace"),
+                self.open_delete_rows_dialog,
+            )
+            if self.delete_rows_callback is not None
+            else None
+        )
+        self.delete_columns_action = (
+            self._add_toolbar_action(
+                self.action_toolbar,
+                "删除列",
+                QKeySequence("Ctrl+Alt+Backspace"),
+                self.open_delete_columns_dialog,
+            )
+            if self.delete_columns_callback is not None
+            else None
+        )
         self.action_toolbar.addSeparator()
         self.filter_button = self.action_toolbar.widgetForAction(self.filter_action)
         self.sort_button = self.action_toolbar.widgetForAction(self.sort_action)
@@ -215,11 +289,27 @@ class QtTableWorkspace(QWidget):
             if self.derive_action is not None
             else None
         )
+        self.delete_rows_button = (
+            self.action_toolbar.widgetForAction(self.delete_rows_action)
+            if self.delete_rows_action is not None
+            else None
+        )
+        self.delete_columns_button = (
+            self.action_toolbar.widgetForAction(self.delete_columns_action)
+            if self.delete_columns_action is not None
+            else None
+        )
         self.filter_button.setObjectName("filterButton")
         self.sort_button.setObjectName("sortButton")
         self.columns_button.setObjectName("columnsButton")
         if self.derive_button is not None:
             self.derive_button.setObjectName("deriveColumnButton")
+        if self.delete_rows_button is not None:
+            self.delete_rows_button.setObjectName("deleteTableRowsButton")
+            self.delete_rows_button.setAccessibleName("按条件删除质控前名单行")
+        if self.delete_columns_button is not None:
+            self.delete_columns_button.setObjectName("deleteTableColumnButton")
+            self.delete_columns_button.setAccessibleName("选择删除质控前名单列")
         self.find_edit = QLineEdit(self.action_toolbar)
         self.find_edit.setObjectName("findIdentity")
         self.find_edit.setAccessibleName("查找精确 ezqcid")
@@ -253,6 +343,8 @@ class QtTableWorkspace(QWidget):
             self.sort_action,
             self.columns_action,
             self.derive_action,
+            self.delete_rows_action,
+            self.delete_columns_action,
             self.find_action,
             self.export_action,
             self.cancel_export_action,
@@ -376,6 +468,8 @@ class QtTableWorkspace(QWidget):
         self.export_status_label.setAccessibleName("表格导出状态")
         self.derive_status_label = QLabel("", footer)
         self.derive_status_label.setAccessibleName("新增列状态")
+        self.mutation_status_label = QLabel("", footer)
+        self.mutation_status_label.setAccessibleName("名单删除状态")
         self.selection_status_label = QLabel("未选择记录", footer)
         for status_label in (
             self.count_label,
@@ -384,6 +478,7 @@ class QtTableWorkspace(QWidget):
             self.sort_status_label,
             self.export_status_label,
             self.derive_status_label,
+            self.mutation_status_label,
             self.selection_status_label,
         ):
             status_label.setMinimumWidth(0)
@@ -395,6 +490,7 @@ class QtTableWorkspace(QWidget):
         footer_layout.addWidget(self.sort_status_label)
         footer_layout.addWidget(self.export_status_label)
         footer_layout.addWidget(self.derive_status_label)
+        footer_layout.addWidget(self.mutation_status_label)
         footer_layout.addStretch(1)
         footer_layout.addWidget(self.selection_status_label)
         footer_layout.addWidget(QLabel("每页", footer))
@@ -851,6 +947,8 @@ class QtTableWorkspace(QWidget):
             "sort_dialog",
             "columns_dialog",
             "derived_column_dialog",
+            "delete_rows_dialog",
+            "delete_columns_dialog",
         ):
             dialog = getattr(self, attribute)
             if dialog is not None:
@@ -1179,6 +1277,7 @@ class QtTableWorkspace(QWidget):
         self._derive_busy = next_busy
         if self.derive_action is not None:
             self.derive_action.setEnabled(not next_busy)
+        self._update_data_mutation_actions()
         self.deriveBusyChanged.emit(next_busy)
 
     @Slot(str)
@@ -1534,6 +1633,312 @@ class QtTableWorkspace(QWidget):
         self._set_error("")
         self._update_status()
 
+    def set_data_mutation_enabled(self, enabled: bool) -> None:
+        """Enable authoritative list deletion only for a current safe context."""
+
+        self._data_mutation_enabled = bool(enabled)
+        self._update_data_mutation_actions()
+
+    def _update_data_mutation_actions(self) -> None:
+        if self.delete_rows_action is None or self.delete_columns_action is None:
+            return
+        enabled = (
+            self._data_mutation_enabled
+            and not self._derive_busy
+            and not self.task_controller.busy
+            and not self.mutation_task_controller.busy
+        )
+        source_columns = tuple(
+            str(profile.name) for profile in self.service.profiles
+        )
+        has_deletable_columns = any(
+            column not in self.protected_delete_columns
+            for column in source_columns
+        )
+        self.delete_rows_action.setEnabled(enabled and self.service.source_total > 0)
+        self.delete_columns_action.setEnabled(
+            enabled and has_deletable_columns
+        )
+
+    def open_delete_rows_dialog(self) -> DeleteRowsDialog | None:
+        """Open a filter-backed deletion draft over the complete source list."""
+
+        if self.delete_rows_callback is None or not self._data_mutation_enabled:
+            self._set_error("当前表格不能删除名单行")
+            return None
+        if self.mutation_task_controller.busy:
+            self._set_error("另一项名单删除任务仍在运行")
+            return None
+        if self.service.source_total <= 0:
+            self._set_error("当前没有可维护的质控前名单")
+            return None
+        if self.delete_rows_dialog is not None and self.delete_rows_dialog.isVisible():
+            self.delete_rows_dialog.raise_()
+            self.delete_rows_dialog.activateWindow()
+            return self.delete_rows_dialog
+        dialog = DeleteRowsDialog(
+            self.service.profiles,
+            self.applied_state.effective_filter,
+            self,
+        )
+        self.delete_rows_dialog = dialog
+        dialog.deleteRequested.connect(
+            lambda expression, current=dialog: self._delete_rows_from_dialog(
+                current,
+                expression,
+            )
+        )
+        dialog.finished.connect(
+            lambda _result, current=dialog: self._delete_rows_dialog_finished(
+                current
+            )
+        )
+        self._set_error("")
+        dialog.open()
+        return dialog
+
+    def _delete_rows_dialog_finished(self, dialog: DeleteRowsDialog) -> None:
+        if self.delete_rows_dialog is dialog:
+            self.delete_rows_dialog = None
+
+    def _identities_for_delete_filter(
+        self,
+        expression: FilterExpression,
+    ) -> tuple[str, ...]:
+        if not isinstance(expression, FilterExpression):
+            raise TypeError("删除行窗口返回了无效条件")
+        if not expression.groups:
+            raise TableViewError("至少添加一个删除条件")
+        state = self.service.default_state(
+            page_size=self.applied_state.page_size
+        ).with_filter(expression)
+        result = self.service.apply_state(state)
+        if not result.matched_total:
+            raise TableViewError("删除条件没有匹配任何质控前名单行")
+        return self.service.validate_qc_identities(result)
+
+    def _delete_rows_from_dialog(
+        self,
+        dialog: DeleteRowsDialog,
+        expression: object,
+    ) -> None:
+        try:
+            identities = self._identities_for_delete_filter(expression)
+        except (ArithmeticError, RuntimeError, TypeError, ValueError) as exc:
+            dialog.set_error(str(exc).strip() or type(exc).__name__)
+            return
+        question = (
+            f"将从质控前名单删除 {len(identities):,} 行。\n"
+            "现有评分记录不会被删除。是否继续？"
+        )
+        response = QMessageBox.question(
+            self,
+            self._ui_text("确认删除"),
+            self._ui_text(question),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if response != QMessageBox.Yes:
+            dialog.set_error("")
+            return
+        if not self._submit_data_mutation(
+            "rows",
+            identities,
+            dialog,
+            lambda: self.delete_rows_callback(identities),
+        ):
+            dialog.set_error(self.error_text)
+
+    def open_delete_columns_dialog(self) -> DeleteColumnsDialog | None:
+        """Open a searchable multi-column deletion draft over the source schema."""
+
+        if self.delete_columns_callback is None or not self._data_mutation_enabled:
+            self._set_error("当前表格不能删除名单列")
+            return None
+        if self.mutation_task_controller.busy:
+            self._set_error("另一项名单删除任务仍在运行")
+            return None
+        columns = tuple(str(profile.name) for profile in self.service.profiles)
+        deletable = tuple(
+            column
+            for column in columns
+            if column not in self.protected_delete_columns
+        )
+        if not deletable:
+            self._set_error("当前没有可删除的质控前名单列")
+            return None
+        if (
+            self.delete_columns_dialog is not None
+            and self.delete_columns_dialog.isVisible()
+        ):
+            self.delete_columns_dialog.raise_()
+            self.delete_columns_dialog.activateWindow()
+            return self.delete_columns_dialog
+        protected = tuple(
+            column
+            for column in columns
+            if column in self.protected_delete_columns
+        )
+        dialog = DeleteColumnsDialog(
+            columns,
+            self,
+            protected_columns=protected,
+            language=self.language,
+        )
+        self.delete_columns_dialog = dialog
+        dialog.deleteRequested.connect(
+            lambda selected, current=dialog: self._delete_columns_from_dialog(
+                current,
+                selected,
+            )
+        )
+        dialog.finished.connect(
+            lambda _result, current=dialog: self._delete_columns_dialog_finished(
+                current
+            )
+        )
+        self._set_error("")
+        dialog.open()
+        return dialog
+
+    def _delete_columns_dialog_finished(
+        self,
+        dialog: DeleteColumnsDialog,
+    ) -> None:
+        if self.delete_columns_dialog is dialog:
+            self.delete_columns_dialog = None
+
+    def _delete_columns_from_dialog(
+        self,
+        dialog: DeleteColumnsDialog,
+        columns: object,
+    ) -> None:
+        available = tuple(str(profile.name) for profile in self.service.profiles)
+        if (
+            not isinstance(columns, tuple)
+            or not columns
+            or not all(isinstance(column, str) and column for column in columns)
+            or len(set(columns)) != len(columns)
+        ):
+            dialog.set_error("删除列窗口返回了无效选择")
+            return
+        missing = tuple(column for column in columns if column not in available)
+        if missing:
+            dialog.set_error(f"质控前名单列不存在或已变化: {missing}")
+            return
+        protected = tuple(
+            column for column in columns if column in self.protected_delete_columns
+        )
+        if protected:
+            dialog.set_error(
+                f"质控前名单不能删除受保护列: {protected}"
+            )
+            return
+        names = "、".join(columns)
+        question = (
+            f"将从质控前名单删除 {len(columns):,} 列：{names}。\n"
+            "现有评分记录不会被删除。是否继续？"
+        )
+        response = QMessageBox.question(
+            self,
+            self._ui_text("确认删除"),
+            self._ui_text(question),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if response != QMessageBox.Yes:
+            dialog.set_error("")
+            return
+        if not self._submit_data_mutation(
+            "columns",
+            columns,
+            dialog,
+            lambda: self.delete_columns_callback(columns),
+        ):
+            dialog.set_error(self.error_text)
+
+    def _submit_data_mutation(
+        self,
+        operation: str,
+        targets: tuple[str, ...],
+        dialog: DeleteRowsDialog | DeleteColumnsDialog,
+        function: Callable[[], int],
+    ) -> bool:
+        if operation not in {"rows", "columns"}:
+            raise ValueError(f"Unsupported table mutation: {operation}")
+        if self.mutation_task_controller.busy:
+            self._set_error("另一项名单删除任务仍在运行")
+            return False
+        self._mutation_revision += 1
+        revision = self._mutation_revision
+        self._pending_mutation = (revision, operation, targets, dialog)
+        self._set_error("")
+        self.mutation_task_controller.submit(revision, function)
+        return True
+
+    @property
+    def mutation_busy(self) -> bool:
+        return self.mutation_task_controller.busy
+
+    @Slot(int, object)
+    def _accept_mutation_result(self, revision: int, result: object) -> None:
+        pending = self._pending_mutation
+        if pending is None or pending[0] != revision:
+            return
+        operation, targets, dialog = pending[1], pending[2], pending[3]
+        expected = len(targets)
+        if isinstance(result, bool) or not isinstance(result, int) or result != expected:
+            self._handle_mutation_error(
+                revision,
+                TableViewError(
+                    "名单行删除返回了无效结果"
+                    if operation == "rows"
+                    else "名单列删除返回了无效结果"
+                ),
+            )
+            return
+        self._pending_mutation = None
+        self.selected_source_position = None
+        self.selection_outside_view = False
+        self.table_view.clearSelection()
+        if operation == "rows":
+            message = f"已从质控前名单删除 {result:,} 行；评分记录已保留"
+        else:
+            names = "、".join(targets)
+            message = (
+                f"已从质控前名单删除 {result:,} 列：{names}；"
+                "评分记录已保留"
+            )
+        self.mutation_status_label.setText(self._ui_text(message))
+        self._set_error("")
+        dialog.complete_delete()
+        if self.on_data_mutation_committed is not None:
+            try:
+                self.on_data_mutation_committed()
+            except Exception as exc:
+                self._set_error(str(exc).strip() or type(exc).__name__)
+        self._update_data_mutation_actions()
+
+    @Slot(int, object)
+    def _handle_mutation_error(self, revision: int, error: object) -> None:
+        pending = self._pending_mutation
+        if pending is None or pending[0] != revision:
+            return
+        dialog = pending[3]
+        self._pending_mutation = None
+        message = str(error).strip() or type(error).__name__
+        self.mutation_status_label.setText(self._ui_text("名单删除失败"))
+        dialog.set_error(message)
+        self._set_error(message)
+        self._update_data_mutation_actions()
+
+    @Slot(bool)
+    def _set_mutation_busy(self, busy: bool) -> None:
+        if busy:
+            self.mutation_status_label.setText(self._ui_text("正在删除名单…"))
+        self._update_data_mutation_actions()
+        self.mutationBusyChanged.emit(bool(busy))
+
     def open_selected_qc(self) -> bool:
         selected = self.table_view.selectionModel().selectedRows()
         if not selected:
@@ -1720,16 +2125,19 @@ class QtTableWorkspace(QWidget):
             self.count_label.setText("正在应用…")
         else:
             self._update_status()
+        self._update_data_mutation_actions()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._pending_state = None
         self._pending_reset_page = False
+        self._pending_mutation = None
         self._pinned_width_timer.stop()
         self._scroll_refresh_timer.stop()
         self._pinned_width_update_pending = False
         self._close_open_dialogs()
         self.close_view_inspector()
         self.task_controller.cancel()
+        self.mutation_task_controller.cancel()
         if self._export_cancel_event is not None:
             self._export_cancel_event.set()
         self.export_task_controller.cancel()
@@ -1876,6 +2284,16 @@ class QtTableWorkspace(QWidget):
         """Refresh dynamic table presentation without touching view state."""
 
         self.table_model.retranslate_ui()
+        if self.delete_rows_action is not None:
+            self.delete_rows_action.setText(self._ui_text("删除行"))
+            self.delete_rows_action.setToolTip(
+                self._ui_text("删除行 (Ctrl+Shift+Backspace)")
+            )
+        if self.delete_columns_action is not None:
+            self.delete_columns_action.setText(self._ui_text("删除列"))
+            self.delete_columns_action.setToolTip(
+                self._ui_text("删除列 (Ctrl+Alt+Backspace)")
+            )
         self._render_chips()
         self._update_status()
 
@@ -1938,7 +2356,7 @@ class QtTableWorkspace(QWidget):
         self.open_qc_action.setEnabled(False)
 
     def _set_error(self, message: str) -> None:
-        self.error_label.setText(message)
+        self.error_label.setText(self._ui_text(message))
         self.error_label.setVisible(bool(message))
 
 

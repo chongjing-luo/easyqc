@@ -235,6 +235,18 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "删除导入草稿当前列": "Delete current import-draft column",
     "删除质控前名单选中行": "Delete selected Pre-QC list rows",
     "删除质控前名单当前列": "Delete current Pre-QC list column",
+    "按条件删除导入草稿行": "Delete import-draft rows by condition",
+    "使用筛选条件删除当前导入草稿行；评分记录不会被删除": (
+        "Delete current import-draft rows with filter conditions; "
+        "rating records will be retained"
+    ),
+    "选择删除导入草稿列": "Select import-draft columns to delete",
+    "从列清单选择一个或多个导入草稿列；评分记录不会被删除": (
+        "Select one or more import-draft columns from the list; "
+        "rating records will be retained"
+    ),
+    "按条件删除质控前名单行": "Delete Pre-QC list rows by condition",
+    "选择删除质控前名单列": "Select Pre-QC list columns to delete",
     "按条件删除行": "Delete rows by condition",
     "按条件删除行…": "Delete rows by condition…",
     "按筛选条件删除表格行": "Delete table rows by filter conditions",
@@ -313,6 +325,18 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     ),
     "当前表格不能删除名单行": "Rows cannot be deleted from this table.",
     "当前表格不能删除名单列": "Columns cannot be deleted from this table.",
+    "删除行窗口返回了无效条件": (
+        "The row-deletion dialog returned invalid conditions."
+    ),
+    "删除列窗口返回了无效选择": (
+        "The column-deletion dialog returned an invalid selection."
+    ),
+    "删除条件没有匹配任何质控前名单行": (
+        "The deletion conditions matched no Pre-QC list rows."
+    ),
+    "当前没有可删除的质控前名单列": (
+        "There are no deletable Pre-QC list columns."
+    ),
     "名单行删除返回了无效结果": "Row deletion returned an invalid result.",
     "名单列删除返回了无效结果": "Column deletion returned an invalid result.",
     "另一项名单删除任务仍在运行": "Another list deletion is still running.",
@@ -966,7 +990,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "EasyQC 质控前名单": "EasyQC Pre-QC list",
     "确认删除": "Confirm deletion",
     "删除行": "Delete rows",
-    "删除列": "Delete column",
+    "删除列": "Delete columns",
     "界面语言": "Interface language",
     "质控工作台": "Quality control workspace",
     "筛选组": "Filter group",
@@ -1043,6 +1067,10 @@ _SOURCE_PATTERNS = (
     (
         re.compile(r"^质控前名单不能删除 (?P<column>.*)$"),
         "The Pre-QC list cannot delete {column}.",
+    ),
+    (
+        re.compile(r"^质控前名单不能删除受保护列: (?P<value>.*)$"),
+        "The Pre-QC list cannot delete protected columns: {value}.",
     ),
     (
         re.compile(r"^质控前名单行不存在或已变化: (?P<value>.*)$"),
@@ -1334,6 +1362,14 @@ _SOURCE_PATTERNS = (
     ),
     (
         re.compile(
+            r"^已从质控前名单删除 (?P<count>[\d,]+) 列："
+            r"(?P<columns>.*)；评分记录已保留$"
+        ),
+        "Deleted {count} Pre-QC list columns: {columns}; "
+        "rating records were retained.",
+    ),
+    (
+        re.compile(
             r"^将从当前导入草稿删除 (?P<count>[\d,]+) 行。\n"
             r"现有评分记录不会被删除。是否继续？$"
         ),
@@ -1354,6 +1390,15 @@ _SOURCE_PATTERNS = (
             r"现有评分记录不会被删除。是否继续？$"
         ),
         "Delete {count} rows from the Pre-QC list.\n"
+        "Existing rating records will be retained. Continue?",
+    ),
+    (
+        re.compile(
+            r"^将从质控前名单删除 (?P<count>[\d,]+) 列："
+            r"(?P<columns>.*)。\n"
+            r"现有评分记录不会被删除。是否继续？$"
+        ),
+        "Delete {count} columns from the Pre-QC list: {columns}.\n"
         "Existing rating records will be retained. Continue?",
     ),
     (

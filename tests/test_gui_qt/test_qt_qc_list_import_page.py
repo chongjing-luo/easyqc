@@ -819,7 +819,7 @@ def test_import_delete_controls_follow_busy_state_and_language(
         language.set_language("en")
         language.localize_widget_tree(page)
         assert page.delete_rows_button.text() == "Delete rows"
-        assert page.delete_column_button.text() == "Delete column"
+        assert page.delete_column_button.text() == "Delete columns"
     finally:
         language.set_language("zh_CN")
 
