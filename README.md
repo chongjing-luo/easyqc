@@ -2,7 +2,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1020%20passed%20%7C%204%20skipped-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-1423%20passed-brightgreen.svg)](tests/)
 
 EasyQC 是一个可配置的 MRI 人工视觉质量控制工作台。它将"打开图像 → 记录评分 → 追踪进度 → 聚合结果"的完整人工 QC 链条整合为可追踪、可复用、项目化的软件工作流。
 
@@ -398,7 +398,7 @@ easyqc/
 │
 ├── easyqc.spec                 # PyInstaller 打包配置
 ├── build.py                    # 一键打包脚本 (Linux/macOS/Windows)
-├── tests/                      # pytest 自动化测试（234 个测试函数）
+├── tests/                      # pytest 自动化测试（当前 1423 个测试项）
 │   ├── test_core/              # 核心服务测试
 │   ├── test_models/            # 数据模型测试
 │   ├── test_gui/               # GUI 组件测试
