@@ -7,33 +7,14 @@ import shlex
 import signal
 import subprocess
 import tempfile
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from utils.logger import log_error
 
 
-DEFAULT_ALLOWED_COMMANDS = (
-    "python",
-    "python3",
-    "fslview",
-    "mricron",
-    "freeview",
-    "itksnap",
-    "open",
-    'wb_view',
-    'mricroGL',
-    'mricrogl',
-    'MRIcroGL',
-)
-
-
 class CodeExecutorError(Exception):
     """Base exception for controlled command execution errors."""
-
-
-class CommandNotAllowedError(CodeExecutorError):
-    """Raised when a command is not in the allowlist."""
 
 
 class CommandTimeoutError(CodeExecutorError):
@@ -43,16 +24,25 @@ class CommandTimeoutError(CodeExecutorError):
 class CodeExecutor:
     def __init__(
         self,
-        allowed_commands: Sequence[str] | None = None,
+        shell_enabled: bool = False,
         timeout: float = 300,
         system: str | None = None,
     ) -> None:
-        self.allowed_commands = set(allowed_commands or DEFAULT_ALLOWED_COMMANDS)
+        if not isinstance(shell_enabled, bool):
+            raise TypeError("shell_enabled must be a Boolean")
+        self.shell_enabled = shell_enabled
         self.timeout = timeout
         self.system = system or platform.system()
         self.current_processes: list[subprocess.Popen] = []
         self._pending_temp_files: list[Path] = []
         self._process_temp_files: dict[int, list[Path]] = {}
+
+    def set_shell_enabled(self, enabled: bool) -> None:
+        """Select direct or Shell execution for future commands."""
+
+        if not isinstance(enabled, bool):
+            raise TypeError("shell_enabled must be a Boolean")
+        self.shell_enabled = enabled
 
     # P3-B: placeholders are ${name} and {name} (the two explicit forms in real
     # settings). Bare $name is ALSO substituted for backward compat, but it is
@@ -139,7 +129,7 @@ class CodeExecutor:
         else:
             parts = [str(part) for part in command]
 
-        self._validate_command_parts(parts, reject_shell_controls=isinstance(command, str))
+        self._validate_command_parts(parts)
         return parts
 
     def _normalize_command_text(self, command: str) -> str:
@@ -204,7 +194,7 @@ class CodeExecutor:
                 index += 1
 
             if in_quotes:
-                raise CommandNotAllowedError("命令包含未闭合的双引号")
+                raise CodeExecutorError("命令包含未闭合的双引号")
 
             parts.append("".join(argument))
             while index < length and command[index] in " \t":
@@ -212,40 +202,33 @@ class CodeExecutor:
 
         return parts
 
-    @staticmethod
-    def _normalize_windows_executable_name(executable: str) -> str:
-        name = PureWindowsPath(executable).name
-        suffix = PureWindowsPath(name).suffix.casefold()
-        if suffix in {".exe", ".com"}:
-            name = name[: -len(suffix)]
-        return name.casefold()
-
-    def _validate_command_parts(self, parts: list[str], reject_shell_controls: bool = True) -> None:
+    def _validate_command_parts(self, parts: list[str]) -> None:
         if not parts:
-            raise CommandNotAllowedError("空命令不允许执行")
+            raise CodeExecutorError("命令不能为空")
 
-        if reject_shell_controls and any(re.search(r";|&&|\|\||\|", part) for part in parts):
-            raise CommandNotAllowedError("不允许 shell 控制操作符")
+    def _command_for_subprocess(
+        self,
+        command: str | Sequence[str],
+    ) -> str | list[str]:
+        """Return one command in the shape required by the selected mode."""
 
+        if not self.shell_enabled:
+            return self.split_command(command)
+        if isinstance(command, str):
+            if not command.strip():
+                raise CodeExecutorError("命令不能为空")
+            return command
+        parts = [str(part) for part in command]
+        self._validate_command_parts(parts)
         if self.system == "Windows":
-            executable = PureWindowsPath(parts[0]).name
-            suffix = PureWindowsPath(executable).suffix.casefold()
-            if suffix in {".bat", ".cmd"}:
-                raise CommandNotAllowedError(
-                    f"不允许 Windows shell 脚本作为可执行命令: {executable}"
-                )
-            normalized_executable = self._normalize_windows_executable_name(executable)
-            normalized_allowlist = {
-                self._normalize_windows_executable_name(allowed)
-                for allowed in self.allowed_commands
-            }
-            is_allowed = normalized_executable in normalized_allowlist
-        else:
-            executable = Path(parts[0]).name
-            is_allowed = executable in self.allowed_commands
+            return subprocess.list2cmdline(parts)
+        return shlex.join(parts)
 
-        if not is_allowed:
-            raise CommandNotAllowedError(f"命令不在白名单中: {executable}")
+    @staticmethod
+    def _command_label(command: str | Sequence[str]) -> str:
+        if isinstance(command, str):
+            return command.strip().split(maxsplit=1)[0] if command.strip() else "<empty>"
+        return str(command[0]) if command else "<empty>"
 
     def _split_legacy_mricrogl_temp_script(self, command: str) -> list[str] | None:
         pattern = re.compile(
@@ -297,23 +280,30 @@ class CodeExecutor:
         cwd: str | os.PathLike[str] | None = None,
         timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        args = self.split_command(command)
+        args = self._command_for_subprocess(command)
+        command_label = self._command_label(args)
         temp_files = self._consume_pending_temp_files()
         try:
             return subprocess.run(
                 args,
                 cwd=cwd,
-                shell=False,
+                shell=self.shell_enabled,
                 check=False,
                 text=True,
                 capture_output=True,
                 timeout=self.timeout if timeout is None else timeout,
             )
         except OSError as exc:
-            log_error(f"命令运行失败: {args[0]}: {exc}", "CodeExecutor", show_popup=False)
-            raise CodeExecutorError(f"命令启动失败: {args[0]}: {exc}") from exc
+            log_error(
+                f"命令运行失败: {command_label}: {exc}",
+                "CodeExecutor",
+                show_popup=False,
+            )
+            raise CodeExecutorError(
+                f"命令启动失败: {command_label}: {exc}"
+            ) from exc
         except subprocess.TimeoutExpired as exc:
-            raise CommandTimeoutError(f"命令超时: {args[0]}") from exc
+            raise CommandTimeoutError(f"命令超时: {command_label}") from exc
         finally:
             self._cleanup_temp_files(temp_files)
 
@@ -322,11 +312,12 @@ class CodeExecutor:
         command: str | Sequence[str],
         cwd: str | os.PathLike[str] | None = None,
     ) -> subprocess.Popen:
-        args = self.split_command(command)
+        args = self._command_for_subprocess(command)
+        command_label = self._command_label(args)
         temp_files = self._consume_pending_temp_files()
         popen_kwargs: dict[str, Any] = {
             "cwd": cwd,
-            "shell": False,
+            "shell": self.shell_enabled,
             "stdout": subprocess.DEVNULL,
             "stderr": subprocess.DEVNULL,
         }
@@ -340,8 +331,14 @@ class CodeExecutor:
             process = subprocess.Popen(args, **popen_kwargs)
         except OSError as exc:
             self._cleanup_temp_files(temp_files)
-            log_error(f"viewer 启动失败: {args[0]}: {exc}", "CodeExecutor", show_popup=False)
-            raise CodeExecutorError(f"命令启动失败: {args[0]}: {exc}") from exc
+            log_error(
+                f"viewer 启动失败: {command_label}: {exc}",
+                "CodeExecutor",
+                show_popup=False,
+            )
+            raise CodeExecutorError(
+                f"命令启动失败: {command_label}: {exc}"
+            ) from exc
         self.current_processes.append(process)
         if temp_files:
             self._process_temp_files[process.pid] = temp_files

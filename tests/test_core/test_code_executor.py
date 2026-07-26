@@ -6,7 +6,6 @@ import pytest
 from core.code_executor import (
     CodeExecutor,
     CodeExecutorError,
-    CommandNotAllowedError,
     CommandTimeoutError,
 )
 
@@ -22,7 +21,7 @@ def test_parse_template_replaces_legacy_variable_syntaxes() -> None:
     assert result == "open SUB001 /tmp/sub001.nii.gz BNU"
 
 
-def test_run_command_executes_allowlisted_python_without_shell() -> None:
+def test_run_command_executes_python_without_shell() -> None:
     executor = CodeExecutor()
 
     result = executor.run_command([sys.executable, "-c", "print('ok')"])
@@ -31,18 +30,78 @@ def test_run_command_executes_allowlisted_python_without_shell() -> None:
     assert result.stdout.strip() == "ok"
 
 
-def test_run_command_rejects_non_allowlisted_command() -> None:
+def test_run_command_has_no_executable_name_gate(monkeypatch) -> None:
+    observed = []
+
+    def fake_run(command, **options):
+        observed.append((command, options))
+        return __import__("subprocess").CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("core.code_executor.subprocess.run", fake_run)
     executor = CodeExecutor()
 
-    with pytest.raises(CommandNotAllowedError):
-        executor.run_command("echo unsafe")
+    executor.run_command("custom-laboratory-viewer image.nii.gz")
+
+    assert observed[0][0] == [
+        "custom-laboratory-viewer",
+        "image.nii.gz",
+    ]
+    assert observed[0][1]["shell"] is False
 
 
-def test_split_command_rejects_shell_control_operators() -> None:
-    executor = CodeExecutor()
+def test_shell_mode_controls_raw_string_and_subprocess_flag(monkeypatch) -> None:
+    observed = []
 
-    with pytest.raises(CommandNotAllowedError):
-        executor.split_command("freeview image.nii; rm -rf /tmp/example")
+    def fake_run(command, **options):
+        observed.append((command, options))
+        return __import__("subprocess").CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("core.code_executor.subprocess.run", fake_run)
+    direct = CodeExecutor(shell_enabled=False)
+    shell = CodeExecutor(shell_enabled=True)
+    command = 'viewer "image one.nii.gz" | postprocess'
+
+    direct.run_command(command)
+    shell.run_command(command)
+
+    assert observed[0][0] == [
+        "viewer",
+        "image one.nii.gz",
+        "|",
+        "postprocess",
+    ]
+    assert observed[0][1]["shell"] is False
+    assert observed[1][0] == command
+    assert observed[1][1]["shell"] is True
+
+
+def test_start_command_uses_current_shell_setting(monkeypatch) -> None:
+    observed = []
+
+    class FakeProcess:
+        pid = 4721
+
+    def fake_popen(command, **options):
+        observed.append((command, options))
+        return FakeProcess()
+
+    monkeypatch.setattr("core.code_executor.subprocess.Popen", fake_popen)
+    executor = CodeExecutor(shell_enabled=False, system="Linux")
+    command = "viewer image.nii.gz && write-report"
+
+    executor.start_command(command)
+    executor.set_shell_enabled(True)
+    executor.start_command(command)
+
+    assert observed[0][0] == [
+        "viewer",
+        "image.nii.gz",
+        "&&",
+        "write-report",
+    ]
+    assert observed[0][1]["shell"] is False
+    assert observed[1][0] == command
+    assert observed[1][1]["shell"] is True
 
 
 def test_split_command_handles_legacy_line_continuations() -> None:
@@ -54,7 +113,7 @@ def test_split_command_handles_legacy_line_continuations() -> None:
 
 
 def test_split_command_windows_preserves_quoted_paths_and_unicode() -> None:
-    executor = CodeExecutor(allowed_commands=["mricrogl"], system="Windows")
+    executor = CodeExecutor(system="Windows")
 
     result = executor.split_command(
         '"C:\\Program Files\\MRIcroGL\\MRIcroGL.EXE" '
@@ -67,8 +126,8 @@ def test_split_command_windows_preserves_quoted_paths_and_unicode() -> None:
     ]
 
 
-def test_split_command_windows_accepts_safe_com_suffix_case_insensitively() -> None:
-    executor = CodeExecutor(allowed_commands=["viewer"], system="Windows")
+def test_split_command_windows_accepts_com_suffix() -> None:
+    executor = CodeExecutor(system="Windows")
 
     result = executor.split_command(
         '"C:\\QC Tools\\VIEWER.COM" "D:\\data\\record 01.nii.gz"'
@@ -78,20 +137,23 @@ def test_split_command_windows_accepts_safe_com_suffix_case_insensitively() -> N
 
 
 @pytest.mark.parametrize("extension", [".bat", ".cmd"])
-def test_split_command_windows_rejects_shell_script_executables_even_if_listed(
+def test_split_command_windows_has_no_script_suffix_denylist(
     extension: str,
 ) -> None:
-    executor = CodeExecutor(
-        allowed_commands=[f"viewer{extension}"],
-        system="Windows",
+    executor = CodeExecutor(system="Windows")
+
+    result = executor.split_command(
+        f'"C:\\QC Tools\\viewer{extension}" record.nii.gz'
     )
 
-    with pytest.raises(CommandNotAllowedError, match="不允许"):
-        executor.split_command(f'"C:\\QC Tools\\viewer{extension}" record.nii.gz')
+    assert result == [
+        f"C:\\QC Tools\\viewer{extension}",
+        "record.nii.gz",
+    ]
 
 
 def test_split_command_macos_preserves_quoted_application_and_unicode_paths() -> None:
-    executor = CodeExecutor(allowed_commands=["open"], system="Darwin")
+    executor = CodeExecutor(system="Darwin")
 
     result = executor.split_command(
         'open -a "MRIcroGL" "/Users/reviewer/研究数据/质控记录 01.nii.gz"'
@@ -125,8 +187,8 @@ def test_split_command_converts_legacy_mricrogl_temp_script_without_shell() -> N
         script_path.unlink(missing_ok=True)
 
 
-def test_start_command_reports_missing_allowlisted_executable() -> None:
-    executor = CodeExecutor(allowed_commands=["missing_viewer"])
+def test_start_command_reports_missing_executable() -> None:
+    executor = CodeExecutor()
 
     with pytest.raises(CodeExecutorError, match="命令启动失败"):
         executor.start_command("missing_viewer /tmp/sub-001.nii.gz")
@@ -219,8 +281,7 @@ def test_start_command_raises_on_missing_binary_with_logged_reason() -> None:
     """P3-E / N1.2: when a viewer binary does not exist (typical launch failure),
     CodeExecutor must raise CodeExecutorError AND the reason must be visible
     (logged), not silently swallowed by DEVNULL."""
-    # custom allowlist with a name that is definitely not on PATH
-    executor = CodeExecutor(allowed_commands=["definitely_missing_viewer_xyz"])
+    executor = CodeExecutor()
     with pytest.raises(CodeExecutorError) as exc:
         executor.start_command("definitely_missing_viewer_xyz /tmp/nonexistent.nii.gz")
     assert "definitely_missing_viewer_xyz" in str(exc.value)
@@ -229,7 +290,7 @@ def test_start_command_raises_on_missing_binary_with_logged_reason() -> None:
 def test_start_command_failure_reason_names_the_offending_command() -> None:
     """P3-E: the exception message must name the offending command so the user
     can tell WHICH viewer failed (multiple commands in a module)."""
-    executor = CodeExecutor(allowed_commands=["another_missing_viewer_abc"])
+    executor = CodeExecutor()
     with pytest.raises(CodeExecutorError) as exc:
         executor.start_command("another_missing_viewer_abc /tmp/missing.nii")
     assert "another_missing_viewer_abc" in str(exc.value)
@@ -244,7 +305,7 @@ def test_start_command_logs_error_before_raising(monkeypatch) -> None:
     import core.code_executor as ce_mod
     monkeypatch.setattr(ce_mod, "log_error", lambda msg, *a, **k: logged.append(msg))
 
-    executor = CodeExecutor(allowed_commands=["ghost_viewer_p3e"])
+    executor = CodeExecutor()
     with pytest.raises(CodeExecutorError):
         executor.start_command("ghost_viewer_p3e /tmp/x.nii")
 

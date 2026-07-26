@@ -55,7 +55,7 @@ def _subjects() -> pd.DataFrame:
 
 class _FakeExecutor:
     def __init__(self) -> None:
-        self.planner = CodeExecutor(allowed_commands=("freeview", "itksnap"))
+        self.planner = CodeExecutor()
         self.started = []
         self.close_calls = 0
 
