@@ -10,10 +10,12 @@ from core.configuration_service import ConfigurationService
 from core.event_bus import EventBus
 from core.project_context_service import ProjectContextService
 from core.project_service import ProjectService
+from core.project_template_service import ProjectTemplateService
 from core.rating_service import RatingService
 from core.session_state import SessionState
 from core.table_service import TableService
 from core.table_transform import TableTransformEngine
+from core.template_service import TemplateService
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,8 @@ class AppServices:
     session_state: SessionState
     configuration_service: ConfigurationService
     project_context_service: ProjectContextService
+    template_service: TemplateService
+    project_template_service: ProjectTemplateService
 
 
 def build_app_services(registry_path: Path | None = None) -> AppServices:
@@ -41,15 +45,24 @@ def build_app_services(registry_path: Path | None = None) -> AppServices:
     Errors: dependency construction errors propagate to the launcher.
     """
 
+    resolved_registry_path = (
+        Path(registry_path)
+        if registry_path is not None
+        else Path(__file__).parent.parent / "projects.json"
+    )
     event_bus = EventBus()
+    template_service = TemplateService(resolved_registry_path.parent)
     project_service = ProjectService(
-        registry_path or Path(__file__).parent.parent / "projects.json",
+        resolved_registry_path,
         event_bus=event_bus,
     )
     rating_service = RatingService(project_service)
     table_service = TableService()
-    code_executor = CodeExecutor()
+    code_executor = CodeExecutor(
+        shell_enabled=template_service.shell_enabled(),
+    )
     configuration_service = ConfigurationService(project_service, table_service)
+    project_template_service = ProjectTemplateService(template_service)
     project_context_service = ProjectContextService(
         configuration_service,
         rating_service,
@@ -66,6 +79,8 @@ def build_app_services(registry_path: Path | None = None) -> AppServices:
         session_state=SessionState(),
         configuration_service=configuration_service,
         project_context_service=project_context_service,
+        template_service=template_service,
+        project_template_service=project_template_service,
     )
 
 
