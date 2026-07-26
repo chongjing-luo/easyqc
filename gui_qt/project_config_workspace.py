@@ -52,10 +52,21 @@ from core.module_filter import (
     normalize_module_filter,
 )
 from core.table_view_service import TableViewService
+from core.project_template_service import ProjectTemplateService
+from core.template_service import TemplateService
 from gui_qt.filter_dialog import FilterDialog
-from gui_qt.i18n import protect_user_text, translate_ui_text
+from gui_qt.i18n import (
+    LanguageController,
+    get_or_create_language_controller,
+    protect_user_text,
+    translate_ui_text,
+)
 from gui_qt.qc_list_import_page import QtQcListImportPage
 from gui_qt.task_runner import RevisionedTaskController
+from gui_qt.template_copy_dialogs import (
+    ConstantTemplateCopyDialog,
+    ModuleTemplateCopyDialog,
+)
 from gui_qt.theme import set_button_role
 from models.qcmodule import Score, Tag
 from models.table_view_state import FilterExpression
@@ -74,6 +85,9 @@ class QtProjectConfigWorkspace(QWidget):
         auto_refresh: bool = True,
         project_loader: Callable[[str], bool] | None = None,
         module_launcher: Callable[[str], bool] | None = None,
+        templates: TemplateService | None = None,
+        project_templates: ProjectTemplateService | None = None,
+        language: LanguageController | None = None,
     ) -> None:
         super().__init__(parent)
         if not isinstance(configuration, ConfigurationService):
@@ -81,6 +95,15 @@ class QtProjectConfigWorkspace(QWidget):
         self.configuration = configuration
         self.project_loader = project_loader
         self.module_launcher = module_launcher
+        if (templates is None) != (project_templates is None):
+            raise TypeError(
+                "project template UI requires both template services"
+            )
+        self.templates = templates
+        self.project_templates = project_templates
+        self.language = language or get_or_create_language_controller()
+        self.constant_template_dialog: ConstantTemplateCopyDialog | None = None
+        self.module_template_dialog: ModuleTemplateCopyDialog | None = None
         self._loading = False
         self._selected_module_name: str | None = None
         self._module_form_baseline: tuple | None = None
@@ -372,7 +395,12 @@ class QtProjectConfigWorkspace(QWidget):
         self.constant_search.setPlaceholderText("搜索常量名或值")
         self.constant_search.setClearButtonEnabled(True)
         self.refresh_constants_button = QPushButton("刷新", self.constants_tab)
+        self.constant_from_template_button = QPushButton(
+            "从模板添加",
+            self.constants_tab,
+        )
         search_row.addWidget(self.constant_search, 1)
+        search_row.addWidget(self.constant_from_template_button)
         search_row.addWidget(self.refresh_constants_button)
         layout.addLayout(search_row)
 
@@ -402,6 +430,10 @@ class QtProjectConfigWorkspace(QWidget):
         self.delete_constant_button.clicked.connect(self._delete_selected_constant)
         self.cancel_constant_button.clicked.connect(self._reset_constant_form)
         self.refresh_constants_button.clicked.connect(lambda: self._refresh_constants())
+        self.constant_from_template_button.clicked.connect(
+            self._open_constant_template_dialog
+        )
+        self.constant_from_template_button.setEnabled(self.templates is not None)
         self.constant_search.textChanged.connect(self._filter_constants)
         self.constants_table.cellDoubleClicked.connect(self._edit_constant_row)
 
@@ -443,6 +475,16 @@ class QtProjectConfigWorkspace(QWidget):
             QKeySequence("Ctrl+Shift+I"),
             self._choose_module_import,
         )
+        (
+            self.module_from_template_action,
+            self.module_from_template_button,
+        ) = self._add_toolbar_action(
+            self.module_list_toolbar,
+            "从模板添加",
+            QKeySequence(),
+            self._open_module_template_dialog,
+        )
+        self.module_from_template_action.setEnabled(self.templates is not None)
         module_header_layout.addWidget(self.module_list_toolbar)
         left.addWidget(self.module_list_header)
         self.module_list = QListWidget(left_panel)
@@ -785,6 +827,11 @@ class QtProjectConfigWorkspace(QWidget):
     def retranslate_ui(self) -> None:
         """Refresh presentation-only project status without changing selection."""
 
+        add_from_template = self.language.tr("cross.add_from_template")
+        self.constant_from_template_button.setText(add_from_template)
+        self.constant_from_template_button.setAccessibleName(add_from_template)
+        self.module_from_template_action.setText(add_from_template)
+        self.module_from_template_button.setAccessibleName(add_from_template)
         self._preview_project_item(self.project_list.currentItem())
         self._retranslate_module_rows()
 
@@ -1567,6 +1614,58 @@ class QtProjectConfigWorkspace(QWidget):
             self._reset_constant_form()
         self._set_constant_error("")
         self._refresh_constants()
+
+    @Slot()
+    def _open_constant_template_dialog(self) -> None:
+        if self.templates is None or self.project_templates is None:
+            self._set_constant_error("Template service is not available")
+            return
+        dialog = ConstantTemplateCopyDialog(
+            self.templates,
+            self.project_templates,
+            self.configuration,
+            self.language,
+            self,
+        )
+        dialog.accepted.connect(self._constant_template_copied)
+        self.constant_template_dialog = dialog
+        self._set_constant_error("")
+        dialog.open()
+
+    @Slot()
+    def _constant_template_copied(self) -> None:
+        dialog = self.constant_template_dialog
+        if dialog is None or not dialog.copied_name:
+            return
+        self._reset_constant_form()
+        self._refresh_constants()
+        self._set_constant_error("")
+
+    @Slot()
+    def _open_module_template_dialog(self) -> None:
+        if self.templates is None or self.project_templates is None:
+            self._set_error("Template service is not available")
+            return
+        dialog = ModuleTemplateCopyDialog(
+            self.templates,
+            self.project_templates,
+            self.configuration,
+            self.language,
+            self,
+        )
+        dialog.accepted.connect(self._module_template_copied)
+        self.module_template_dialog = dialog
+        self._set_error("")
+        dialog.open()
+
+    @Slot()
+    def _module_template_copied(self) -> None:
+        dialog = self.module_template_dialog
+        if dialog is None or not dialog.copied_name:
+            return
+        self._selected_module_name = dialog.copied_name
+        self._set_error("")
+        self._refresh_modules(dialog.copied_name)
 
     def _module_row_changed(self, row: int) -> None:
         if self._loading or row < 0:

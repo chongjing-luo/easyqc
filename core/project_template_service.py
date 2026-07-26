@@ -97,5 +97,26 @@ class ProjectTemplateService:
         except ModuleRepositoryError as exc:
             raise TemplateServiceError(str(exc)) from exc
 
+    def copy_module_to_project(
+        self,
+        template_id: str,
+        configuration: ConfigurationService,
+        *,
+        candidate: QCModule | None = None,
+    ) -> str:
+        """Copy one module through the authoritative project transaction."""
+
+        if not isinstance(configuration, ConfigurationService):
+            raise TypeError("configuration must be ConfigurationService")
+        source = self.templates.module(template_id)
+        module = deepcopy(source.module if candidate is None else candidate)
+        if not isinstance(module, QCModule):
+            raise TypeError("candidate must be QCModule or None")
+        try:
+            configuration.import_module_payload(module.to_legacy_dict())
+        except ValueError as exc:
+            raise TemplateServiceError(str(exc)) from exc
+        return module.name
+
 
 __all__ = ["ProjectTemplateService"]

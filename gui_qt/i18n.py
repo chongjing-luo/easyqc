@@ -136,9 +136,25 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
         ),
     },
     "cross.add_constant": {"zh_CN": "添加模板", "en": "Add template"},
+    "cross.add_from_template": {
+        "zh_CN": "从模板添加",
+        "en": "Add from template",
+    },
     "cross.add_score": {"zh_CN": "添加评分项", "en": "Add score"},
     "cross.add_tag": {"zh_CN": "添加标签", "en": "Add tag"},
     "cross.cancel": {"zh_CN": "取消", "en": "Cancel"},
+    "cross.copy_constant_title": {
+        "zh_CN": "从常量模板添加",
+        "en": "Add from constant template",
+    },
+    "cross.copy_module_title": {
+        "zh_CN": "从质控模块模板添加",
+        "en": "Add from QC module template",
+    },
+    "cross.copy_to_project": {
+        "zh_CN": "添加到项目",
+        "en": "Add to project",
+    },
     "cross.constant_name": {
         "zh_CN": "常量名",
         "en": "Constant name",
@@ -274,6 +290,10 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
     },
     "cross.tag_label": {"zh_CN": "标签", "en": "Tag label"},
     "cross.tags": {"zh_CN": "标签", "en": "Tags"},
+    "cross.template_source": {
+        "zh_CN": "选择模板",
+        "en": "Select template",
+    },
     "cross.value": {"zh_CN": "值", "en": "Value"},
     "cross.viewer": {
         "zh_CN": "外部图像查看器",

@@ -264,3 +264,71 @@ def test_template_constant_can_match_list_but_copy_to_project_is_blocked(
 
     assert templates.constants() == {"site": "template-default"}
     assert configuration.constants() == {}
+
+
+def test_copy_module_template_uses_project_configuration_transaction(
+    tmp_path,
+) -> None:
+    installation = tmp_path / "install"
+    templates = TemplateService(installation)
+    template_module = _module("AnatQC", "Template label")
+    template_module.button = {"help": "SOP"}
+    source = templates.add_module(template_module, display_order=10)
+    project_service = ProjectService(installation / "projects.json")
+    configuration = ConfigurationService(project_service, TableService())
+    configuration.create_project("SAMPLE", tmp_path)
+    candidate = deepcopy(source.module)
+    candidate.name = "ProjectAnatQC"
+    candidate.label = "Project label"
+
+    copied_name = ProjectTemplateService(
+        templates
+    ).copy_module_to_project(
+        source.module_id,
+        configuration,
+        candidate=candidate,
+    )
+
+    assert copied_name == "ProjectAnatQC"
+    copied = next(
+        module
+        for module in configuration.modules()
+        if module.name == "ProjectAnatQC"
+    )
+    assert copied.label == "Project label"
+    assert copied.button == {"help": "SOP"}
+    project_records = ModuleRepository(
+        project_service.current_project.path / "modules",
+        scope="project",
+    ).snapshot()
+    assert any(
+        record.module.name == "ProjectAnatQC"
+        for record in project_records.records
+    )
+    assert any(
+        payload["name"] == "ProjectAnatQC"
+        for payload in project_service.settings["qcmodule"].values()
+    )
+    assert templates.module(source.module_id).module.label == "Template label"
+
+    edited_template = deepcopy(source.module)
+    edited_template.label = "Changed template"
+    templates.save_module(
+        ModuleRecord.create(
+            edited_template,
+            scope="template",
+            display_order=source.display_order,
+            module_id=source.module_id,
+        )
+    )
+    with pytest.raises(TemplateServiceError, match="ProjectAnatQC"):
+        ProjectTemplateService(templates).copy_module_to_project(
+            source.module_id,
+            configuration,
+            candidate=candidate,
+        )
+    assert next(
+        module
+        for module in configuration.modules()
+        if module.name == "ProjectAnatQC"
+    ).label == "Project label"

@@ -5,7 +5,7 @@ from threading import Event, get_ident
 
 import pandas as pd
 from shiboken6 import isValid
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QSettings, QSize, Qt, QTimer
 from PySide6.QtGui import QDesktopServices, QFontDatabase
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -25,9 +25,13 @@ from PySide6.QtWidgets import (
 from core.configuration_service import ConfigurationService
 from core.event_bus import EventType
 from core.project_service import ProjectService
+from core.project_template_service import ProjectTemplateService
 from core.table_service import TableService
+from core.template_service import TemplateService
 from gui_qt import project_config_workspace as workspace_module
+from gui_qt.i18n import LanguageController
 from gui_qt.project_config_workspace import QtProjectConfigWorkspace
+from models.qcmodule import QCModule
 from models.table_view_state import (
     FilterCondition,
     FilterExpression,
@@ -1203,3 +1207,117 @@ def test_module_export_runs_in_background_and_reports_completion(
     qtbot.waitUntil(lambda: not workspace.io_task_controller.busy, timeout=2000)
     assert output.exists()
     assert "导出完成" in workspace.status_label.text()
+
+
+def test_project_workspace_copies_editable_constant_and_module_templates(
+    qtbot,
+    tmp_path,
+) -> None:
+    templates = TemplateService(tmp_path / "install")
+    templates.set_constant("DATA_ROOT", "/template")
+    source = templates.add_module(
+        QCModule(
+            name="AnatQC",
+            label="Template label",
+            code="freeview {image}",
+            button={"help": "SOP"},
+        ),
+        display_order=10,
+    )
+    config = ConfigurationService(
+        ProjectService(tmp_path / "install" / "projects.json"),
+        TableService(),
+    )
+    config.create_project("SAMPLE", tmp_path)
+    config.replace_subjects(
+        pd.DataFrame({"ezqcid": ["SUB001"], "image": ["/data/1.nii.gz"]})
+    )
+    language = LanguageController(
+        settings=QSettings(
+            str(tmp_path / "language.ini"),
+            QSettings.IniFormat,
+        )
+    )
+    workspace = QtProjectConfigWorkspace(
+        config,
+        templates=templates,
+        project_templates=ProjectTemplateService(templates),
+        language=language,
+    )
+    qtbot.addWidget(workspace)
+    qtbot.waitUntil(lambda: not workspace.io_task_controller.busy, timeout=2000)
+    workspace.resize(980, 720)
+    workspace.show()
+
+    workspace.tabs.setCurrentWidget(workspace.constants_tab)
+    assert workspace.constant_from_template_button.isVisible()
+    qtbot.mouseClick(workspace.constant_from_template_button, Qt.LeftButton)
+    constant_dialog = workspace.constant_template_dialog
+    assert constant_dialog is not None
+    qtbot.mouseClick(constant_dialog.cancel_button, Qt.LeftButton)
+    assert config.constants() == {}
+
+    qtbot.mouseClick(workspace.constant_from_template_button, Qt.LeftButton)
+    constant_dialog = workspace.constant_template_dialog
+    constant_dialog.candidate_name.setText("PROJECT_ROOT")
+    constant_dialog.candidate_value.setText("/project")
+    qtbot.mouseClick(constant_dialog.copy_button, Qt.LeftButton)
+    assert config.constants()["PROJECT_ROOT"] == "/project"
+    assert templates.constants() == {"DATA_ROOT": "/template"}
+
+    workspace.tabs.setCurrentWidget(workspace.modules_tab)
+    assert workspace.module_from_template_button.isVisible()
+    qtbot.mouseClick(workspace.module_from_template_button, Qt.LeftButton)
+    module_dialog = workspace.module_template_dialog
+    assert module_dialog is not None
+    module_dialog.editor.module_name.setText("ProjectAnatQC")
+    module_dialog.editor.module_label.setText("Project label")
+    qtbot.mouseClick(module_dialog.copy_button, Qt.LeftButton)
+
+    copied = next(
+        module
+        for module in config.modules()
+        if module.name == "ProjectAnatQC"
+    )
+    assert copied.label == "Project label"
+    assert copied.button == {"help": "SOP"}
+    assert templates.module(source.module_id).module.name == "AnatQC"
+    assert templates.module(source.module_id).module.label == "Template label"
+
+
+def test_project_template_copy_dialog_keeps_conflict_visible(
+    qtbot,
+    tmp_path,
+) -> None:
+    templates = TemplateService(tmp_path / "install")
+    templates.set_constant("site", "template")
+    config = ConfigurationService(
+        ProjectService(tmp_path / "install" / "projects.json"),
+        TableService(),
+    )
+    config.create_project("SAMPLE", tmp_path)
+    config.replace_subjects(
+        pd.DataFrame({"ezqcid": ["SUB001"], "site": ["A"]})
+    )
+    language = LanguageController(
+        settings=QSettings(
+            str(tmp_path / "language.ini"),
+            QSettings.IniFormat,
+        )
+    )
+    workspace = QtProjectConfigWorkspace(
+        config,
+        templates=templates,
+        project_templates=ProjectTemplateService(templates),
+        language=language,
+    )
+    qtbot.addWidget(workspace)
+    qtbot.waitUntil(lambda: not workspace.io_task_controller.busy, timeout=2000)
+
+    workspace.constant_from_template_button.click()
+    dialog = workspace.constant_template_dialog
+    qtbot.mouseClick(dialog.copy_button, Qt.LeftButton)
+
+    assert dialog.isVisible()
+    assert "site" in dialog.error_label.text()
+    assert config.constants() == {}

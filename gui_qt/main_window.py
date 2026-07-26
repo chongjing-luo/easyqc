@@ -351,6 +351,9 @@ class QtMainWindow(QMainWindow):
             auto_refresh=False,
             project_loader=self.load_project,
             module_launcher=self.start_qc_module,
+            templates=self.services.template_service,
+            project_templates=self.services.project_template_service,
+            language=self.language,
         )
         self.config_workspace.module_filter_task_controller.busyChanged.connect(
             self._set_module_config_filter_busy
