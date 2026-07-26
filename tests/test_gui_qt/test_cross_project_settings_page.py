@@ -88,6 +88,32 @@ def test_cross_project_page_constant_crud_execution_and_language(
     assert page.save_execution_button.text() == "Save execution mode"
 
 
+def test_constant_delete_action_requires_a_visible_selection(
+    qtbot,
+    tmp_path,
+) -> None:
+    page, templates, _executor, _language = _page(qtbot, tmp_path)
+
+    assert page.constants_table.rowCount() == 0
+    assert page.delete_constant_button.isEnabled() is False
+
+    templates.set_constant("DATA_ROOT", "/data")
+    page.refresh_constants()
+    assert page.constants_table.rowCount() == 1
+    assert page.delete_constant_button.isEnabled() is False
+
+    page.constants_table.selectRow(0)
+    assert page.delete_constant_button.isEnabled() is True
+
+    page.constant_search.setText("not-visible")
+    assert page.constants_table.isRowHidden(0) is True
+    assert page.delete_constant_button.isEnabled() is False
+
+    page.constant_search.clear()
+    assert page.constants_table.isRowHidden(0) is False
+    assert page.delete_constant_button.isEnabled() is True
+
+
 def test_cross_project_page_module_editor_preserves_hidden_payload(
     qtbot,
     tmp_path,

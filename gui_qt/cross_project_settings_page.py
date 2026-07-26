@@ -170,6 +170,9 @@ class QtCrossProjectSettingsPage(QWidget):
             self._delete_selected_constant
         )
         self.constant_search.textChanged.connect(self._filter_constants)
+        self.constants_table.itemSelectionChanged.connect(
+            self._update_constant_actions
+        )
         self.constants_table.cellDoubleClicked.connect(
             self._edit_constant_row
         )
@@ -325,6 +328,7 @@ class QtCrossProjectSettingsPage(QWidget):
         self.constant_empty_label.setVisible(not constants)
         self._set_constant_error("")
         self._filter_constants(self.constant_search.text())
+        self._update_constant_actions()
 
     @Slot()
     def _save_constant(self) -> None:
@@ -392,6 +396,17 @@ class QtCrossProjectSettingsPage(QWidget):
                 row,
                 bool(normalized and normalized not in text),
             )
+        self._update_constant_actions()
+
+    @Slot()
+    def _update_constant_actions(self) -> None:
+        row = self.constants_table.currentRow()
+        selected = (
+            row >= 0
+            and self.constants_table.item(row, 0) is not None
+            and not self.constants_table.isRowHidden(row)
+        )
+        self.delete_constant_button.setEnabled(selected)
 
     def _set_constant_error(self, message: str) -> None:
         text = str(message).strip()
