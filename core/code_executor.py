@@ -209,10 +209,12 @@ class CodeExecutor:
     def _command_for_subprocess(
         self,
         command: str | Sequence[str],
+        *,
+        shell_enabled: bool,
     ) -> str | list[str]:
         """Return one command in the shape required by the selected mode."""
 
-        if not self.shell_enabled:
+        if not shell_enabled:
             return self.split_command(command)
         if isinstance(command, str):
             if not command.strip():
@@ -280,14 +282,18 @@ class CodeExecutor:
         cwd: str | os.PathLike[str] | None = None,
         timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        args = self._command_for_subprocess(command)
+        shell_enabled = self.shell_enabled
+        args = self._command_for_subprocess(
+            command,
+            shell_enabled=shell_enabled,
+        )
         command_label = self._command_label(args)
         temp_files = self._consume_pending_temp_files()
         try:
             return subprocess.run(
                 args,
                 cwd=cwd,
-                shell=self.shell_enabled,
+                shell=shell_enabled,
                 check=False,
                 text=True,
                 capture_output=True,
@@ -312,12 +318,16 @@ class CodeExecutor:
         command: str | Sequence[str],
         cwd: str | os.PathLike[str] | None = None,
     ) -> subprocess.Popen:
-        args = self._command_for_subprocess(command)
+        shell_enabled = self.shell_enabled
+        args = self._command_for_subprocess(
+            command,
+            shell_enabled=shell_enabled,
+        )
         command_label = self._command_label(args)
         temp_files = self._consume_pending_temp_files()
         popen_kwargs: dict[str, Any] = {
             "cwd": cwd,
-            "shell": self.shell_enabled,
+            "shell": shell_enabled,
             "stdout": subprocess.DEVNULL,
             "stderr": subprocess.DEVNULL,
         }

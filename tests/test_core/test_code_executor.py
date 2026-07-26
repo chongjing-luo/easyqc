@@ -104,6 +104,32 @@ def test_start_command_uses_current_shell_setting(monkeypatch) -> None:
     assert observed[1][1]["shell"] is True
 
 
+def test_run_command_uses_one_shell_mode_snapshot(monkeypatch) -> None:
+    observed = []
+    executor = CodeExecutor(shell_enabled=False)
+    original_prepare = executor._command_for_subprocess
+
+    def prepare_then_toggle(command, *, shell_enabled):
+        prepared = original_prepare(
+            command,
+            shell_enabled=shell_enabled,
+        )
+        executor.set_shell_enabled(True)
+        return prepared
+
+    def fake_run(command, **options):
+        observed.append((command, options))
+        return __import__("subprocess").CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(executor, "_command_for_subprocess", prepare_then_toggle)
+    monkeypatch.setattr("core.code_executor.subprocess.run", fake_run)
+
+    executor.run_command("viewer image.nii.gz")
+
+    assert observed[0][0] == ["viewer", "image.nii.gz"]
+    assert observed[0][1]["shell"] is False
+
+
 def test_split_command_handles_legacy_line_continuations() -> None:
     executor = CodeExecutor()
 
