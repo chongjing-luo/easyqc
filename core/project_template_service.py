@@ -39,21 +39,13 @@ class ProjectTemplateService:
             if candidate_name is None
             else candidate_name.strip()
         )
-        if not name or not name.isidentifier():
-            raise TemplateServiceError(
-                f"invalid project constant name: {name!r}"
-            )
-        if name in configuration.constants():
-            raise TemplateServiceError(
-                f"project constant already exists: {name}"
-            )
         value = (
             self.templates.constant(template_name)
             if candidate_value is _USE_TEMPLATE_VALUE
             else deepcopy(candidate_value)
         )
         try:
-            configuration.set_constant(name, value)
+            configuration.add_constant(name, value)
         except ValueError as exc:
             raise TemplateServiceError(str(exc)) from exc
         return name

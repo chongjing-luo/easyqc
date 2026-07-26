@@ -201,6 +201,25 @@ def test_subject_merge_and_constant_column_collisions_fail_loud(tmp_path) -> Non
         )
 
 
+def test_project_constant_add_and_update_use_first_name_rule(tmp_path) -> None:
+    service, _ = _service(tmp_path)
+    service.replace_subjects(_subjects())
+    service.add_constant("DATA_ROOT", "/first")
+
+    with pytest.raises(ConfigurationError, match="DATA_ROOT"):
+        service.add_constant("DATA_ROOT", "/second")
+
+    service.update_constant("DATA_ROOT", "DATA_ROOT", "/edited")
+    service.add_constant("OUTPUT_ROOT", "/output")
+    with pytest.raises(ConfigurationError, match="OUTPUT_ROOT"):
+        service.update_constant("DATA_ROOT", "OUTPUT_ROOT", "/renamed")
+
+    assert service.constants() == {
+        "DATA_ROOT": "/edited",
+        "OUTPUT_ROOT": "/output",
+    }
+
+
 def test_failed_settings_commit_restores_in_memory_and_disk(monkeypatch, tmp_path) -> None:
     service, projects = _service(tmp_path)
     before = projects.current_project.settings_path.read_text(encoding="utf-8")

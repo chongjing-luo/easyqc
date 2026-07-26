@@ -138,6 +138,22 @@ def test_viewer_plan_launch_navigation_and_close_use_code_executor(tmp_path) -> 
     assert executor.close_calls == 2
 
 
+def test_viewer_plan_rejects_project_constant_row_column_collision(tmp_path) -> None:
+    subjects = _subjects().assign(project=["row-a", "row-b", "row-c"])
+    workflow = QcWorkflowService(
+        _module(),
+        subjects,
+        rating_dir=tmp_path / "ratings",
+        constants={"project": "constant-value"},
+        code_executor=_FakeExecutor(),
+    )
+
+    with pytest.raises(QcSessionError, match="project"):
+        workflow.viewer_plan()
+
+    assert workflow.current_module.code_exe is None
+
+
 def test_partial_viewer_launch_failure_cleans_started_processes(tmp_path) -> None:
     executor = _FakeExecutor()
 

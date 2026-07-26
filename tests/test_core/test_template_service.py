@@ -221,3 +221,27 @@ def test_template_to_project_to_view_command_first_throughput(tmp_path) -> None:
     assert configuration.constants() == {"DATA_ROOT": "/images"}
     assert workflow.viewer_plan().rendered_template == "viewer /images/row001.nii.gz"
     assert templates.constants() == {"DATA_ROOT": "/images"}
+
+
+def test_template_constant_can_match_list_but_copy_to_project_is_blocked(
+    tmp_path,
+) -> None:
+    installation = tmp_path / "install"
+    templates = TemplateService(installation)
+    templates.set_constant("site", "template-default")
+    project_service = ProjectService(installation / "projects.json")
+    configuration = ConfigurationService(project_service, TableService())
+    configuration.create_project("SAMPLE", tmp_path)
+    configuration.replace_subjects(
+        pd.DataFrame({"ezqcid": ["ROW001"], "site": ["project-row"]}),
+        notify=False,
+    )
+
+    with pytest.raises(TemplateServiceError, match="site"):
+        ProjectTemplateService(templates).copy_constant(
+            "site",
+            configuration,
+        )
+
+    assert templates.constants() == {"site": "template-default"}
+    assert configuration.constants() == {}

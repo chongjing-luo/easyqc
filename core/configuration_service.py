@@ -735,6 +735,60 @@ class ConfigurationService:
         except ValueError as exc:
             raise ConfigurationError(str(exc)) from exc
 
+    @staticmethod
+    def _constant_name(name: str) -> str:
+        normalized = name.strip()
+        if not normalized or not normalized.isidentifier():
+            raise ConfigurationError(f"Invalid constant name: {normalized!r}")
+        return normalized
+
+    def add_constant(self, name: str, value: Any) -> None:
+        """Add one absent project constant through the settings transaction.
+
+        ``name`` must be a Python identifier not already owned by either the
+        project constants or current master-list columns. The only side effect
+        is one settings commit; rejected candidates do not mutate the project.
+        """
+
+        normalized = self._constant_name(name)
+        candidate = self._settings_candidate()
+        constants = candidate.setdefault("constants", {})
+        if normalized in constants:
+            raise ConfigurationError(f"Constant already exists: {normalized}")
+        if normalized in set(map(str, self.subjects().columns)):
+            raise ConfigurationError(
+                f"Constant conflicts with list column: {normalized}"
+            )
+        constants[normalized] = value
+        self.project_service.commit_settings(candidate)
+
+    def update_constant(
+        self,
+        old_name: str,
+        name: str,
+        value: Any,
+    ) -> None:
+        """Update or rename one existing project constant atomically."""
+
+        source_name = old_name.strip()
+        normalized = self._constant_name(name)
+        candidate = self._settings_candidate()
+        constants = candidate.setdefault("constants", {})
+        if source_name not in constants:
+            raise ConfigurationError(f"Constant does not exist: {source_name}")
+        if normalized != source_name:
+            if normalized in constants:
+                raise ConfigurationError(
+                    f"Constant already exists: {normalized}"
+                )
+            if normalized in set(map(str, self.subjects().columns)):
+                raise ConfigurationError(
+                    f"Constant conflicts with list column: {normalized}"
+                )
+            del constants[source_name]
+        constants[normalized] = value
+        self.project_service.commit_settings(candidate)
+
     def set_constant(
         self,
         name: str,
@@ -742,19 +796,14 @@ class ConfigurationService:
         *,
         old_name: str | None = None,
     ) -> None:
-        name = name.strip()
-        if not name or not name.isidentifier():
-            raise ConfigurationError(f"Invalid constant name: {name!r}")
-        if name in set(map(str, self.subjects().columns)):
-            raise ConfigurationError(f"Constant conflicts with list column: {name}")
-        candidate = self._settings_candidate()
-        constants = candidate.setdefault("constants", {})
-        if old_name and old_name != name:
-            if name in constants:
-                raise ConfigurationError(f"Constant already exists: {name}")
-            constants.pop(old_name, None)
-        constants[name] = value
-        self.project_service.commit_settings(candidate)
+        """Compatibility upsert; new callers should choose add or update."""
+
+        normalized = self._constant_name(name)
+        source_name = old_name.strip() if old_name is not None else normalized
+        if source_name in self.constants():
+            self.update_constant(source_name, normalized, value)
+        else:
+            self.add_constant(normalized, value)
 
     def delete_constant(self, name: str) -> bool:
         candidate = self._settings_candidate()

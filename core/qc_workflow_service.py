@@ -367,6 +367,14 @@ class QcWorkflowService:
         row = self._source.iloc[self._current_index]
         if self._normalize_identity(row["ezqcid"]) != self.current_ezqcid:
             raise QcIdentityError("Current ezqcid no longer resolves to its stable source row")
+        collisions = sorted(
+            set(map(str, row.index)) & set(map(str, self._constants))
+        )
+        if collisions:
+            raise QcSessionError(
+                "Viewer variables conflict between project constants and "
+                f"list columns: {collisions}"
+            )
         variables = {**row.to_dict(), **self._constants}
         rendered, commands = self._code_executor.render_command_plan(template, variables)
         if not commands:
