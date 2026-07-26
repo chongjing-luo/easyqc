@@ -253,13 +253,13 @@ def test_empty_product_shell_keeps_configuration_available_without_writes(qtbot,
     qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
 
     assert window.current_context.project_name == ""
-    assert window.workspace_stack.count() == 6
+    assert window.workspace_stack.count() == 7
     assert window.navigation.currentRow() == window.project_page_index
     assert "尚未打开项目" in window.shell_empty_label.text()
     assert not registry.exists()
 
 
-def test_qt_main_window_uses_six_direct_navigation_pages(qtbot, tmp_path) -> None:
+def test_qt_main_window_uses_seven_direct_navigation_pages(qtbot, tmp_path) -> None:
     window, services = _window(qtbot, tmp_path)
 
     assert window.current_context.project_name == "SAMPLE"
@@ -276,6 +276,7 @@ def test_qt_main_window_uses_six_direct_navigation_pages(qtbot, tmp_path) -> Non
         "常量设置",
         "质控模块",
         "质控结果",
+        "跨项目设置",
     ]
     assert window.navigation.item(0).text() == ""
     assert (
@@ -286,7 +287,7 @@ def test_qt_main_window_uses_six_direct_navigation_pages(qtbot, tmp_path) -> Non
     assert window.project_navigation_context.text() == "SAMPLE"
     assert window.project_navigation_context.isVisibleTo(window.navigation)
     assert window.findChild(QLabel, "activeProjectSummary") is None
-    assert window.workspace_stack.count() == 6
+    assert window.workspace_stack.count() == 7
     assert window.findChild(QListWidget, "primaryNavigation") is window.navigation
     assert window.findChild(QStackedWidget, "workspaceStack") is window.workspace_stack
     assert window.findChild(QTabWidget, "productWorkspaces") is None
@@ -313,6 +314,7 @@ def test_qt_main_window_navigation_switches_exact_page(qtbot, tmp_path) -> None:
         window.constants_page,
         window.modules_page,
         window.results_page,
+        window.cross_project_settings_page,
     )
     for row, page in enumerate(window.direct_pages):
         window.navigation.setCurrentRow(row)
@@ -320,7 +322,7 @@ def test_qt_main_window_navigation_switches_exact_page(qtbot, tmp_path) -> None:
         assert window.workspace_stack.currentWidget() is page
 
 
-def test_runtime_language_switch_updates_six_pages_and_preserves_context(
+def test_runtime_language_switch_updates_seven_pages_and_preserves_context(
     qtbot,
     tmp_path,
 ) -> None:
@@ -367,10 +369,11 @@ def test_runtime_language_switch_updates_six_pages_and_preserves_context(
         "Project selection",
         "QC list import",
         "Pre-QC list",
-        "Constants",
-        "QC modules",
-        "QC results",
-    ]
+            "Constants",
+            "QC modules",
+            "QC results",
+            "Cross-project settings",
+        ]
     assert window.navigation.item(0).text() == ""
     assert window.project_navigation_label.text() == "Project selection"
     assert window.project_navigation_context.text() == "SAMPLE"
@@ -444,6 +447,10 @@ def test_navigation_can_collapse_and_restore_current_workspace(
     assert not window.navigation_collapsed
     assert window.navigation_panel.minimumWidth() >= 202
     assert window.navigation.isVisible()
+    expanded_toggle_y = (
+        window.navigation_header.y()
+        + window.navigation_toggle_button.y()
+    )
     qtbot.mouseClick(window.navigation_toggle_button, Qt.LeftButton)
 
     assert window.navigation_collapsed
@@ -451,7 +458,12 @@ def test_navigation_can_collapse_and_restore_current_workspace(
     assert window.navigation_toggle_button.isVisible()
     assert not window.navigation.isVisible()
     assert not window.language_bar.isVisible()
-    assert not window.settings_button.isVisible()
+    assert not hasattr(window, "settings_button")
+    assert (
+        window.navigation_header.y()
+        + window.navigation_toggle_button.y()
+        == expanded_toggle_y
+    )
     assert window.workspace_stack.currentWidget() is selected_page
     assert window.navigation.currentRow() == window.results_page_index
 
@@ -462,12 +474,17 @@ def test_navigation_can_collapse_and_restore_current_workspace(
     assert window.navigation_panel.minimumWidth() >= 202
     assert window.navigation.isVisible()
     assert window.language_bar.isVisible()
-    assert window.settings_button.isVisible()
+    assert not hasattr(window, "settings_button")
+    assert (
+        window.navigation_header.y()
+        + window.navigation_toggle_button.y()
+        == expanded_toggle_y
+    )
     assert window.workspace_stack.currentWidget() is selected_page
     assert window.navigation.currentRow() == window.results_page_index
 
 
-def test_navigation_settings_button_updates_shared_shell_mode_and_persists(
+def test_cross_project_navigation_page_owns_installation_execution_setting(
     qtbot,
     tmp_path,
 ) -> None:
@@ -487,15 +504,20 @@ def test_navigation_settings_button_updates_shared_shell_mode_and_persists(
     window.show()
     qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
 
-    assert window.settings_button.text() == "设置"
     assert window.services.code_executor.shell_enabled is False
-    qtbot.mouseClick(window.settings_button, Qt.LeftButton)
-    dialog = window.execution_settings_dialog
-    assert dialog is not None
-    dialog.shell_radio.click()
-    qtbot.mouseClick(dialog.save_button, Qt.LeftButton)
+    assert not hasattr(window, "settings_button")
+    window.navigation.setCurrentRow(window.cross_project_settings_page_index)
+    assert window.workspace_stack.currentWidget() is (
+        window.cross_project_settings_page
+    )
+    page = window.cross_project_settings_page
+    page.tabs.setCurrentWidget(page.execution_tab)
+    page.shell_radio.click()
+    qtbot.mouseClick(page.save_execution_button, Qt.LeftButton)
 
     assert window.services.code_executor.shell_enabled is True
+    assert services.template_service.shell_enabled() is True
+    settings.setValue("viewer/use_shell", False)
     settings.sync()
 
     replacement_services = build_app_services(tmp_path / "other-projects.json")
@@ -512,7 +534,10 @@ def test_navigation_settings_button_updates_shared_shell_mode_and_persists(
     assert replacement.services.code_executor.shell_enabled is True
 
     language.set_language("en")
-    assert window.settings_button.text() == "Settings"
+    assert window.navigation.item(
+        window.cross_project_settings_page_index
+    ).text() == "Cross-project settings"
+    assert page.tabs.tabText(2) == "Command execution"
 
 
 def test_single_language_button_toggles_without_losing_page_or_draft(
@@ -587,7 +612,7 @@ def test_runtime_language_switch_preserves_module_and_rater_text(
     assert start_button.accessibleName() == "Start QC 常量设置"
 
 
-def test_all_six_pages_have_no_untranslated_chinese_in_english_mode(
+def test_all_seven_pages_have_no_untranslated_chinese_in_english_mode(
     qtbot,
     tmp_path,
 ) -> None:
@@ -1091,7 +1116,7 @@ def test_shell_uses_neutral_list_language_for_visible_context(qtbot, tmp_path) -
     assert "subject" not in visible_shell_text
 
 
-def test_all_six_pages_use_approved_runtime_vocabulary_without_repeated_titles(
+def test_all_seven_pages_use_approved_runtime_vocabulary_without_repeated_titles(
     qtbot,
     tmp_path,
 ) -> None:

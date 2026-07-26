@@ -311,6 +311,10 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
         ),
     },
     "nav.constants": {"zh_CN": "常量设置", "en": "Constants"},
+    "nav.cross_project": {
+        "zh_CN": "跨项目设置",
+        "en": "Cross-project settings",
+    },
     "nav.import": {"zh_CN": "质控名单导入", "en": "QC list import"},
     "nav.modules": {"zh_CN": "质控模块", "en": "QC modules"},
     "nav.pre_qc": {"zh_CN": "质控前名单", "en": "Pre-QC list"},

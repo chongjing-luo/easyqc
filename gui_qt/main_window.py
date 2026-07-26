@@ -1,4 +1,4 @@
-"""Qt product shell exposing the six user tasks as direct navigation pages."""
+"""Qt product shell exposing seven direct workflow/settings destinations."""
 
 from __future__ import annotations
 
@@ -40,11 +40,8 @@ from core.project_context_service import (
 )
 from core.qc_workflow_service import QcWorkflowService
 from core.table_view_service import TableViewService
+from gui_qt.cross_project_settings_page import QtCrossProjectSettingsPage
 from gui_qt.filter_dialog import FilterDialog
-from gui_qt.execution_settings_dialog import (
-    ViewerExecutionSettingsDialog,
-    apply_persisted_viewer_execution_setting,
-)
 from gui_qt.i18n import (
     LanguageController,
     get_or_create_language_controller,
@@ -101,6 +98,7 @@ class QtMainWindow(QMainWindow):
         "nav.constants",
         "nav.modules",
         "nav.results",
+        "nav.cross_project",
     )
     NAVIGATION_LABELS = (
         "项目选择",
@@ -109,6 +107,7 @@ class QtMainWindow(QMainWindow):
         "常量设置",
         "质控模块",
         "质控结果",
+        "跨项目设置",
     )
     EXPANDED_NAVIGATION_MIN_WIDTH = 202
     EXPANDED_NAVIGATION_MAX_WIDTH = 248
@@ -129,12 +128,6 @@ class QtMainWindow(QMainWindow):
             raise TypeError("QtMainWindow table source must be a pandas DataFrame or None")
         self.services = services
         self.language = language or get_or_create_language_controller()
-        self.application_settings = settings if settings is not None else QSettings()
-        apply_persisted_viewer_execution_setting(
-            self.services.code_executor,
-            self.application_settings,
-        )
-        self.execution_settings_dialog: ViewerExecutionSettingsDialog | None = None
         self.context_service = services.project_context_service
         self._injected_preview = source is not None
         self.initialization_complete = False
@@ -224,7 +217,7 @@ class QtMainWindow(QMainWindow):
         self.navigation_panel = QWidget(central)
         self.navigation_panel.setObjectName("primaryNavigationPanel")
         self.navigation_layout = QVBoxLayout(self.navigation_panel)
-        self.navigation_layout.setContentsMargins(16, 20, 16, 16)
+        self.navigation_layout.setContentsMargins(16, 16, 16, 16)
         self.navigation_layout.setSpacing(12)
         self.navigation_header = QWidget(self.navigation_panel)
         self.navigation_header.setObjectName("navigationHeader")
@@ -244,7 +237,11 @@ class QtMainWindow(QMainWindow):
         self.navigation_toggle_button.setMaximumWidth(CONTROL_SPACING * 4)
         self.navigation_toggle_button.clicked.connect(self._toggle_navigation)
         navigation_header_layout.addWidget(self.navigation_toggle_button)
-        self.navigation_layout.addWidget(self.navigation_header)
+        self.navigation_layout.addWidget(
+            self.navigation_header,
+            0,
+            Qt.AlignTop,
+        )
         self.product_tagline_label = QLabel(
             "质控工作台",
             self.navigation_panel,
@@ -294,10 +291,6 @@ class QtMainWindow(QMainWindow):
         language_layout = QVBoxLayout(self.language_bar)
         language_layout.setContentsMargins(0, 12, 0, 0)
         language_layout.setSpacing(CONTROL_SPACING)
-        self.settings_button = QPushButton("设置", self.language_bar)
-        self.settings_button.setObjectName("settingsButton")
-        self.settings_button.clicked.connect(self._open_execution_settings)
-        language_layout.addWidget(self.settings_button)
         self.language_button = QPushButton("English", self.language_bar)
         self.language_button.setObjectName("languageToggle")
         self.language_button.clicked.connect(self._toggle_language)
@@ -509,6 +502,13 @@ class QtMainWindow(QMainWindow):
             lambda _busy: self._update_context_controls()
         )
 
+        self.cross_project_settings_page = QtCrossProjectSettingsPage(
+            self.services.template_service,
+            self.services.code_executor,
+            self.language,
+            self.workspace_stack,
+        )
+
         self.direct_pages = (
             self.project_page,
             self.qc_list_import_page,
@@ -516,6 +516,7 @@ class QtMainWindow(QMainWindow):
             self.constants_page,
             self.modules_page,
             self.results_page,
+            self.cross_project_settings_page,
         )
         for page in self.direct_pages:
             self.workspace_stack.addWidget(page)
@@ -526,6 +527,7 @@ class QtMainWindow(QMainWindow):
             self.constants_page_index,
             self.modules_page_index,
             self.results_page_index,
+            self.cross_project_settings_page_index,
         ) = range(len(self.direct_pages))
         self.variables_page_index = self.qc_list_import_page_index
         self.subjects_page_index = self.pre_qc_list_page_index
@@ -562,17 +564,6 @@ class QtMainWindow(QMainWindow):
         self.language.set_language(target)
 
     @Slot()
-    def _open_execution_settings(self) -> None:
-        dialog = ViewerExecutionSettingsDialog(
-            self.services.code_executor,
-            self.application_settings,
-            self.language,
-            self,
-        )
-        self.execution_settings_dialog = dialog
-        dialog.open()
-
-    @Slot()
     def _toggle_navigation(self) -> None:
         self.set_navigation_collapsed(not self.navigation_collapsed)
 
@@ -589,7 +580,7 @@ class QtMainWindow(QMainWindow):
         ):
             widget.setVisible(visible)
         if self.navigation_collapsed:
-            self.navigation_layout.setContentsMargins(8, 12, 8, 12)
+            self.navigation_layout.setContentsMargins(8, 16, 8, 16)
             self.navigation_panel.setMinimumWidth(0)
             self.navigation_panel.setMaximumWidth(
                 self.COLLAPSED_NAVIGATION_WIDTH
@@ -598,7 +589,7 @@ class QtMainWindow(QMainWindow):
                 self.COLLAPSED_NAVIGATION_WIDTH
             )
         else:
-            self.navigation_layout.setContentsMargins(16, 20, 16, 16)
+            self.navigation_layout.setContentsMargins(16, 16, 16, 16)
             self.navigation_panel.setMaximumWidth(
                 self.EXPANDED_NAVIGATION_MAX_WIDTH
             )
@@ -663,12 +654,6 @@ class QtMainWindow(QMainWindow):
             )
         self.language_button.setAccessibleName(language_description)
         self.language_button.setToolTip(language_description)
-        self.settings_button.setText(self.language.tr("settings.button"))
-        settings_description = self.language.tr(
-            "settings.button_description"
-        )
-        self.settings_button.setAccessibleName(settings_description)
-        self.settings_button.setToolTip(settings_description)
         self._update_navigation_toggle_presentation()
         self.table_workspace.retranslate_ui()
         self.results_workspace.retranslate_ui()
