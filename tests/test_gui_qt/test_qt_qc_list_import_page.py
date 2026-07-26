@@ -5,13 +5,14 @@ from threading import Event
 
 import pandas as pd
 import pytest
-from PySide6.QtCore import QItemSelectionModel, QTimer, Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QAbstractButton,
     QAbstractItemView,
     QComboBox,
     QLabel,
     QLineEdit,
+    QMessageBox,
 )
 
 from core.configuration_service import ConfigurationService
@@ -52,6 +53,34 @@ def _page(qtbot, tmp_path):
 
 def _wait(page, qtbot):
     qtbot.waitUntil(lambda: not page.task_controller.busy, timeout=3000)
+
+
+def _site_filter(*values: str) -> FilterExpression:
+    return FilterExpression(
+        groups=(
+            FilterGroup(
+                group_id="delete-sites",
+                join="any",
+                conditions=tuple(
+                    FilterCondition(
+                        "site",
+                        "==",
+                        value,
+                        f"delete-site-{index}",
+                    )
+                    for index, value in enumerate(values)
+                ),
+            ),
+        )
+    )
+
+
+def _accept_questions(monkeypatch) -> None:
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QMessageBox.Yes,
+    )
 
 
 @pytest.mark.parametrize("source_mode", ["folder", "file", "text"])
@@ -320,30 +349,22 @@ def test_import_preview_context_actions_edit_correct_draft_rows(
         configuration.current_project.table_dir / "ezqc_all.csv"
     ).read_bytes()
 
-    assert page.preview_table.selectionMode() == QAbstractItemView.ExtendedSelection
+    assert page.preview_table.selectionMode() == QAbstractItemView.SingleSelection
     assert page.preview_table.contextMenuPolicy() == Qt.CustomContextMenu
 
     page.preview_search.setText("ROW_D")
     page.preview_search.returnPressed.emit()
     _wait(page, qtbot)
     assert page.draft_position_for_preview_row(0) == 3
-    page.preview_table.selectRow(0)
-    assert page.delete_selected_draft_rows()
+    page.preview_table.clearSelection()
+    assert page.delete_draft_rows_by_filter(_site_filter("D"))
     assert page.draft["ezqcid"].tolist() == ["ROW_A", "ROW_B", "ROW_C"]
 
     assert page.apply_preview_sort((SortRule("site", ascending=False),))
     assert page.draft_position_for_preview_row(0) == 2
     assert page.draft_position_for_preview_row(2) == 0
-    selection = page.preview_table.selectionModel()
-    selection.select(
-        page.preview_model.index(0, 0),
-        QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
-    )
-    selection.select(
-        page.preview_model.index(2, 0),
-        QItemSelectionModel.Select | QItemSelectionModel.Rows,
-    )
-    assert page.delete_selected_draft_rows()
+    page.preview_table.clearSelection()
+    assert page.delete_draft_rows_by_filter(_site_filter("A", "C"))
     assert page.draft["ezqcid"].tolist() == ["ROW_B"]
     assert page.draft.columns.tolist() == ["ezqcid", "site"]
 
@@ -358,14 +379,14 @@ def test_import_preview_context_actions_edit_correct_draft_rows(
     menu = page.create_preview_context_menu(after_position=None)
     assert [action.text() for action in menu.actions()] == [
         "增加空行",
-        "删除选中行",
+        "按条件删除行…",
     ]
     language = get_or_create_language_controller()
     language.set_language("en")
     english_menu = page.create_preview_context_menu(after_position=None)
     assert [action.text() for action in english_menu.actions()] == [
         "Add blank row",
-        "Delete selected rows",
+        "Delete rows by condition…",
     ]
     language.set_language("zh_CN")
     pd.testing.assert_frame_equal(configuration.subjects(), current)
@@ -384,12 +405,24 @@ def test_import_row_edits_feed_the_next_derived_column(qtbot, tmp_path) -> None:
             }
         )
     )
-    selection = page.preview_table.selectionModel()
-    selection.select(
-        page.preview_model.index(1, 0),
-        QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
+    assert page.delete_draft_rows_by_filter(
+        FilterExpression(
+            groups=(
+                FilterGroup(
+                    group_id="delete-y",
+                    join="all",
+                    conditions=(
+                        FilterCondition(
+                            "batch",
+                            "==",
+                            "Y",
+                            "delete-y-condition",
+                        ),
+                    ),
+                ),
+            )
+        )
     )
-    assert page.delete_selected_draft_rows()
 
     qtbot.mouseClick(page.derive_button, Qt.LeftButton)
     dialog = page.derived_column_dialog
@@ -404,7 +437,12 @@ def test_import_row_edits_feed_the_next_derived_column(qtbot, tmp_path) -> None:
     pd.testing.assert_frame_equal(configuration.subjects(), current)
 
 
-def test_merge_columns_applies_once_and_emits_list_change(qtbot, tmp_path) -> None:
+def test_merge_columns_applies_once_and_emits_list_change(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _accept_questions(monkeypatch)
     page, configuration, _current = _page(qtbot, tmp_path)
     source = tmp_path / "columns.csv"
     pd.DataFrame(
@@ -429,7 +467,12 @@ def test_merge_columns_applies_once_and_emits_list_change(qtbot, tmp_path) -> No
     assert not page.error_text
 
 
-def test_append_rows_and_clear_draft_are_explicit(qtbot, tmp_path) -> None:
+def test_append_rows_and_clear_draft_are_explicit(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _accept_questions(monkeypatch)
     page, configuration, _current = _page(qtbot, tmp_path)
     source = tmp_path / "rows.csv"
     pd.DataFrame({"ezqcid": ["SUB003"], "site": ["C"]}).to_csv(
@@ -439,7 +482,10 @@ def test_append_rows_and_clear_draft_are_explicit(qtbot, tmp_path) -> None:
     page.source_path_edit.setText(str(source))
     qtbot.mouseClick(page.read_preview_button, Qt.LeftButton)
     _wait(page, qtbot)
-    qtbot.mouseClick(page.append_rows_radio, Qt.LeftButton)
+    page.write_mode_combo.setCurrentIndex(
+        page.write_mode_combo.findData("append")
+    )
+    assert page.conflict_policy_combo.currentData() == "deduplicate"
 
     qtbot.mouseClick(page.apply_button, Qt.LeftButton)
     _wait(page, qtbot)
@@ -453,16 +499,24 @@ def test_append_rows_and_clear_draft_are_explicit(qtbot, tmp_path) -> None:
     assert configuration.subjects()["ezqcid"].tolist()[-1] == "SUB003"
 
 
-def test_failed_apply_preserves_disk_active_list_and_draft(qtbot, tmp_path) -> None:
+def test_failed_apply_preserves_disk_active_list_and_draft(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _accept_questions(monkeypatch)
     page, configuration, current = _page(qtbot, tmp_path)
     source = tmp_path / "conflict.csv"
-    pd.DataFrame({"ezqcid": ["SUB001"], "site": ["changed"]}).to_csv(
+    pd.DataFrame({"ezqcid": ["SUB001"], "other": ["changed"]}).to_csv(
         source,
         index=False,
     )
     page.source_path_edit.setText(str(source))
     qtbot.mouseClick(page.read_preview_button, Qt.LeftButton)
     _wait(page, qtbot)
+    page.write_mode_combo.setCurrentIndex(
+        page.write_mode_combo.findData("append")
+    )
     draft = page.draft
     table_path = configuration.current_project.table_dir / "ezqc_all.csv"
     before_bytes = table_path.read_bytes()
@@ -533,7 +587,12 @@ def test_reduced_width_keeps_import_and_apply_actions_reachable(qtbot, tmp_path)
     assert page.preview_table.horizontalScrollBarPolicy() == Qt.ScrollBarAsNeeded
 
 
-def test_import_draft_can_generate_missing_ezqcid_then_merge(qtbot, tmp_path) -> None:
+def test_import_draft_can_generate_missing_ezqcid_then_merge(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _accept_questions(monkeypatch)
     page, configuration, _current = _page(qtbot, tmp_path)
     page._install_draft(
         pd.DataFrame(
@@ -696,3 +755,174 @@ def test_failed_folder_pattern_preserves_previous_import_draft(
 
     pd.testing.assert_frame_equal(page.draft, previous)
     assert "正则" in page.error_text
+
+
+def test_import_draft_column_deletion_is_discoverable_and_never_writes_project_data(
+    qtbot,
+    tmp_path,
+) -> None:
+    page, configuration, current = _page(qtbot, tmp_path)
+    page._install_draft(
+        pd.DataFrame(
+            {
+                "ezqcid": ["NEW001", "NEW002"],
+                "site": ["A", "B"],
+                "path": ["/a/one.nii", "/b/two.nii"],
+            }
+        )
+    )
+    table_path = configuration.current_project.table_dir / "ezqc_all.csv"
+    table_before = table_path.read_bytes()
+    rating_path = (
+        configuration.current_project.path
+        / "RatingFiles"
+        / "AnatQC"
+        / "rater1"
+        / "rating.json"
+    )
+    rating_path.parent.mkdir(parents=True)
+    rating_path.write_bytes(b'{"ezqcid":"NEW001","score":"Good"}')
+    rating_before = rating_path.read_bytes()
+
+    assert page.delete_rows_button.text() == "删除行"
+    assert page.delete_column_button.text() == "删除列"
+    page.preview_table.clearSelection()
+    assert page.delete_draft_columns(("site",))
+    assert page.draft.columns.tolist() == ["ezqcid", "path"]
+
+    page.preview_table.clearSelection()
+    assert page.delete_draft_columns(("ezqcid",))
+    assert page.draft.columns.tolist() == ["path"]
+    assert "ezqcid" in page.stats_label.text()
+    assert table_path.read_bytes() == table_before
+    assert rating_path.read_bytes() == rating_before
+    pd.testing.assert_frame_equal(configuration.subjects(), current)
+
+
+def test_import_delete_controls_follow_busy_state_and_language(
+    qtbot,
+    tmp_path,
+) -> None:
+    page, _configuration, _current = _page(qtbot, tmp_path)
+    page._install_draft(pd.DataFrame({"ezqcid": ["NEW001"], "site": ["A"]}))
+    language = get_or_create_language_controller()
+    try:
+        page.preview_table.clearSelection()
+        assert page.delete_rows_button.isEnabled()
+        assert page.delete_column_button.isEnabled()
+
+        page._set_busy(True)
+        assert not page.delete_rows_button.isEnabled()
+        assert not page.delete_column_button.isEnabled()
+        page._set_busy(False)
+
+        language.set_language("en")
+        language.localize_widget_tree(page)
+        assert page.delete_rows_button.text() == "Delete rows"
+        assert page.delete_column_button.text() == "Delete column"
+    finally:
+        language.set_language("zh_CN")
+
+
+def test_import_row_deletion_confirmation_names_scope_and_retained_ratings(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    page, _configuration, _current = _page(qtbot, tmp_path)
+    page._install_draft(
+        pd.DataFrame({"ezqcid": ["NEW001", "NEW002"], "site": ["A", "B"]})
+    )
+    page.preview_table.clearSelection()
+    prompts = []
+
+    def cancel(_parent, title, text, _buttons, _default):
+        prompts.append((title, text))
+        return QMessageBox.No
+
+    monkeypatch.setattr(QMessageBox, "question", cancel)
+
+    dialog = page.open_delete_rows_dialog()
+    assert dialog is not None
+    dialog.editor.set_expression(_site_filter("A"))
+    qtbot.mouseClick(dialog.delete_button, Qt.LeftButton)
+    assert page.draft["ezqcid"].tolist() == ["NEW001", "NEW002"]
+    assert prompts
+    assert prompts[0][0] == "确认删除"
+    assert "1" in prompts[0][1]
+    assert "评分记录" in prompts[0][1]
+
+
+def test_import_write_modes_expose_contextual_conflict_policies(
+    qtbot,
+    tmp_path,
+) -> None:
+    page, _configuration, _current = _page(qtbot, tmp_path)
+    page._install_draft(
+        pd.DataFrame(
+            {"ezqcid": ["SUB001", "SUB003"], "site": ["changed", "C"]}
+        )
+    )
+
+    assert page.write_mode_combo.currentData() == "merge_columns"
+    assert [
+        page.conflict_policy_combo.itemData(index)
+        for index in range(page.conflict_policy_combo.count())
+    ] == ["preserve", "update"]
+    assert "重复列" in page.stats_label.text()
+
+    page.write_mode_combo.setCurrentIndex(
+        page.write_mode_combo.findData("append")
+    )
+    assert [
+        page.conflict_policy_combo.itemData(index)
+        for index in range(page.conflict_policy_combo.count())
+    ] == ["deduplicate", "replace"]
+    assert page.conflict_policy_combo.isVisible()
+
+    page.write_mode_combo.setCurrentIndex(
+        page.write_mode_combo.findData("replace")
+    )
+    assert page.current_import_policy() == ("replace", None)
+    assert not page.conflict_policy_combo.isVisible()
+    assert "替换" in page.stats_label.text()
+
+
+def test_import_append_replace_and_full_replace_follow_selected_policy(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _accept_questions(monkeypatch)
+    page, configuration, _current = _page(qtbot, tmp_path)
+    page._install_draft(
+        pd.DataFrame(
+            {"ezqcid": ["SUB002", "SUB003"], "site": ["B2", "C"]}
+        )
+    )
+    page.write_mode_combo.setCurrentIndex(
+        page.write_mode_combo.findData("append")
+    )
+    page.conflict_policy_combo.setCurrentIndex(
+        page.conflict_policy_combo.findData("replace")
+    )
+
+    qtbot.mouseClick(page.apply_button, Qt.LeftButton)
+    _wait(page, qtbot)
+    assert configuration.subjects().to_dict("records") == [
+        {"ezqcid": "SUB001", "site": "A"},
+        {"ezqcid": "SUB002", "site": "B2"},
+        {"ezqcid": "SUB003", "site": "C"},
+    ]
+
+    page._install_draft(
+        pd.DataFrame({"ezqcid": ["NEW001"], "batch": ["X"]})
+    )
+    page.write_mode_combo.setCurrentIndex(
+        page.write_mode_combo.findData("replace")
+    )
+    qtbot.mouseClick(page.apply_button, Qt.LeftButton)
+    _wait(page, qtbot)
+    assert configuration.subjects().to_dict("records") == [
+        {"ezqcid": "NEW001", "batch": "X"}
+    ]

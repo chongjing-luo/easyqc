@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from typing import Callable
 
 import pandas as pd
-from PySide6.QtCore import QItemSelectionModel, Qt, Signal, Slot
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -22,8 +22,8 @@ from PySide6.QtWidgets import (
     QLayout,
     QLineEdit,
     QMenu,
+    QMessageBox,
     QPushButton,
-    QRadioButton,
     QSizePolicy,
     QSpinBox,
     QStackedWidget,
@@ -37,6 +37,8 @@ from core.configuration_service import ConfigurationService
 from core.table_transform import TableTransformEngine
 from core.table_view_service import TableViewError, TableViewService
 from gui_qt.columns_dialog import ColumnsDialog
+from gui_qt.delete_columns_dialog import DeleteColumnsDialog
+from gui_qt.delete_rows_dialog import DeleteRowsDialog
 from gui_qt.derived_column_dialog import DerivedColumnDialog
 from gui_qt.filter_dialog import FilterDialog
 from gui_qt.i18n import translate_ui_text
@@ -91,6 +93,7 @@ class QtQcListImportPage(QWidget):
         self._preview_draft_positions: tuple[int, ...] = ()
         self._preview_offset = 0
         self._derive_busy = False
+        self._task_busy = False
         self._derive_enabled = self.configuration.current_project is not None
         self._draft_revision = 0
         self._derived_draft_result: tuple[int, str, pd.DataFrame] | None = None
@@ -98,6 +101,8 @@ class QtQcListImportPage(QWidget):
         self.sort_dialog: SortDialog | None = None
         self.columns_dialog: ColumnsDialog | None = None
         self.derived_column_dialog: DerivedColumnDialog | None = None
+        self.delete_rows_dialog: DeleteRowsDialog | None = None
+        self.delete_columns_dialog: DeleteColumnsDialog | None = None
 
         self.task_controller = RevisionedTaskController(self)
         self.task_controller.resultReady.connect(self._handle_result)
@@ -315,6 +320,16 @@ class QtQcListImportPage(QWidget):
         self.sort_button = QPushButton("排序", self)
         self.columns_button = QPushButton("列显示", self)
         self.derive_button = QPushButton("新增列", self)
+        self.delete_rows_button = QPushButton("删除行", self)
+        self.delete_rows_button.setAccessibleName("按条件删除导入草稿行")
+        self.delete_rows_button.setToolTip(
+            "使用筛选条件删除当前导入草稿行；评分记录不会被删除"
+        )
+        self.delete_column_button = QPushButton("删除列", self)
+        self.delete_column_button.setAccessibleName("选择删除导入草稿列")
+        self.delete_column_button.setToolTip(
+            "从列清单选择一个或多个导入草稿列；评分记录不会被删除"
+        )
         self.derive_button.setAccessibleName("为导入草稿新增列")
         self.derive_button.setToolTip(
             "使用导入草稿中的已有列或固定值生成普通新列"
@@ -323,10 +338,14 @@ class QtQcListImportPage(QWidget):
         self.sort_button.clicked.connect(self.open_sort_dialog)
         self.columns_button.clicked.connect(self.open_columns_dialog)
         self.derive_button.clicked.connect(self.open_derived_column_dialog)
+        self.delete_rows_button.clicked.connect(self.open_delete_rows_dialog)
+        self.delete_column_button.clicked.connect(self.open_delete_columns_dialog)
         preview_toolbar.addWidget(self.filter_button)
         preview_toolbar.addWidget(self.sort_button)
         preview_toolbar.addWidget(self.columns_button)
         preview_toolbar.addWidget(self.derive_button)
+        preview_toolbar.addWidget(self.delete_rows_button)
+        preview_toolbar.addWidget(self.delete_column_button)
         layout.addLayout(preview_toolbar)
 
         self.preview_table = QTableView(self)
@@ -334,7 +353,7 @@ class QtQcListImportPage(QWidget):
         self.preview_table.setAccessibleName("只读导入预览")
         self.preview_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.preview_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.preview_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.preview_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.preview_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.preview_table.setAlternatingRowColors(True)
         self.preview_table.setWordWrap(False)
@@ -364,18 +383,30 @@ class QtQcListImportPage(QWidget):
         apply_layout.setContentsMargins(8, 8, 8, 8)
         apply_mode_row = QHBoxLayout()
         apply_mode_row.addWidget(QLabel("写入：质控前名单", apply_panel))
-        self.merge_columns_radio = QRadioButton("按 ezqcid 合并列", apply_panel)
-        self.append_rows_radio = QRadioButton("追加行", apply_panel)
-        self.merge_columns_radio.setChecked(True)
-        self.merge_columns_radio.toggled.connect(self._update_stats)
-        self.append_rows_radio.toggled.connect(self._update_stats)
-        apply_mode_row.addWidget(self.merge_columns_radio)
-        apply_mode_row.addWidget(self.append_rows_radio)
+        self.write_mode_label = QLabel("写入方式", apply_panel)
+        self.write_mode_combo = QComboBox(apply_panel)
+        self.write_mode_label.setBuddy(self.write_mode_combo)
+        self.write_mode_combo.setAccessibleName("质控名单写入方式")
+        self.write_mode_combo.addItem("按 ezqcid 合并列", "merge_columns")
+        self.write_mode_combo.addItem("追加行", "append")
+        self.write_mode_combo.addItem("替换现有名单", "replace")
+        apply_mode_row.addWidget(self.write_mode_label)
+        apply_mode_row.addWidget(self.write_mode_combo)
+        self.conflict_policy_label = QLabel("冲突处理", apply_panel)
+        self.conflict_policy_combo = QComboBox(apply_panel)
+        self.conflict_policy_label.setBuddy(self.conflict_policy_combo)
+        self.conflict_policy_combo.setAccessibleName("质控名单冲突处理")
+        apply_mode_row.addWidget(self.conflict_policy_label)
+        apply_mode_row.addWidget(self.conflict_policy_combo)
         self.stats_label = QLabel("尚未读取导入数据", apply_panel)
         self.stats_label.setObjectName("qcListImportStats")
         self.stats_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         apply_mode_row.addWidget(self.stats_label, 1)
         apply_layout.addLayout(apply_mode_row)
+        self.write_mode_combo.currentIndexChanged.connect(
+            self._sync_import_policy_controls
+        )
+        self.conflict_policy_combo.currentIndexChanged.connect(self._update_stats)
         apply_action_row = QHBoxLayout()
         apply_action_row.addStretch(1)
         self.clear_button = QPushButton("清空导入数据", apply_panel)
@@ -410,6 +441,7 @@ class QtQcListImportPage(QWidget):
         self.error_label.hide()
         layout.addWidget(self.error_label)
 
+        self._sync_import_policy_controls()
         self._sync_folder_match_controls()
 
     def _set_source_mode(self, mode: str) -> None:
@@ -518,13 +550,97 @@ class QtQcListImportPage(QWidget):
             self._set_error("请先读取导入数据")
             return False
         draft = self._draft.copy(deep=True)
-        mode = "rows" if self.append_rows_radio.isChecked() else "columns"
+        mode, conflict_policy = self.current_import_policy()
+        response = QMessageBox.question(
+            self,
+            translate_ui_text("确认写入质控前名单"),
+            translate_ui_text(
+                self._import_confirmation_text(mode, conflict_policy)
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if response != QMessageBox.Yes:
+            return False
 
         def apply() -> pd.DataFrame:
-            self.configuration.merge_subjects(draft, mode=mode, notify=False)
+            self.configuration.import_subjects(
+                draft,
+                mode=mode,
+                conflict_policy=conflict_policy,
+                notify=False,
+            )
             return self.configuration.subjects()
 
         return self._submit("apply", apply)
+
+    def current_import_policy(self) -> tuple[str, str | None]:
+        mode = str(self.write_mode_combo.currentData())
+        policy = (
+            str(self.conflict_policy_combo.currentData())
+            if mode != "replace"
+            else None
+        )
+        return mode, policy
+
+    @Slot()
+    def _sync_import_policy_controls(self) -> None:
+        mode = str(self.write_mode_combo.currentData())
+        current_policy = self.conflict_policy_combo.currentData()
+        self.conflict_policy_combo.blockSignals(True)
+        self.conflict_policy_combo.clear()
+        if mode == "merge_columns":
+            self.conflict_policy_combo.addItem(
+                translate_ui_text("保留已有值"),
+                "preserve",
+            )
+            self.conflict_policy_combo.addItem(
+                translate_ui_text("用导入值更新"),
+                "update",
+            )
+        elif mode == "append":
+            self.conflict_policy_combo.addItem(
+                translate_ui_text("去除重复"),
+                "deduplicate",
+            )
+            self.conflict_policy_combo.addItem(
+                translate_ui_text("用导入行替换"),
+                "replace",
+            )
+        if current_policy is not None:
+            index = self.conflict_policy_combo.findData(current_policy)
+            if index >= 0:
+                self.conflict_policy_combo.setCurrentIndex(index)
+        self.conflict_policy_combo.blockSignals(False)
+        has_policy = mode != "replace"
+        self.conflict_policy_label.setVisible(has_policy)
+        self.conflict_policy_combo.setVisible(has_policy)
+        self._update_stats()
+
+    def _import_confirmation_text(
+        self,
+        mode: str,
+        conflict_policy: str | None,
+    ) -> str:
+        mode_label = {
+            "merge_columns": "按 ezqcid 合并列",
+            "append": "追加行",
+            "replace": "替换现有名单",
+        }[mode]
+        if conflict_policy is None:
+            detail = (
+                f"将使用导入草稿替换现有质控前名单"
+                f"（{len(self._current):,} 行 → {len(self._draft):,} 行）。"
+            )
+        else:
+            policy_label = {
+                "preserve": "保留已有值",
+                "update": "用导入值更新",
+                "deduplicate": "去除重复",
+                "replace": "用导入行替换",
+            }[conflict_policy]
+            detail = f"写入方式：{mode_label}；冲突处理：{policy_label}。"
+        return f"{detail}\n现有评分记录不会被删除。是否继续？"
 
     def _submit(self, operation: str, function: Callable[[], object]) -> bool:
         if operation not in {"read", "search", "apply"}:
@@ -597,6 +713,7 @@ class QtQcListImportPage(QWidget):
 
     @Slot(bool)
     def _set_busy(self, busy: bool) -> None:
+        self._task_busy = bool(busy)
         enabled = not busy
         for widget in (
             self.folder_mode_button,
@@ -621,8 +738,10 @@ class QtQcListImportPage(QWidget):
             self.sort_button,
             self.columns_button,
             self.derive_button,
-            self.merge_columns_radio,
-            self.append_rows_radio,
+            self.delete_rows_button,
+            self.delete_column_button,
+            self.write_mode_combo,
+            self.conflict_policy_combo,
             self.clear_button,
         ):
             widget.setEnabled(enabled)
@@ -989,19 +1108,6 @@ class QtQcListImportPage(QWidget):
             raise IndexError("preview row points outside the import draft")
         return draft_position
 
-    def _selected_draft_positions(self) -> tuple[int, ...]:
-        selection_model = self.preview_table.selectionModel()
-        if selection_model is None:
-            return ()
-        return tuple(
-            sorted(
-                {
-                    self.draft_position_for_preview_row(index.row())
-                    for index in selection_model.selectedRows()
-                }
-            )
-        )
-
     def _replace_draft(
         self,
         frame: pd.DataFrame,
@@ -1046,21 +1152,209 @@ class QtQcListImportPage(QWidget):
         self._set_error("")
         return True
 
-    def delete_selected_draft_rows(self) -> bool:
-        """Delete every selected visible row from the detached import draft."""
+    def _draft_positions_for_filter(
+        self,
+        expression: FilterExpression,
+    ) -> tuple[int, ...]:
+        if not isinstance(expression, FilterExpression):
+            raise TypeError("删除导入草稿行需要筛选表达式")
+        if not expression.groups:
+            raise TableViewError("至少添加一个删除条件")
+        service = TableViewService(self._draft)
+        state = service.default_state(page_size=self.PAGE_SIZE).with_filter(
+            expression
+        )
+        result = service.apply_state(state)
+        return tuple(int(position) for position in result.source_positions)
+
+    def delete_draft_rows_by_filter(
+        self,
+        expression: FilterExpression,
+    ) -> bool:
+        """Delete all full-draft rows matching one explicit filter."""
 
         if self.task_controller.busy or self._derive_busy:
             return False
-        positions = self._selected_draft_positions()
-        if not positions:
+        try:
+            positions = self._draft_positions_for_filter(expression)
+            if not positions:
+                raise TableViewError("删除条件没有匹配任何导入草稿行")
+            result = self._draft.drop(index=list(positions)).reset_index(drop=True)
+            self._replace_draft(result, reset_state=True)
+        except (ArithmeticError, IndexError, RuntimeError, TypeError, ValueError) as exc:
+            self._set_error(str(exc).strip() or type(exc).__name__)
             return False
-        result = self._draft.drop(index=list(positions)).reset_index(drop=True)
-        self._replace_draft(result, reset_state=True)
         self.status_label.setText(
             f"已删除 {len(positions):,} 行导入草稿；尚未写入"
         )
         self._set_error("")
         return True
+
+    def delete_draft_columns(self, columns: tuple[str, ...]) -> bool:
+        """Delete exact checked columns from the detached import draft."""
+
+        if self.task_controller.busy or self._derive_busy:
+            return False
+        if (
+            not isinstance(columns, tuple)
+            or not columns
+            or not all(isinstance(column, str) and column for column in columns)
+            or len(set(columns)) != len(columns)
+        ):
+            self._set_error("至少选择一个要删除的列")
+            return False
+        try:
+            result = TableTransformEngine().drop_columns(
+                self._draft,
+                list(columns),
+            )
+            self._replace_draft(result, reset_state=True)
+        except (ArithmeticError, TypeError, ValueError) as exc:
+            self._set_error(str(exc).strip() or type(exc).__name__)
+            return False
+        names = "、".join(columns)
+        self.status_label.setText(
+            translate_ui_text(
+                f"已删除 {len(columns):,} 个导入草稿列：{names}；尚未写入"
+            )
+        )
+        self._set_error("")
+        return True
+
+    def open_delete_rows_dialog(self) -> DeleteRowsDialog | None:
+        if self._draft.empty or not self._draft.columns.size:
+            self._set_error("当前没有可删除的导入草稿行")
+            return None
+        if self.delete_rows_dialog is not None and self.delete_rows_dialog.isVisible():
+            self.delete_rows_dialog.raise_()
+            self.delete_rows_dialog.activateWindow()
+            return self.delete_rows_dialog
+        initial = (
+            self._preview_state.effective_filter
+            if self._preview_state is not None
+            else FilterExpression()
+        )
+        dialog = DeleteRowsDialog(
+            TableViewService(self._draft).profiles,
+            initial,
+            self,
+        )
+        self.delete_rows_dialog = dialog
+        dialog.deleteRequested.connect(
+            lambda expression, current=dialog: self._delete_rows_from_dialog(
+                current,
+                expression,
+            )
+        )
+        dialog.finished.connect(
+            lambda _result, current=dialog: self._delete_rows_dialog_finished(
+                current
+            )
+        )
+        dialog.open()
+        return dialog
+
+    def _delete_rows_dialog_finished(self, dialog: DeleteRowsDialog) -> None:
+        if self.delete_rows_dialog is dialog:
+            self.delete_rows_dialog = None
+
+    def _delete_rows_from_dialog(
+        self,
+        dialog: DeleteRowsDialog,
+        expression: object,
+    ) -> None:
+        if not isinstance(expression, FilterExpression):
+            dialog.set_error("删除行窗口返回了无效条件")
+            return
+        try:
+            positions = self._draft_positions_for_filter(expression)
+        except (ArithmeticError, RuntimeError, TypeError, ValueError) as exc:
+            dialog.set_error(str(exc).strip() or type(exc).__name__)
+            return
+        if not positions:
+            dialog.set_error("删除条件没有匹配任何导入草稿行")
+            return
+        question = (
+            f"将从当前导入草稿删除 {len(positions):,} 行。\n"
+            "现有评分记录不会被删除。是否继续？"
+        )
+        response = QMessageBox.question(
+            self,
+            translate_ui_text("确认删除"),
+            translate_ui_text(question),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if response != QMessageBox.Yes:
+            dialog.set_error("")
+            return
+        if self.delete_draft_rows_by_filter(expression):
+            dialog.complete_delete()
+        else:
+            dialog.set_error(self.error_text)
+
+    def open_delete_columns_dialog(self) -> DeleteColumnsDialog | None:
+        columns = tuple(str(column) for column in self._draft.columns)
+        if not columns:
+            self._set_error("当前没有可删除的导入草稿列")
+            return None
+        if (
+            self.delete_columns_dialog is not None
+            and self.delete_columns_dialog.isVisible()
+        ):
+            self.delete_columns_dialog.raise_()
+            self.delete_columns_dialog.activateWindow()
+            return self.delete_columns_dialog
+        dialog = DeleteColumnsDialog(columns, self)
+        self.delete_columns_dialog = dialog
+        dialog.deleteRequested.connect(
+            lambda selected, current=dialog: self._delete_columns_from_dialog(
+                current,
+                selected,
+            )
+        )
+        dialog.finished.connect(
+            lambda _result, current=dialog: self._delete_columns_dialog_finished(
+                current
+            )
+        )
+        dialog.open()
+        return dialog
+
+    def _delete_columns_dialog_finished(
+        self,
+        dialog: DeleteColumnsDialog,
+    ) -> None:
+        if self.delete_columns_dialog is dialog:
+            self.delete_columns_dialog = None
+
+    def _delete_columns_from_dialog(
+        self,
+        dialog: DeleteColumnsDialog,
+        columns: object,
+    ) -> None:
+        if not isinstance(columns, tuple):
+            dialog.set_error("删除列窗口返回了无效选择")
+            return
+        names = "、".join(columns)
+        question = (
+            f"将从当前导入草稿删除 {len(columns):,} 个列：{names}。\n"
+            "现有评分记录不会被删除。是否继续？"
+        )
+        response = QMessageBox.question(
+            self,
+            translate_ui_text("确认删除"),
+            translate_ui_text(question),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if response != QMessageBox.Yes:
+            dialog.set_error("")
+            return
+        if self.delete_draft_columns(columns):
+            dialog.complete_delete()
+        else:
+            dialog.set_error(self.error_text)
 
     def create_preview_context_menu(
         self,
@@ -1071,20 +1365,20 @@ class QtQcListImportPage(QWidget):
 
         menu = QMenu(self.preview_table)
         add_action = menu.addAction(translate_ui_text("增加空行"))
-        delete_action = menu.addAction(translate_ui_text("删除选中行"))
+        delete_action = menu.addAction(translate_ui_text("按条件删除行…"))
         enabled = (
             not self.task_controller.busy
             and not self._derive_busy
             and bool(self._draft.columns.size)
         )
         add_action.setEnabled(enabled)
-        delete_action.setEnabled(enabled and bool(self._selected_draft_positions()))
+        delete_action.setEnabled(enabled and not self._draft.empty)
         add_action.triggered.connect(
             lambda _checked=False, position=after_position: self.insert_blank_draft_row(
                 after_position=position
             )
         )
-        delete_action.triggered.connect(self.delete_selected_draft_rows)
+        delete_action.triggered.connect(self.open_delete_rows_dialog)
         return menu
 
     @Slot(object)
@@ -1092,16 +1386,6 @@ class QtQcListImportPage(QWidget):
         index = self.preview_table.indexAt(position)
         after_position: int | None = None
         if index.isValid():
-            selection_model = self.preview_table.selectionModel()
-            if selection_model is not None and not selection_model.isRowSelected(
-                index.row(),
-                index.parent(),
-            ):
-                selection_model.select(
-                    index,
-                    QItemSelectionModel.ClearAndSelect
-                    | QItemSelectionModel.Rows,
-                )
             after_position = self.draft_position_for_preview_row(index.row())
         menu = self.create_preview_context_menu(after_position=after_position)
         menu.exec(self.preview_table.viewport().mapToGlobal(position))
@@ -1119,6 +1403,9 @@ class QtQcListImportPage(QWidget):
         else:
             self.preview_model = QtTableModel(empty, self)
             self.preview_table.setModel(self.preview_model)
+            selection_model = self.preview_table.selectionModel()
+            selection_model.selectionChanged.connect(self._update_actions)
+            selection_model.currentChanged.connect(self._update_actions)
         self._preview_service = None
         self._preview_state = None
         self._preview_result = None
@@ -1197,24 +1484,58 @@ class QtQcListImportPage(QWidget):
         matches = len(incoming_ids & current_ids)
         new = len(incoming_ids - current_ids)
         identity_conflicts = int(identities.eq("").sum()) + int(identities.duplicated().sum())
-        if self.merge_columns_radio.isChecked():
-            field_conflicts = len(
-                (set(self._draft.columns) & set(self._current.columns)) - {"ezqcid"}
+        mode, conflict_policy = self.current_import_policy()
+        overlapping = len(
+            (set(self._draft.columns) & set(self._current.columns)) - {"ezqcid"}
+        )
+        if mode == "merge_columns":
+            policy_label = (
+                "保留已有值"
+                if conflict_policy == "preserve"
+                else "用导入值更新"
+            )
+            detail = f"重复列 {overlapping:,} · {policy_label}"
+        elif mode == "append":
+            policy_label = (
+                "去除重复"
+                if conflict_policy == "deduplicate"
+                else "用导入行替换"
+            )
+            schema_mismatch = set(self._draft.columns) != set(self._current.columns)
+            detail = (
+                f"重复行 {matches:,} · {policy_label}"
+                + (" · 字段不一致" if schema_mismatch else "")
             )
         else:
-            field_conflicts = int(set(self._draft.columns) != set(self._current.columns))
+            self.stats_label.setText(
+                f"替换现有名单 · {len(self._current):,} 行 → "
+                f"{len(self._draft):,} 行"
+            )
+            return
         self.stats_label.setText(
-            f"匹配 {matches:,} · 新增 {new:,} · 冲突 {identity_conflicts + field_conflicts:,}"
+            f"匹配 {matches:,} · 新增 {new:,} · "
+            f"草稿问题 {identity_conflicts:,} · {detail}"
         )
 
     def _update_actions(self) -> None:
-        busy = self.task_controller.busy
+        busy = self._task_busy or self.task_controller.busy
         has_draft = not self._draft.empty
         self.apply_button.setEnabled(not busy and has_draft)
         self.clear_button.setEnabled(not busy and has_draft)
         self.filter_button.setEnabled(not busy and self._preview_service is not None)
         self.sort_button.setEnabled(not busy and self._preview_service is not None)
         self.columns_button.setEnabled(not busy and self._preview_service is not None)
+        draft_actions_enabled = (
+            not busy
+            and not self._derive_busy
+            and bool(self._draft.columns.size)
+        )
+        self.delete_rows_button.setEnabled(
+            draft_actions_enabled and not self._draft.empty
+        )
+        self.delete_column_button.setEnabled(
+            draft_actions_enabled
+        )
         self.derive_button.setEnabled(
             not busy
             and not self._derive_busy
@@ -1224,7 +1545,7 @@ class QtQcListImportPage(QWidget):
         )
 
     def _set_error(self, message: str) -> None:
-        self.error_label.setText(message)
+        self.error_label.setText(translate_ui_text(message))
         self.error_label.setVisible(bool(message))
 
     def closeEvent(self, event: QCloseEvent) -> None:
@@ -1235,6 +1556,8 @@ class QtQcListImportPage(QWidget):
             self.sort_dialog,
             self.columns_dialog,
             self.derived_column_dialog,
+            self.delete_rows_dialog,
+            self.delete_columns_dialog,
         ):
             if dialog is not None:
                 dialog.reject()
