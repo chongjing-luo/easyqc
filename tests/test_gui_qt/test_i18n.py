@@ -123,6 +123,23 @@ def test_translation_formatting_is_strict_and_keeps_business_identifiers(tmp_pat
             "质控模块不存在: 常量设置",
             "QC module does not exist: 常量设置",
         ),
+        ("删除行", "Delete rows"),
+        ("删除列", "Delete column"),
+        ("按条件删除行", "Delete rows by condition"),
+        ("删除匹配行", "Delete matching rows"),
+        ("至少添加一个删除条件", "Add at least one deletion condition."),
+        ("site   · 受保护", "site   · protected"),
+        ("删除所选列", "Delete checked columns"),
+        (
+            "已从质控前名单删除 2 行；评分记录已保留",
+            "Deleted 2 Pre-QC list rows; rating records were retained.",
+        ),
+        (
+            "将从质控前名单删除列“site”。\n"
+            "现有评分记录不会被删除。是否继续？",
+            "Delete column “site” from the Pre-QC list.\n"
+            "Existing rating records will be retained. Continue?",
+        ),
     ),
 )
 def test_compatibility_translations_cover_dynamic_ui_without_rewriting_business_text(
