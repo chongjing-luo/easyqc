@@ -5,7 +5,7 @@ from threading import Event, get_ident
 
 import pandas as pd
 from shiboken6 import isValid
-from PySide6.QtCore import QObject, Qt, QTimer
+from PySide6.QtCore import QObject, QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QFont
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -32,6 +32,7 @@ from core.qc_workflow_service import QcWorkflowService
 from core.table_view_service import TableViewService
 from gui_qt.application import build_product_window
 from gui_qt.i18n import LanguageController, get_or_create_language_controller
+from gui_qt.main_window import QtMainWindow
 from gui_qt.qc_results_page import QtQcResultsPage
 from models.table_view_state import (
     ColumnViewState,
@@ -450,6 +451,7 @@ def test_navigation_can_collapse_and_restore_current_workspace(
     assert window.navigation_toggle_button.isVisible()
     assert not window.navigation.isVisible()
     assert not window.language_bar.isVisible()
+    assert not window.settings_button.isVisible()
     assert window.workspace_stack.currentWidget() is selected_page
     assert window.navigation.currentRow() == window.results_page_index
 
@@ -460,8 +462,57 @@ def test_navigation_can_collapse_and_restore_current_workspace(
     assert window.navigation_panel.minimumWidth() >= 202
     assert window.navigation.isVisible()
     assert window.language_bar.isVisible()
+    assert window.settings_button.isVisible()
     assert window.workspace_stack.currentWidget() is selected_page
     assert window.navigation.currentRow() == window.results_page_index
+
+
+def test_navigation_settings_button_updates_shared_shell_mode_and_persists(
+    qtbot,
+    tmp_path,
+) -> None:
+    settings = QSettings(
+        str(tmp_path / "shell-setting.ini"),
+        QSettings.IniFormat,
+    )
+    language = LanguageController(settings=settings)
+    services = build_app_services(tmp_path / "projects.json")
+    _add_project(services, tmp_path, "SAMPLE")
+    window = QtMainWindow(
+        services,
+        language=language,
+        settings=settings,
+    )
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
+
+    assert window.settings_button.text() == "设置"
+    assert window.services.code_executor.shell_enabled is False
+    qtbot.mouseClick(window.settings_button, Qt.LeftButton)
+    dialog = window.execution_settings_dialog
+    assert dialog is not None
+    dialog.shell_radio.click()
+    qtbot.mouseClick(dialog.save_button, Qt.LeftButton)
+
+    assert window.services.code_executor.shell_enabled is True
+    settings.sync()
+
+    replacement_services = build_app_services(tmp_path / "other-projects.json")
+    replacement = QtMainWindow(
+        replacement_services,
+        source=pd.DataFrame(columns=["ezqcid"]),
+        language=language,
+        settings=QSettings(
+            str(tmp_path / "shell-setting.ini"),
+            QSettings.IniFormat,
+        ),
+    )
+    qtbot.addWidget(replacement)
+    assert replacement.services.code_executor.shell_enabled is True
+
+    language.set_language("en")
+    assert window.settings_button.text() == "Settings"
 
 
 def test_single_language_button_toggles_without_losing_page_or_draft(

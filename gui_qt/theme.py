@@ -93,13 +93,16 @@ QLabel#projectNavigationContext {
 QWidget#languageBar {
     border-top: 1px solid #314056;
 }
-QPushButton#languageToggle {
+QPushButton#languageToggle,
+QPushButton#settingsButton {
     background: #24334A;
     color: #F4F7FB;
     border: 1px solid #43526A;
 }
 QPushButton#languageToggle:hover,
-QPushButton#languageToggle:focus {
+QPushButton#languageToggle:focus,
+QPushButton#settingsButton:hover,
+QPushButton#settingsButton:focus {
     background: #2D4260;
     border-color: #7186A3;
 }

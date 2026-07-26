@@ -8,7 +8,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 import pandas as pd
-from PySide6.QtCore import QSize, Qt, Signal, Slot
+from PySide6.QtCore import QSettings, QSize, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QCloseEvent, QFont, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
@@ -41,6 +41,10 @@ from core.project_context_service import (
 from core.qc_workflow_service import QcWorkflowService
 from core.table_view_service import TableViewService
 from gui_qt.filter_dialog import FilterDialog
+from gui_qt.execution_settings_dialog import (
+    ViewerExecutionSettingsDialog,
+    apply_persisted_viewer_execution_setting,
+)
 from gui_qt.i18n import (
     LanguageController,
     get_or_create_language_controller,
@@ -115,6 +119,7 @@ class QtMainWindow(QMainWindow):
         services: AppServices,
         source: pd.DataFrame | None = None,
         language: LanguageController | None = None,
+        settings: QSettings | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -124,6 +129,12 @@ class QtMainWindow(QMainWindow):
             raise TypeError("QtMainWindow table source must be a pandas DataFrame or None")
         self.services = services
         self.language = language or get_or_create_language_controller()
+        self.application_settings = settings if settings is not None else QSettings()
+        apply_persisted_viewer_execution_setting(
+            self.services.code_executor,
+            self.application_settings,
+        )
+        self.execution_settings_dialog: ViewerExecutionSettingsDialog | None = None
         self.context_service = services.project_context_service
         self._injected_preview = source is not None
         self.initialization_complete = False
@@ -280,12 +291,17 @@ class QtMainWindow(QMainWindow):
         self.navigation_layout.addWidget(self.navigation, 1)
         self.language_bar = QWidget(self.navigation_panel)
         self.language_bar.setObjectName("languageBar")
-        language_layout = QHBoxLayout(self.language_bar)
+        language_layout = QVBoxLayout(self.language_bar)
         language_layout.setContentsMargins(0, 12, 0, 0)
+        language_layout.setSpacing(CONTROL_SPACING)
+        self.settings_button = QPushButton("设置", self.language_bar)
+        self.settings_button.setObjectName("settingsButton")
+        self.settings_button.clicked.connect(self._open_execution_settings)
+        language_layout.addWidget(self.settings_button)
         self.language_button = QPushButton("English", self.language_bar)
         self.language_button.setObjectName("languageToggle")
         self.language_button.clicked.connect(self._toggle_language)
-        language_layout.addWidget(self.language_button, 1)
+        language_layout.addWidget(self.language_button)
         self.navigation_layout.addWidget(self.language_bar)
         self.navigation_panel.setMinimumWidth(
             self.EXPANDED_NAVIGATION_MIN_WIDTH
@@ -543,6 +559,17 @@ class QtMainWindow(QMainWindow):
         self.language.set_language(target)
 
     @Slot()
+    def _open_execution_settings(self) -> None:
+        dialog = ViewerExecutionSettingsDialog(
+            self.services.code_executor,
+            self.application_settings,
+            self.language,
+            self,
+        )
+        self.execution_settings_dialog = dialog
+        dialog.open()
+
+    @Slot()
     def _toggle_navigation(self) -> None:
         self.set_navigation_collapsed(not self.navigation_collapsed)
 
@@ -633,6 +660,12 @@ class QtMainWindow(QMainWindow):
             )
         self.language_button.setAccessibleName(language_description)
         self.language_button.setToolTip(language_description)
+        self.settings_button.setText(self.language.tr("settings.button"))
+        settings_description = self.language.tr(
+            "settings.button_description"
+        )
+        self.settings_button.setAccessibleName(settings_description)
+        self.settings_button.setToolTip(settings_description)
         self._update_navigation_toggle_presentation()
         self.table_workspace.retranslate_ui()
         self.results_workspace.retranslate_ui()

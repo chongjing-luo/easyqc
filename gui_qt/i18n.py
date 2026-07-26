@@ -80,6 +80,61 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
         "zh_CN": "展开导航",
         "en": "Expand navigation",
     },
+    "settings.accessible": {
+        "zh_CN": "外部查看器执行设置",
+        "en": "External viewer execution settings",
+    },
+    "settings.button": {"zh_CN": "设置", "en": "Settings"},
+    "settings.button_description": {
+        "zh_CN": "设置外部查看器命令执行方式",
+        "en": "Configure external viewer command execution",
+    },
+    "settings.cancel": {"zh_CN": "取消", "en": "Cancel"},
+    "settings.direct_detail": {
+        "zh_CN": "直接启动程序并传入参数；管道、重定向和命令连接符不会被解释。",
+        "en": (
+            "Launch the program with its arguments directly; pipes, redirection "
+            "and command chaining are not interpreted."
+        ),
+    },
+    "settings.direct_title": {
+        "zh_CN": "直接执行（shell=False）",
+        "en": "Direct execution (shell=False)",
+    },
+    "settings.no_gate": {
+        "zh_CN": (
+            "EasyQC 不限制可执行程序名称或后缀。Shell 模式会按当前操作系统的 "
+            "Shell 规则解释整条命令。"
+        ),
+        "en": (
+            "EasyQC does not restrict executable names or suffixes. Shell mode "
+            "interprets the complete command using the current operating system."
+        ),
+    },
+    "settings.save": {"zh_CN": "保存", "en": "Save"},
+    "settings.shell_detail": {
+        "zh_CN": "通过系统 Shell 执行完整命令，支持管道、重定向、变量展开和命令连接。",
+        "en": (
+            "Run the complete command through the system Shell, including pipes, "
+            "redirection, variable expansion and command chaining."
+        ),
+    },
+    "settings.shell_title": {
+        "zh_CN": "Shell 执行（shell=True）",
+        "en": "Shell execution (shell=True)",
+    },
+    "settings.title": {"zh_CN": "设置", "en": "Settings"},
+    "settings.viewer_group": {
+        "zh_CN": "外部查看器命令",
+        "en": "External viewer commands",
+    },
+    "settings.viewer_intro": {
+        "zh_CN": "选择 EasyQC 启动外部图像查看器时使用的命令执行方式。",
+        "en": (
+            "Choose how EasyQC executes commands when launching external image "
+            "viewers."
+        ),
+    },
     "nav.constants": {"zh_CN": "常量设置", "en": "Constants"},
     "nav.import": {"zh_CN": "质控名单导入", "en": "QC list import"},
     "nav.modules": {"zh_CN": "质控模块", "en": "QC modules"},
