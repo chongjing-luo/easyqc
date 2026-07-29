@@ -13,7 +13,16 @@ import pandas as pd
 
 from core.code_executor import CodeExecutor
 from core.event_bus import Event, EventBus, EventType
-from core.rating_service import RatingService
+from core.rating_identity import (
+    RatingIdentityError,
+    validate_ezqcid,
+    validate_module_name,
+    validate_rater,
+)
+from core.rating_service import (
+    RatingRaterDirectoryIndex,
+    RatingService,
+)
 from models.qcmodule import QCModule
 from models.rating import Rating
 
@@ -92,7 +101,13 @@ class QcWorkflowService:
         self._closed = False
 
         configured_module = QCModule.from_legacy_dict(deepcopy(self._module_template))
-        rater = self._normalize_identity(configured_module.rater)
+        try:
+            validate_module_name(configured_module.name)
+            if configured_module.rater not in (None, ""):
+                validate_rater(configured_module.rater)
+        except RatingIdentityError as exc:
+            raise QcIdentityError(str(exc)) from exc
+        rater = "" if configured_module.rater is None else configured_module.rater
         if configured_module.watch_mode:
             self._force_session_read_only("Module is configured for watch mode")
         if not rater:
@@ -116,38 +131,61 @@ class QcWorkflowService:
                     "Historical rating workflow requires its one exact ezqcid"
                 )
             self._force_session_read_only("Historical rating record")
+        self._rating_file_index = (
+            RatingRaterDirectoryIndex.build(
+                self._rating_dir,
+                module_name=configured_module.name,
+                rater=rater,
+            )
+            if (
+                self._historical_rating_payload is None
+                and self._rating_dir is not None
+                and rater
+            )
+            else None
+        )
         if not self._subject_ids:
             raise QcIdentityError("QC requires at least one subject")
         if initial_ezqcid is None:
             self._current_index = 0
         else:
-            normalized = self._normalize_identity(initial_ezqcid)
-            if normalized not in self._subject_index:
+            initial = self._validated_ezqcid(initial_ezqcid)
+            if initial not in self._subject_index:
                 raise QcIdentityError(
-                    f"Initial ezqcid is not in the QC table: {normalized}"
+                    f"Initial ezqcid is not in the QC table: {initial}"
                 )
-            self._current_index = self._subject_index[normalized]
+            self._current_index = self._subject_index[initial]
         self._working_module = configured_module
         self._load_current_rating()
 
     @staticmethod
-    def _normalize_identity(value: Any) -> str:
-        if value is None or pd.isna(value):
-            return ""
-        return str(value).strip()
+    def _validated_ezqcid(value: Any) -> str:
+        try:
+            return validate_ezqcid(value)
+        except RatingIdentityError as exc:
+            raise QcIdentityError(str(exc)) from exc
 
     @classmethod
     def _validated_subject_ids(cls, source: pd.DataFrame) -> tuple[str, ...]:
         if "ezqcid" not in source.columns:
             raise QcIdentityError("QC subject table is missing ezqcid")
-        identities = tuple(cls._normalize_identity(value) for value in source["ezqcid"])
-        if any(not identity for identity in identities):
-            raise QcIdentityError("QC subject table contains a blank ezqcid")
+        identities = tuple(cls._validated_ezqcid(value) for value in source["ezqcid"])
         duplicates = sorted(
             identity for identity, count in Counter(identities).items() if count > 1
         )
         if duplicates:
             raise QcIdentityError(f"QC subject table contains duplicate ezqcid: {duplicates}")
+        casefolded: dict[str, str] = {}
+        case_collisions: set[tuple[str, str]] = set()
+        for identity in identities:
+            prior = casefolded.setdefault(identity.casefold(), identity)
+            if prior != identity:
+                case_collisions.add(tuple(sorted((prior, identity))))
+        if case_collisions:
+            raise QcIdentityError(
+                "QC subject table contains case-only ezqcid collisions: "
+                f"{sorted(case_collisions)}"
+            )
         return identities
 
     def _validated_queue_summaries(
@@ -160,7 +198,7 @@ class QcWorkflowService:
             raise TypeError("QC queue summaries must be a mapping")
         normalized: dict[str, tuple[str, str]] = {}
         for raw_identity, raw_summary in summaries.items():
-            identity = self._normalize_identity(raw_identity)
+            identity = self._validated_ezqcid(raw_identity)
             if identity not in self._subject_index:
                 raise QcIdentityError(
                     f"QC queue summary contains an unknown ezqcid: {identity}"
@@ -231,7 +269,7 @@ class QcWorkflowService:
     def queue_summary(self, ezqcid: str) -> tuple[str, str]:
         """Return detached score/tag display text for one exact queue identity."""
 
-        identity = self._normalize_identity(ezqcid)
+        identity = self._validated_ezqcid(ezqcid)
         if identity not in self._subject_index:
             raise QcIdentityError(f"Unknown QC ezqcid: {identity}")
         if identity == self.current_ezqcid:
@@ -266,7 +304,7 @@ class QcWorkflowService:
     def _load_current_rating(self) -> None:
         module = self._fresh_working_module()
         case_reasons: list[str] = []
-        rater = self._normalize_identity(module.rater)
+        rater = "" if module.rater is None else module.rater
         historical_payload = self._historical_rating_payload
         if historical_payload is not None:
             files = []
@@ -275,7 +313,10 @@ class QcWorkflowService:
             files = []
             rating_payload = None
         else:
-            files = self._rating_store.find_rating_files_in_rater_dir(
+            if self._rating_file_index is not None:
+                files = self._rating_file_index.find(self.current_ezqcid)
+            else:
+                files = self._rating_store.find_rating_files_in_rater_dir(
                 self._rating_dir,
                 module.name,
                 self.current_ezqcid,
@@ -365,7 +406,7 @@ class QcWorkflowService:
         if not template:
             raise QcSessionError("The QC module has no viewer command template")
         row = self._source.iloc[self._current_index]
-        if self._normalize_identity(row["ezqcid"]) != self.current_ezqcid:
+        if row["ezqcid"] != self.current_ezqcid:
             raise QcIdentityError("Current ezqcid no longer resolves to its stable source row")
         collisions = sorted(
             set(map(str, row.index)) & set(map(str, self._constants))
@@ -402,7 +443,11 @@ class QcWorkflowService:
         self._require_writable()
         if self._rating_dir is None:
             raise QcSessionError("Rating directory is not configured")
-        rater = self._normalize_identity(self._working_module.rater)
+        rater = (
+            ""
+            if self._working_module.rater is None
+            else self._working_module.rater
+        )
         if not rater:
             raise QcReadOnlyError("QC session is read-only: rater is not configured")
         previous_time = self._working_module.time
@@ -413,6 +458,7 @@ class QcWorkflowService:
                 self._rating_dir,
                 rating,
                 self._module_template,
+                directory_index=self._rating_file_index,
             )
         except Exception:
             self._working_module.time = previous_time
@@ -453,10 +499,10 @@ class QcWorkflowService:
     ) -> bool:
         self._require_active()
         if isinstance(target, str):
-            normalized = self._normalize_identity(target)
-            if normalized not in self._subject_index:
-                raise QcIdentityError(f"Unknown QC ezqcid: {normalized}")
-            target_index = self._subject_index[normalized]
+            identity = self._validated_ezqcid(target)
+            if identity not in self._subject_index:
+                raise QcIdentityError(f"Unknown QC ezqcid: {identity}")
+            target_index = self._subject_index[identity]
         else:
             target_index = int(target)
             if target_index < 0 or target_index >= len(self._subject_ids):

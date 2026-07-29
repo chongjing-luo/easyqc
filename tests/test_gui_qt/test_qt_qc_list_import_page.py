@@ -446,7 +446,7 @@ def test_merge_columns_applies_once_and_emits_list_change(
     page, configuration, _current = _page(qtbot, tmp_path)
     source = tmp_path / "columns.csv"
     pd.DataFrame(
-        {"ezqcid": [" SUB001 ", "SUB003"], "batch": ["X", "Y"]}
+        {"ezqcid": ["SUB001", "SUB003"], "batch": ["X", "Y"]}
     ).to_csv(source, index=False)
     page.source_path_edit.setText(str(source))
     qtbot.mouseClick(page.read_preview_button, Qt.LeftButton)

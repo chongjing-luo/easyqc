@@ -21,6 +21,13 @@ from core.module_filter import (
     resolve_module_filter_identities,
 )
 from core.qc_workflow_service import QcWorkflowService
+from core.rating_identity import (
+    RatingIdentityError,
+    validate_ezqcid,
+    validate_module_name,
+    validate_rater,
+    validate_rating_identity,
+)
 from core.rating_service import RatingService
 from core.project_service import PreparedProjectLoad
 from core.table_service import TABLE_ALL
@@ -211,6 +218,8 @@ class ProjectContextService:
             QCModule.from_legacy_dict(payload)
             for _, payload in sorted(modules.items(), key=lambda item: int(item[0]))
         )
+        for module in typed_modules:
+            self._validate_module_identity(module)
         subjects = self.configuration_service.table_service.load_table(project, TABLE_ALL)
         if subjects is None:
             subjects = pd.DataFrame(columns=["ezqcid"])
@@ -242,16 +251,27 @@ class ProjectContextService:
         if "ezqcid" not in frame.columns:
             raise ConfigurationError("Subject table requires ezqcid")
         result = frame.copy(deep=True)
-        identities = result["ezqcid"].map(cls._normalize_identity)
-        if identities.eq("").any():
-            raise ConfigurationError("Subject table contains blank ezqcid")
-        duplicates = sorted(identities[identities.duplicated(keep=False)].unique().tolist())
+        identities = tuple(cls._validated_ezqcid(value) for value in result["ezqcid"])
+        duplicates = sorted(
+            identity for identity, count in Counter(identities).items() if count > 1
+        )
         if duplicates:
-            raise ConfigurationError(f"Subject table contains duplicate ezqcid: {duplicates}")
+            raise ProjectContextError(f"Subject table contains duplicate ezqcid: {duplicates}")
+        casefolded: dict[str, str] = {}
+        case_collisions: set[tuple[str, str]] = set()
+        for identity in identities:
+            prior = casefolded.setdefault(identity.casefold(), identity)
+            if prior != identity:
+                case_collisions.add(tuple(sorted((prior, identity))))
+        if case_collisions:
+            raise ProjectContextError(
+                "Subject table contains case-only ezqcid collisions: "
+                f"{sorted(case_collisions)}"
+            )
         collisions = sorted(set(map(str, result.columns)) & set(constants))
         if collisions:
             raise ConfigurationError(f"Subject column conflicts with constant: {collisions}")
-        result["ezqcid"] = identities
+        result["ezqcid"] = list(identities)
         return result
 
     @staticmethod
@@ -277,10 +297,38 @@ class ProjectContextService:
         return aggregated.loc[:, subject_columns + rating_columns].copy(deep=True)
 
     @staticmethod
-    def _normalize_identity(value: Any) -> str:
-        if value is None or pd.isna(value):
+    def _validated_ezqcid(value: Any) -> str:
+        try:
+            return validate_ezqcid(value)
+        except RatingIdentityError as exc:
+            raise ProjectContextError(str(exc)) from exc
+
+    @classmethod
+    def _normalize_identity(cls, value: Any) -> str:
+        if value in (None, ""):
             return ""
-        return str(value).strip()
+        return cls._validated_ezqcid(value)
+
+    @staticmethod
+    def _validate_module_identity(module: QCModule) -> None:
+        try:
+            validate_module_name(module.name)
+            if module.rater not in (None, ""):
+                validate_rater(module.rater)
+        except RatingIdentityError as exc:
+            raise ProjectContextError(str(exc)) from exc
+
+    @staticmethod
+    def _validated_rating_identity(
+        module_name: Any,
+        rater: Any,
+        ezqcid: Any,
+    ) -> tuple[str, str, str]:
+        try:
+            identity = validate_rating_identity(module_name, rater, ezqcid)
+        except RatingIdentityError as exc:
+            raise ProjectContextError(str(exc)) from exc
+        return identity.module_name, identity.rater, identity.ezqcid
 
     @classmethod
     def _index_rating_positions(
@@ -313,7 +361,7 @@ class ProjectContextService:
         ):
             raise ProjectContextError("QC rating snapshot index is inconsistent")
         ratings = tuple(snapshot.ratings[position] for position in positions)
-        if any(cls._normalize_identity(rating.ezqcid) != identity for rating in ratings):
+        if any(rating.ezqcid != identity for rating in ratings):
             raise ProjectContextError("QC rating snapshot index is inconsistent")
         return ratings
 
@@ -390,7 +438,7 @@ class ProjectContextService:
                         if enabled
                         else "该条目不在此模块的独立质控名单中"
                     ),
-                    read_only=bool(module.watch_mode or not self._normalize_identity(module.rater)),
+                    read_only=bool(module.watch_mode or module.rater in (None, "")),
                 )
             )
 
@@ -439,16 +487,18 @@ class ProjectContextService:
         """Create a complete saved-schema workflow for one accepted rating."""
 
         self._validate_current_snapshot(snapshot)
-        identity = self._normalize_identity(ezqcid)
-        module_key = self._normalize_identity(module_name)
-        rater_key = self._normalize_identity(rater)
+        module_key, rater_key, identity = self._validated_rating_identity(
+            module_name,
+            rater,
+            ezqcid,
+        )
         matches = [
             rating
             for rating in self._ratings_for_identity(snapshot, identity)
             if (
-                self._normalize_identity(rating.ezqcid),
-                self._normalize_identity(rating.module_name),
-                self._normalize_identity(rating.rater),
+                rating.ezqcid,
+                rating.module_name,
+                rating.rater,
             )
             == (identity, module_key, rater_key)
         ]
@@ -470,9 +520,9 @@ class ProjectContextService:
             )
         payload = deepcopy(matches[0].to_legacy_dict())
         if (
-            self._normalize_identity(payload.get("ezqcid")) != identity
-            or self._normalize_identity(payload.get("name")) != module_key
-            or self._normalize_identity(payload.get("rater")) != rater_key
+            payload.get("ezqcid") != identity
+            or payload.get("name") != module_key
+            or payload.get("rater") != rater_key
         ):
             raise ProjectContextError(
                 "Historical QC payload does not match its snapshot identity"
@@ -545,7 +595,11 @@ class ProjectContextService:
         """Create one workflow from a validated snapshot and ordered identity queue."""
 
         self._validate_current_snapshot(snapshot)
-        module = next((item for item in snapshot.modules if item.name == module_name), None)
+        try:
+            module_key = validate_module_name(module_name)
+        except RatingIdentityError as exc:
+            raise ProjectContextError(str(exc)) from exc
+        module = next((item for item in snapshot.modules if item.name == module_key), None)
         if module is None:
             raise ProjectContextError(f"Unknown QC module in current project: {module_name}")
 
@@ -561,7 +615,7 @@ class ProjectContextService:
                 )
         else:
             requested = tuple(
-                self._normalize_identity(value) for value in navigation_ids
+                self._validated_ezqcid(value) for value in navigation_ids
             )
         if not requested:
             raise ProjectContextError("QC navigation requires at least one ezqcid")
@@ -622,8 +676,12 @@ class ProjectContextService:
         """Resolve one saved module rule against ordinary complete-list columns."""
 
         self._validate_current_snapshot(snapshot)
+        try:
+            module_key = validate_module_name(module_name)
+        except RatingIdentityError as exc:
+            raise ProjectContextError(str(exc)) from exc
         module = next(
-            (item for item in snapshot.modules if item.name == module_name),
+            (item for item in snapshot.modules if item.name == module_key),
             None,
         )
         if module is None:

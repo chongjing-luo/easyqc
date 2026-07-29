@@ -8,6 +8,7 @@
 import json
 import os
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
@@ -60,17 +61,26 @@ class FileUtils:
     def atomic_write(file_path: str | os.PathLike[str], content: str, encoding: str = 'utf-8') -> None:
         path = Path(file_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+        descriptor, temp_name = tempfile.mkstemp(
+            prefix=".eqc-",
+            suffix=".tmp",
+            dir=path.parent,
+        )
+        temp_path = Path(temp_name)
 
         try:
-            with open(temp_path, 'w', encoding=encoding, newline='') as f:
+            with os.fdopen(descriptor, 'w', encoding=encoding, newline='') as f:
+                descriptor = -1
                 f.write(content)
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temp_path, path)
         finally:
-            if temp_path.exists():
-                temp_path.unlink()
+            try:
+                if descriptor >= 0:
+                    os.close(descriptor)
+            finally:
+                temp_path.unlink(missing_ok=True)
 
     @staticmethod
     def safe_json_load(file_path: str | os.PathLike[str]) -> Any:

@@ -349,6 +349,60 @@ def test_list_import_draft_readers_do_not_mutate_the_active_table(tmp_path) -> N
     assert table_path.read_bytes() == before_bytes
 
 
+def test_file_import_drafts_preserve_text_ezqcid_for_csv_and_excel(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    service, _projects = _service(tmp_path)
+    csv_path = tmp_path / "incoming.csv"
+    csv_path.write_text(
+        "ezqcid,visit\n001,1\n01-A,2\n",
+        encoding="utf-8",
+    )
+    excel_path = tmp_path / "incoming.xlsx"
+    excel_path.write_bytes(b"synthetic workbook placeholder")
+    read_excel_calls = []
+
+    def fake_read_excel(path, **kwargs):
+        read_excel_calls.append((path, kwargs))
+        return pd.DataFrame(
+            {"ezqcid": ["001", "01-A"], "visit": [1, 2]}
+        )
+
+    monkeypatch.setattr(
+        "core.configuration_service.pd.read_excel",
+        fake_read_excel,
+    )
+
+    csv_draft = service.draft_from_file(csv_path)
+    excel_draft = service.draft_from_file(excel_path)
+
+    assert csv_draft["ezqcid"].tolist() == ["001", "01-A"]
+    assert csv_draft["visit"].tolist() == [1, 2]
+    assert excel_draft["ezqcid"].tolist() == ["001", "01-A"]
+    assert excel_draft["visit"].tolist() == [1, 2]
+    assert read_excel_calls[0][0] == excel_path
+    converter = read_excel_calls[0][1]["converters"]["ezqcid"]
+    assert converter("NA") == "NA"
+    assert converter("001") == "001"
+    assert converter(7) == 7
+
+
+def test_import_subject_csv_preserves_leading_zero_ezqcid(tmp_path) -> None:
+    service, _projects = _service(tmp_path)
+    source = tmp_path / "subjects.csv"
+    source.write_text(
+        "ezqcid,visit\n001,1\n01-A,2\n",
+        encoding="utf-8",
+    )
+
+    service.import_subject_csv(source)
+
+    result = service.subjects()
+    assert result["ezqcid"].tolist() == ["001", "01-A"]
+    assert result["visit"].tolist() == [1, 2]
+
+
 def test_list_import_draft_readers_fail_loud_on_invalid_sources(tmp_path) -> None:
     service, _projects = _service(tmp_path)
     unsupported = tmp_path / "incoming.json"
@@ -555,7 +609,7 @@ def test_folder_match_request_rejects_ambiguous_or_unsafe_rules(
         _folder_request(**changes)
 
 
-def test_list_import_merge_columns_and_append_rows_use_exact_normalized_ezqcid(
+def test_list_import_merge_columns_and_append_rows_use_exact_validated_ezqcid(
     tmp_path,
 ) -> None:
     service, _projects = _service(tmp_path)
@@ -564,7 +618,7 @@ def test_list_import_merge_columns_and_append_rows_use_exact_normalized_ezqcid(
     )
 
     service.merge_subjects(
-        pd.DataFrame({"ezqcid": [" SUB001 ", "SUB003"], "batch": ["X", "Y"]}),
+        pd.DataFrame({"ezqcid": ["SUB001", "SUB003"], "batch": ["X", "Y"]}),
         mode="columns",
     )
     merged = service.subjects().set_index("ezqcid")

@@ -22,6 +22,24 @@ def test_table_service_saves_and_loads_csv(tmp_path) -> None:
     pd.testing.assert_frame_equal(result, df)
 
 
+def test_table_service_preserves_text_ezqcid_while_inferring_other_columns(
+    tmp_path,
+) -> None:
+    service = TableService()
+    project = Project("SAMPLE", tmp_path / "easyqc_SAMPLE")
+    path = service.table_path(project, TABLE_ALL)
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "ezqcid,visit\n001,1\n01-A,2\n",
+        encoding="utf-8",
+    )
+
+    result = service.load_table(project, TABLE_ALL)
+
+    assert result["ezqcid"].tolist() == ["001", "01-A"]
+    assert result["visit"].tolist() == [1, 2]
+
+
 def test_table_service_delete_removes_csv(tmp_path) -> None:
     service = TableService()
     project = Project("SAMPLE", tmp_path / "easyqc_SAMPLE")

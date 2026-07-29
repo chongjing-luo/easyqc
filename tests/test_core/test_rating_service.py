@@ -2,8 +2,12 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
-from core.rating_service import RatingService
+from core.rating_service import (
+    RatingLegacyConflictError,
+    RatingService,
+)
 from models.project import Project
 from models.qcmodule import QCModule
 from models.rating import Rating
@@ -121,7 +125,9 @@ def test_rating_service_handles_multi_module_multi_rater_synthetic_project(tmp_p
         _synthetic_legacy_rating("Anat", "r1", "SUB000", score1="5", score2="3", tag1=True)
     )
 
-    files_for_replaced_rating = list((project.rating_dir / "Anat" / "r1").glob("Anat._.SUB000._.r1*"))
+    files_for_replaced_rating = list(
+        (project.rating_dir / "Anat" / "r1").glob("Anat-r1-SUB000.json")
+    )
     ratings = service.load_all_ratings()
     result = service.aggregate_to_wide(ratings, subjects)
 
@@ -155,7 +161,7 @@ def test_rating_service_loads_legacy_gui_state(sample_project_dir: Path) -> None
     assert state.original_wide_table.loc[0, "example.rater1.filename"].startswith("example._.SUB001")
 
 
-def test_rating_service_save_rating_is_atomic_and_cleans_old_files(tmp_path, fixtures_dir: Path) -> None:
+def test_rating_service_refuses_to_replace_legacy_file_implicitly(tmp_path, fixtures_dir: Path) -> None:
     settings = json.loads((fixtures_dir / "sample_settings.json").read_text(encoding="utf-8"))
     module = QCModule.from_legacy_dict(settings["qcmodule"]["1"])
     rating = Rating.from_module(module)
@@ -166,13 +172,11 @@ def test_rating_service_save_rating_is_atomic_and_cleans_old_files(tmp_path, fix
     old_file = old_dir / "example._.SUB001._.rater1._.Old._.False.json"
     old_file.write_text("{}", encoding="utf-8")
 
-    saved_path = service.save_rating(rating)
+    with pytest.raises(RatingLegacyConflictError):
+        service.save_rating(rating)
 
-    assert saved_path.exists()
-    assert not old_file.exists()
-    payload = json.loads(saved_path.read_text(encoding="utf-8"))
-    assert payload["scores"]["1"]["label"] == "Overall quality"
-    assert payload["scores"]["1"]["value"] == "Good"
+    assert old_file.exists()
+    assert not (old_dir / "example-rater1-SUB001.json").exists()
 
 
 def test_rating_service_saved_json_is_readable_by_legacy_loader(tmp_path, fixtures_dir: Path) -> None:
@@ -234,9 +238,9 @@ def test_merge_subjects_with_rating_wide_result_ezqcid_is_string_typed() -> None
 
 
 def test_rating_save_writes_schema_version(tmp_path) -> None:
-    """P0-E / AC-11: a saved rating JSON carries schema_version=1 (current
-    stable schema after the P0 data-safety wave). schema_version is metadata
-    layered on top of the module snapshot, NOT a module field; the module
+    """A canonical rating JSON carries schema_version=2.
+
+    schema_version is metadata layered on top of the module snapshot; module
     fields the input carried are preserved unchanged (snapshot semantics)."""
     project = Project("SAMPLE", tmp_path / "easyqc_SAMPLE")
     service = RatingService(project)
@@ -245,12 +249,36 @@ def test_rating_save_writes_schema_version(tmp_path) -> None:
     saved_path = service.save_rating(rating)
 
     payload = json.loads(saved_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     # module identity + the fields the input carried are preserved
     assert payload["name"] == "example"
     assert payload["rater"] == "r1"
     assert payload["ezqcid"] == "SUB001"
     assert payload["scores"]["1"]["value"] == "Good"
+
+
+def test_rating_save_never_preserves_an_undefined_future_schema_version(
+    tmp_path,
+) -> None:
+    """Current writers emit only the schema they implement."""
+
+    project = Project("SAMPLE", tmp_path / "easyqc_SAMPLE")
+    service = RatingService(project)
+    rating = _synthetic_legacy_rating(
+        "example",
+        "r1",
+        "SUB001",
+        "Good",
+        "1",
+        True,
+    )
+    assert rating.legacy_payload is not None
+    rating.legacy_payload["schema_version"] = 99
+
+    saved_path = service.save_rating(rating)
+
+    payload = json.loads(saved_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 2
 
 
 def test_long_table_to_wide_rejects_duplicate_identity() -> None:

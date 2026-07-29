@@ -2,7 +2,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1423%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-1585%20passed-brightgreen.svg)](tests/)
 
 EasyQC 是一个可配置的 MRI 人工视觉质量控制工作台。它将"打开图像 → 记录评分 → 追踪进度 → 聚合结果"的完整人工 QC 链条整合为可追踪、可复用、项目化的软件工作流。
 
@@ -16,7 +16,8 @@ EasyQC 是一个可配置的 MRI 人工视觉质量控制工作台。它将"打�
 |---|---|
 | **Python** | 3.10 或更高版本 |
 | **操作系统** | Linux、macOS、Windows |
-| **内存** | 16GB 以上（正式基线；通常不超过 100,000 行 × 约 300 列） |
+| **内存** | 建议 16GB 以上；100,000 行 × 300 列仅是修订绑定的合成名单/Formula 证据 |
+| **常规规模** | 质控总名单通常不超过约 100,000 行；该约束不等同于评分文件扫描、聚合或迁移基准 |
 | **外部查看器**（可选） | FreeSurfer freeview、HCP wb_view、FSLeyes、MRIcroGL、ITK-SNAP 等 |
 
 ---
@@ -155,7 +156,7 @@ easyqc_<project>/
 └── RatingFiles/
     └── <module>/
         └── <rater>/
-            └── <module>._.<ezqcid>._.<rater>._.<score1>._.<tag1>.json
+            └── <module_name>-<rater>-<ezqcid>.json
 ```
 
 ### 2. 构建受试者主表
@@ -191,7 +192,7 @@ Qt Preview 还可在 **跨项目设置 → 常量模板** 中保存常用起点�
 
 | 配置项 | 说明 | 示例 |
 |---|---|---|
-| **模块名称** | 唯一标识符（字母/数字/下划线） | `FreeSurferQC` |
+| **模块名称** | 内部唯一标识符（1–32 个 ASCII 字母、数字或下划线） | `FreeSurferQC` |
 | **显示标签** | GUI 中显示的名称 | `FreeSurfer 质控` |
 | **评分者** | 当前评分者标识 | `rater1` |
 | **Scores** | 评分维度（见下方详细说明） | `头动: 0-4`, `颅骨剥离: 0-4` |
@@ -214,7 +215,77 @@ Qt Preview 还可在 **跨项目设置 → 常量模板** 中保存常用起点�
 4. 在 EasyQC 界面中记录 Scores（程度评分）和 Tags（状态标记）
 5. 点击 **下一个** 保存评分并切换到下一个受试者
 
-每次评分保存为独立 JSON 文件，通过原子写入（先写临时文件，再 `os.replace` 重命名）防止写入中断导致的数据损坏。
+每次保存都会更新该记录、模块和评分者三元组的完整 JSON 快照；同一三元组
+始终写回同一路径，不建立保存事件历史。
+
+#### 5.1 评分身份、覆盖语义与旧格式迁移
+
+新格式把稳定身份直接写入目录和文件名：
+
+```text
+RatingFiles/<module_name>/<rater>/
+  <module_name>-<rater>-<ezqcid>.json
+```
+
+`module_name` 和 `rater` 不允许短横线，因此移除末尾一个 `.json` 后，
+文件名可用 `split("-", 2)` 无歧义还原；`ezqcid` 内仍可包含更多短横线。
+三个内部 ID 的规范约束为：
+
+```regex
+module_name = ^[A-Za-z0-9_]{1,32}$
+rater       = ^[A-Za-z0-9_]{1,32}$
+ezqcid      = ^[A-Za-z0-9_.-]{1,128}$
+```
+
+模块名和评分者只能使用 ASCII 字母、数字及下划线；`ezqcid` 还允许点和
+短横线。目录组件还拒绝 Windows 保留设备名，`ezqcid` 拒绝 `.` 和 `..`。
+模块名在项目内、同模块评分者身份和质控总名单中的 `ezqcid` 分别按
+case-insensitive 规则保持唯一，原始大小写仍保留。CSV/Excel 导入必须在
+类型推断前把 `ezqcid` 作为文本读取，不能在前导零已经丢失后再转字符串。
+新保存写入完整 legacy-compatible payload，并标记 `schema_version: 2`。
+同一 `(module_name, rater, ezqcid)` 再次编辑时，EasyQC 在项目写锁内创建
+唯一临时文件，执行 flush/`fsync` 后用 `os.replace` 原子覆盖旧快照。
+
+目录 `<module_name>/<rater>`、文件名中的三个字段和 JSON 正文的
+`name`/`rater`/`ezqcid` 是有意保留的安全冗余。扫描会交叉核对三者；
+损坏 JSON、目录或正文错位、重复三元组以及仅大小写不同的身份冲突都会
+保留具体路径并明确失败，聚合不会静默跳过后继续生成一个看似完整的结果。
+删除质控名单中的行或删除模块配置不会删除既有评分文件。评分仍存在时，
+模块内部名不能被普通重命名或复用于另一个逻辑模块；这类变更需要显式迁移。
+同理，已有评分所引用的 rater 或 `ezqcid` 不能在原位置重新指代另一人或
+另一条记录。
+
+旧版
+`<module>._.<ezqcid>._.<rater>._.<score>._.<tag>.json`
+仍可读取，但新程序只写规范文件名。若同一三元组仍有旧文件，普通保存会
+拒绝覆盖，必须先执行单独授权的冲突优先迁移。默认命令只生成只读计划：
+
+```bash
+python scripts/migrate_rating_files.py /exact/project/RatingFiles
+```
+
+计划会报告非法 ID、重复身份、仅大小写冲突、目标占用、新旧共存、损坏或
+错位记录；它不清洗名称，也不按 mtime、payload 时间或扫描顺序猜测赢家。
+只有计划无冲突且操作者明确批准时，才可准备候选：
+
+```bash
+python scripts/migrate_rating_files.py /exact/project/RatingFiles --apply
+```
+
+`--apply` 只在活动 `RatingFiles` 旁构建并完整回读验证一个未激活的 sibling
+candidate tree；它不切换活动目录、不移动或删除源文件。对真实项目执行
+计划、候选构建、后续激活或归档都需要分别授权，不能把候选构建理解成已经
+完成真实数据迁移。
+
+常规容量目标是质控总名单通常不超过约 100,000 行。迁移规划和校验逐文件
+处理，内存中只保留一个 payload 及轻量身份/哈希元数据，不一次装入全部
+评分正文；但评分文件数仍会随模块和评分者增加，候选树也需要额外磁盘空间，
+因此这一约束不是对任意规模评分聚合或迁移速度的承诺。
+
+单次 QC 会话中，canonical 记录始终通过确定性路径定位。为兼容旧文件名，
+EasyQC 对当前 module/rater 目录建立一次轻量 basename 索引，随后按
+`ezqcid` 二分查找；目录元数据发生外部变化时会刷新索引。这只说明查找
+路径和定性复杂度，不构成 100,000 个评分文件的性能证明。
 
 ### 6. 提取和聚合结果
 
@@ -224,6 +295,10 @@ Qt Preview 还可在 **跨项目设置 → 常量模板** 中保存常用起点�
 2. 验证文件路径（module/rater/ezqcid）与 JSON 内容的一致性
 3. 展平嵌套 JSON → 透视为宽格式（列名：`<module>.<rater>.<field>`）
 4. 与受试者主表合并 → 输出 `ezqc_qctable.csv`
+
+结构化扫描结果同时包含有效记录和每一个带路径的错误。正式聚合只有在错误
+集合为空时才继续；损坏、错位、重复或仅大小写冲突的记录不会被静默排除。
+修复或显式迁移后应重新扫描并重建宽表。
 
 结果表可直接导入 R / Python 进行：样本排除（按 tag 筛选）、QC 评分分布统计、多评分者一致性分析（Cohen's κ、ICC）。
 
@@ -358,7 +433,10 @@ easyqc/
 │   ├── module_repository.py     # 每模块一个 JSON 的加载、迁移与原子发布
 │   ├── template_service.py      # 安装级模板与命令设置
 │   ├── project_template_service.py # 复制模板为项目自有配置
-│   ├── rating_service.py       # 评分 JSON 扫描/验证/保存/聚合/透视
+│   ├── rating_identity.py      # 稳定评分身份、文件名和可移植路径契约
+│   ├── rating_service.py       # 双格式扫描、规范保存、验证、聚合和透视
+│   ├── rating_write_lock.py    # 项目级跨线程/跨进程评分写锁
+│   ├── rating_migration.py     # 冲突优先计划与未激活候选树构建/验证
 │   ├── table_service.py        # CSV 表格加载/保存（原子写入）
 │   ├── code_executor.py        # 用户可选 direct/Shell 的外部进程控制
 │   ├── table_transform.py      # 结构化表格操作引擎（8 种操作）
@@ -398,7 +476,7 @@ easyqc/
 │
 ├── easyqc.spec                 # PyInstaller 打包配置
 ├── build.py                    # 一键打包脚本 (Linux/macOS/Windows)
-├── tests/                      # pytest 自动化测试（当前 1423 个测试项）
+├── tests/                      # pytest 自动化测试（当前 1585 个测试项）
 │   ├── test_core/              # 核心服务测试
 │   ├── test_models/            # 数据模型测试
 │   ├── test_gui/               # GUI 组件测试

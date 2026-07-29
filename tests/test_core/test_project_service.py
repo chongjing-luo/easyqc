@@ -97,6 +97,33 @@ def test_project_settings_commit_updates_module_files_and_legacy_snapshot(
     assert stored["qcmodule"]["1"]["label"] == "Updated label"
 
 
+def test_project_settings_reject_case_only_module_duplicate_before_writing(
+    tmp_path,
+) -> None:
+    service = ProjectService(tmp_path / "projects.json")
+    project = service.create("SAMPLE", tmp_path)
+    candidate = deepcopy(dict(service.settings))
+    duplicate = deepcopy(candidate["qcmodule"]["1"])
+    duplicate["name"] = "Example"
+    candidate["qcmodule"]["2"] = duplicate
+    registry_before = (tmp_path / "projects.json").read_bytes()
+    settings_before = project.settings_path.read_bytes()
+    modules_before = {
+        path.name: path.read_bytes()
+        for path in sorted((project.path / "modules").glob("*.json"))
+    }
+
+    with pytest.raises(ValueError, match="模块名称不能重复"):
+        service.commit_settings(candidate, notify=False)
+
+    assert (tmp_path / "projects.json").read_bytes() == registry_before
+    assert project.settings_path.read_bytes() == settings_before
+    assert {
+        path.name: path.read_bytes()
+        for path in sorted((project.path / "modules").glob("*.json"))
+    } == modules_before
+
+
 def test_project_settings_failure_restores_module_files_and_memory(
     tmp_path,
     monkeypatch,

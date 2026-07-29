@@ -113,7 +113,7 @@ def test_copying_template_module_creates_detached_editable_project_record(
     copier = ProjectTemplateService(templates)
     candidate = deepcopy(template_record.module)
     candidate.label = "Project label"
-    candidate.rater = "rater-a"
+    candidate.rater = "rater_a"
 
     copied = copier.copy_module(
         template_record.module_id,
@@ -125,7 +125,7 @@ def test_copying_template_module_creates_detached_editable_project_record(
     assert copied.module_id != template_record.module_id
     assert copied.scope == "project"
     assert copied.module.label == "Project label"
-    assert copied.module.rater == "rater-a"
+    assert copied.module.rater == "rater_a"
     assert projects.load(copied.module_id).module.label == "Project label"
     assert templates.module(template_record.module_id).module.label == "Template label"
 
@@ -158,7 +158,7 @@ def test_copying_template_module_obeys_destination_first_name_rule(
 def test_template_module_import_export_creates_detached_record(tmp_path) -> None:
     source = TemplateService(tmp_path / "source")
     module = _module("AnatQC", "Anatomical template")
-    module.rater = "template-rater"
+    module.rater = "template_rater"
     module.qc_filter = {"groups": [{"id": "kept"}]}
     module.button = {"help": "SOP"}
     original = source.add_module(module, display_order=10)
@@ -205,7 +205,7 @@ def test_template_to_project_to_view_command_first_throughput(tmp_path) -> None:
     templates = TemplateService(installation)
     templates.set_constant("DATA_ROOT", "/images")
     module = _module("AnatQC")
-    module.rater = "rater-a"
+    module.rater = "rater_a"
     module.code = "viewer {DATA_ROOT}/{image_file}"
     source = templates.add_module(module, display_order=10)
 

@@ -69,6 +69,10 @@ def _module(*, rater="rater1", watch_mode=False):
     }
 
 
+def _rating_dir(tmp_path: Path) -> Path:
+    return tmp_path / "RatingFiles" / "AnatQC" / "rater1"
+
+
 def _workflow(
     tmp_path: Path,
     *,
@@ -85,7 +89,7 @@ def _workflow(
         else pd.DataFrame(
             {"ezqcid": ["SUB001", "SUB002"], "image": ["one.nii", "two.nii"]}
         ),
-        rating_dir=tmp_path / "ratings",
+        rating_dir=_rating_dir(tmp_path),
         code_executor=executor or _FakeExecutor(),
         initial_ezqcid=initial_ezqcid,
         initial_read_only=initial_read_only,
@@ -418,7 +422,7 @@ def test_prepared_queue_save_next_stays_inside_workflow_identities(
     qtbot.mouseClick(workspace.save_next_button, Qt.LeftButton)
 
     assert workspace.workflow.current_ezqcid == "B-002"
-    assert list((tmp_path / "ratings").glob("AnatQC._.B-001*.json"))
+    assert list(_rating_dir(tmp_path).glob("AnatQC-rater1-B-001.json"))
     assert executor.started[-1][0] == {0: "freeview b2.nii"}
 
     qtbot.mouseClick(workspace.score_buttons["1"]["Good"], Qt.LeftButton)
@@ -506,7 +510,7 @@ def test_initial_history_read_only_can_be_cleared_then_edited_and_saved(
     assert workspace.workflow.current_module.scores["1"].value == "Good"
     assert workspace.workflow.current_module.tags["1"].value is True
     assert workspace.workflow.current_module.notes == "edited historical note"
-    assert list((tmp_path / "ratings").glob("AnatQC._.SUB001*.json"))
+    assert list(_rating_dir(tmp_path).glob("AnatQC-rater1-SUB001.json"))
 
 
 def test_dirty_controller_close_rejects_without_cleanup_then_accepts_once(
@@ -555,7 +559,7 @@ def test_qt_qc_editor_saves_full_draft_then_advances(qtbot, tmp_path) -> None:
     qtbot.mouseClick(workspace.save_next_button, Qt.LeftButton)
 
     assert workflow.current_ezqcid == "SUB002"
-    assert list((tmp_path / "ratings").glob("AnatQC._.SUB001*.json"))
+    assert list(_rating_dir(tmp_path).glob("AnatQC-rater1-SUB001.json"))
     assert workspace.queue_model.current_visible_row() == 1
     assert workspace.queue_table.currentIndex().row() == 1
     assert workspace.score_buttons["1"][None].isChecked()
@@ -616,7 +620,7 @@ def test_qt_qc_workspace_resizes_with_long_text_and_keyboard_actions(
     module["tags"]["1"]["label"] = "需要人工复核的长标签_" + "复核" * 18
     subjects = pd.DataFrame(
         {
-            "ezqcid": ["受试者_" + "一" * 20, "受试者_" + "二" * 20],
+            "ezqcid": ["SUBJECT_" + "A" * 20, "SUBJECT_" + "B" * 20],
             "image": [
                 "/含 空格/中文路径/" + "深层目录/" * 12 + "one.nii",
                 "/含 空格/中文路径/" + "深层目录/" * 12 + "two.nii",
@@ -657,7 +661,7 @@ def test_qt_qc_workspace_resizes_with_long_text_and_keyboard_actions(
     assert all(action.shortcut().toString() for action in actions)
     assert not workspace.save_action.isEnabled()
     assert not workspace.save_next_action.isEnabled()
-    before = list((tmp_path / "ratings").glob("*.json"))
+    before = list(_rating_dir(tmp_path).glob("*.json"))
     workspace.notes_edit.setFocus()
     qtbot.waitUntil(workspace.notes_edit.hasFocus)
     qtbot.keyClick(
@@ -665,7 +669,7 @@ def test_qt_qc_workspace_resizes_with_long_text_and_keyboard_actions(
         Qt.Key.Key_S,
         Qt.KeyboardModifier.ControlModifier,
     )
-    assert list((tmp_path / "ratings").glob("*.json")) == before
+    assert list(_rating_dir(tmp_path).glob("*.json")) == before
     workspace.queue_table.doubleClicked.emit(workspace.queue_model.index(0, 1))
     assert executor.started
     assert all(control.isVisible() for control in workspace.action_controls)
@@ -789,8 +793,8 @@ def test_qt_schema_drift_shows_reused_legacy_score_then_restores_editing(
     qtbot,
     tmp_path,
 ) -> None:
-    target = tmp_path / "ratings"
-    target.mkdir()
+    target = _rating_dir(tmp_path)
+    target.mkdir(parents=True)
     saved = _module()
     saved.update({"ezqcid": "SUB001", "rater": "rater1"})
     saved["scores"]["1"]["num_"] = "Reject,Accept"
@@ -841,8 +845,8 @@ def test_qt_schema_drift_shows_reused_legacy_score_then_restores_editing(
 
 
 def test_qt_module_watch_survives_schema_case_navigation(qtbot, tmp_path) -> None:
-    target = tmp_path / "ratings"
-    target.mkdir()
+    target = _rating_dir(tmp_path)
+    target.mkdir(parents=True)
     saved = _module(watch_mode=True)
     saved.update({"ezqcid": "SUB001", "rater": "rater1"})
     saved["scores"]["1"]["num_"] = "Reject,Accept"

@@ -29,7 +29,11 @@ class TableService:
         path = self.table_path(project, table_type)
         if not path.exists():
             return None
-        return pd.read_csv(path, encoding="utf-8")
+        return pd.read_csv(
+            path,
+            encoding="utf-8",
+            converters={"ezqcid": lambda value: value},
+        )
 
     def save_table(
         self,

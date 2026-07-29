@@ -49,9 +49,9 @@ class Rating:
 
     @property
     def filename(self) -> str:
-        score1 = self.scores.get("1", "None")
-        tag1 = self.tags.get("1", False)
-        return f"{self.module_name}._.{self.ezqcid}._.{self.rater}._.{score1}._.{tag1}.json"
+        """Stable basename; Core validates identities and complete paths."""
+
+        return f"{self.module_name}-{self.rater}-{self.ezqcid}.json"
 
     @classmethod
     def from_module(cls, module: _ModuleLike) -> "Rating":

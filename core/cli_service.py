@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from core.project_service import ProjectService
+from core.rating_identity import RatingIdentityError, validate_rating_identity
 from models.project import Project
 
 
@@ -31,6 +32,11 @@ def resolve_qcpage_launch(
     ezqcid: str,
     registry_path: Path,
 ) -> QCPageLaunchContext:
+    try:
+        validate_rating_identity(module_name, rater, ezqcid)
+    except RatingIdentityError as exc:
+        raise QCPageLaunchError(str(exc)) from exc
+
     project_service = ProjectService(registry_path)
     if project_name not in project_service.list_all():
         raise QCPageLaunchError(f"项目不存在: {project_name}; 可用项目: {project_service.list_all()}")

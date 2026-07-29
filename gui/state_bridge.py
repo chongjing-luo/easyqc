@@ -17,11 +17,13 @@ until that path is also migrated.
 from __future__ import annotations
 
 import platform
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+from core.configuration_service import ConfigurationService
 from core.session_state import SessionState
 from core.table_service import TABLE_QCTABLE
 from models.project import Project
@@ -73,6 +75,10 @@ class GUIStateBridge:
         self.project_service = project_service
         self.session_state = session_state or SessionState()
         self.table_service = table_service
+        self.configuration_service = ConfigurationService(
+            project_service,
+            table_service,
+        )
         self.dt = _DTCompat(self)
         # accept project_manager kwarg for drop-in compat (ignored)
         self.project_manager = None
@@ -247,26 +253,97 @@ class GUIStateBridge:
             return False
         return True
 
+    def _captured_module_payloads(self):
+        state = self.project_service.capture_settings_state()
+        modules = state.settings.get("qcmodule")
+        if not isinstance(modules, dict) or not modules:
+            raise ValueError("至少保留一个 QC 模块")
+        payloads = [
+            deepcopy(payload)
+            for _, payload in sorted(
+                modules.items(),
+                key=lambda item: int(item[0]),
+            )
+        ]
+        return state, payloads
+
+    def _commit_module_payloads(self, state, payloads) -> None:
+        if not payloads:
+            raise ValueError("至少保留一个 QC 模块")
+        candidate = deepcopy(state.settings)
+        candidate["qcmodule"] = {
+            str(position): deepcopy(payload)
+            for position, payload in enumerate(payloads, start=1)
+        }
+        self.project_service.commit_settings(
+            candidate,
+            expected_state=state,
+        )
+
+    @staticmethod
+    def _module_position(index: str | int, count: int) -> int:
+        position = int(index)
+        if position < 1:
+            raise ValueError("模块序号必须是正整数")
+        return min(position - 1, count)
+
     def add_module(self, name: str, label: str, index: str | int) -> None:
-        self.project_service.add_module(name, label, index=int(index))
-        self.reorder_modules()
-        self.project_service.save()
+        state, payloads = self._captured_module_payloads()
+        if any(
+            str(payload.get("name", "")).casefold() == name.casefold()
+            for payload in payloads
+        ):
+            raise ValueError(f"模块已存在: {name}")
+        module = self.project_service.default_module(name, label)
+        payloads.insert(
+            self._module_position(index, len(payloads)),
+            module.to_legacy_dict(),
+        )
+        self._commit_module_payloads(state, payloads)
 
     def modify_module(self, index: str, name: str, label: str, new_index: str | int) -> None:
-        # rename + relabel + reorder
-        qcidx = str(index)
-        module = self.module_by_key(qcidx)
+        state, payloads = self._captured_module_payloads()
+        source_position = int(index) - 1
+        if source_position < 0 or source_position >= len(payloads):
+            raise KeyError(index)
+        module = payloads.pop(source_position)
+        if any(
+            str(payload.get("name", "")).casefold() == name.casefold()
+            for payload in payloads
+        ):
+            raise ValueError(f"模块已存在: {name}")
         module["name"] = name
         module["label"] = label
-        self.reorder_modules()
-        self.project_service.save()
+        payloads.insert(
+            self._module_position(new_index, len(payloads)),
+            module,
+        )
+        self._commit_module_payloads(state, payloads)
 
     def insert_module(self, index: str | int, module: dict[str, Any]) -> None:
-        self.project_service.insert_module(int(index), module)
-        self.project_service.save()
+        state, payloads = self._captured_module_payloads()
+        inserted = deepcopy(module)
+        name = str(inserted.get("name", ""))
+        if any(
+            str(payload.get("name", "")).casefold() == name.casefold()
+            for payload in payloads
+        ):
+            raise ValueError(f"模块已存在: {name}")
+        payloads.insert(
+            self._module_position(index, len(payloads)),
+            inserted,
+        )
+        self._commit_module_payloads(state, payloads)
 
     def delete_module(self, index: str | int) -> None:
-        self.project_service.delete_module(int(index))
+        state, payloads = self._captured_module_payloads()
+        if len(payloads) <= 1:
+            raise ValueError("至少保留一个 QC 模块")
+        position = int(index) - 1
+        if position < 0 or position >= len(payloads):
+            raise KeyError(index)
+        del payloads[position]
+        self._commit_module_payloads(state, payloads)
 
     def can_delete_module(self) -> bool:
         return self.project_service.can_delete_module()
@@ -275,10 +352,13 @@ class GUIStateBridge:
         self.project_service.export_module(module_name, path)
 
     def reorder_modules(self) -> None:
-        sorted_modules = sorted(self.qcmodule().items(), key=lambda item: int(item[0]))
-        self.project_service._settings["qcmodule"] = {
-            str(i): mod for i, (_, mod) in enumerate(sorted_modules, 1)
+        state, payloads = self._captured_module_payloads()
+        normalized = {
+            str(position): payload
+            for position, payload in enumerate(payloads, start=1)
         }
+        if normalized != state.settings.get("qcmodule"):
+            self._commit_module_payloads(state, payloads)
 
     # ---- rating dict (session) ----
 
@@ -329,13 +409,38 @@ class GUIStateBridge:
         return self.session_state.has_all_variable_rows()
 
     def set_all_variable_table(self, df: pd.DataFrame | None) -> None:
-        self.session_state.set_all_variable_table(df)
+        validated = (
+            None
+            if df is None
+            else self.configuration_service.validate_subjects(df)
+        )
+        self.session_state.set_all_variable_table(validated)
 
     def merge_all_variables_as_rows(self, df: pd.DataFrame) -> None:
-        self.session_state.merge_all_variables_as_rows(df)
+        current = self.session_state.all_variable_table()
+        candidate = (
+            pd.concat([current, df], ignore_index=True)
+            if current is not None
+            else df.copy()
+        )
+        validated = self.configuration_service.validate_subjects(candidate)
+        self.session_state.set_all_variable_table(validated)
 
     def merge_all_variables_as_columns(self, df: pd.DataFrame) -> None:
-        self.session_state.merge_all_variables_as_columns(df)
+        incoming = self.configuration_service.validate_subjects(df)
+        current = self.session_state.all_variable_table()
+        candidate = (
+            current.merge(
+                incoming,
+                on="ezqcid",
+                how="outer",
+                validate="one_to_one",
+            )
+            if current is not None
+            else incoming
+        )
+        validated = self.configuration_service.validate_subjects(candidate)
+        self.session_state.set_all_variable_table(validated)
 
     def save_all_variable_table(self) -> None:
         if self.table_service is not None:
@@ -343,7 +448,8 @@ class GUIStateBridge:
             if cp is not None:
                 df = self.session_state.all_variable_table()
                 if df is not None:
-                    self.table_service.save_table(cp, "ezqc_all", df)
+                    validated = self.configuration_service.validate_subjects(df)
+                    self.table_service.save_table(cp, "ezqc_all", validated)
 
     def refresh_project_after_variable_merge(self) -> None:
         cp = self.project_service.current_project

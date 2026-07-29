@@ -21,7 +21,7 @@ def test_rating_round_trip_preserves_legacy_payload_shape(fixtures_dir: Path) ->
     rating = Rating.from_legacy_dict(legacy)
     result = rating.to_legacy_dict()
 
-    assert rating.filename == "example._.SUB001._.rater1._.Good._.True.json"
+    assert rating.filename == "example-rater1-SUB001.json"
     assert result["name"] == "example"
     assert result["scores"]["1"]["label"] == "Overall quality"
     assert result["scores"]["1"]["value"] == "Good"

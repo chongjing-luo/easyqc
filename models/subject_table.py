@@ -50,7 +50,11 @@ class SubjectTable:
 
     @classmethod
     def from_csv(cls, path) -> "SubjectTable":
-        df = pd.read_csv(path, encoding="utf-8")
+        df = pd.read_csv(
+            path,
+            encoding="utf-8",
+            converters={"ezqcid": lambda value: value},
+        )
         return cls.from_dataframe(df)
 
 

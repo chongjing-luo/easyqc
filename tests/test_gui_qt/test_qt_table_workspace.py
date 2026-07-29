@@ -580,7 +580,13 @@ def test_export_action_runs_complete_result_in_background_and_reports_receipt(
     assert workspace.export_task_controller.busy
     assert not workspace.export_action.isEnabled()
     assert workspace.cancel_export_action.isVisible()
-    qtbot.waitUntil(lambda: workspace.last_export_receipt is not None, timeout=3000)
+    qtbot.waitUntil(
+        lambda: (
+            workspace.last_export_receipt is not None
+            and workspace.export_action.isEnabled()
+        ),
+        timeout=3000,
+    )
 
     actual = pd.read_csv(destination, encoding="utf-8")
     assert_frame_equal(actual, expected)

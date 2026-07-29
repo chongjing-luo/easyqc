@@ -1,7 +1,7 @@
 # Stable rating JSON filename design
 
 Date: 2026-07-28
-Status: user-approved direction; pending written-spec review
+Status: user-approved; implemented and verified with synthetic data
 Architecture:
 `../../../../dev/easyqc/03_architecture_design/architecture_design_rating_filename_20260728_100848.md`
 
@@ -130,8 +130,15 @@ path readable by the old program, so cutover retains a verified rollback backup.
 ## Core boundaries
 
 - `Rating` continues to model a complete current snapshot.
-- `RatingService` owns validation, path construction, dual-format reads,
-  collision guards, saves and migration planning.
+- `rating_identity` owns pure validation, filename parsing/construction and
+  portable path budgets.
+- `RatingService` owns dual-format reads, path/body collision guards, canonical
+  saves and aggregation input.
+- `rating_write_lock` owns project-scoped same-process and OS writer
+  coordination.
+- `rating_migration` owns the read-only conflict plan and explicit construction
+  of a verified, inactive sibling candidate. It never activates the candidate
+  or deletes/moves the active source tree.
 - `FileUtils` owns atomic publication.
 - Qt/tkinter adapters display typed errors and never parse paths or JSON.
 - Aggregation reads validated JSON values; filenames never supply scores/tags.

@@ -591,7 +591,7 @@ def test_single_language_button_toggles_without_losing_page_or_draft(
     )
 
 
-def test_runtime_language_switch_preserves_module_and_rater_text(
+def test_runtime_language_switch_preserves_label_and_rater_identity(
     qtbot,
     tmp_path,
 ) -> None:
@@ -601,7 +601,7 @@ def test_runtime_language_switch_preserves_module_and_rater_text(
         tmp_path,
         "SAMPLE",
         module_label="常量设置",
-        module_rater="项目选择",
+        module_rater="rater_cn",
     )
     window = build_product_window(services)
     qtbot.addWidget(window)
@@ -617,7 +617,7 @@ def test_runtime_language_switch_preserves_module_and_rater_text(
     module_row = window.config_workspace.module_list.itemWidget(module_item)
     assert module_row.findChild(QLabel, "moduleRowTitle").text() == "常量设置"
     assert module_row.findChild(QLabel, "moduleRowDetail").text() == (
-        "AnatQC · 项目选择"
+        "AnatQC · rater_cn"
     )
     start_button = module_row.findChild(QPushButton, "moduleRowStart")
     assert start_button.text() == "Start QC"
@@ -2213,10 +2213,26 @@ def test_pre_qc_row_and_column_deletion_persists_without_touching_rating_files(
         / "RatingFiles"
         / "AnatQC"
         / "rater1"
-        / "retained-rating.json"
+        / "AnatQC-rater1-SUB001.json"
     )
     rating_path.parent.mkdir(parents=True, exist_ok=True)
-    rating_path.write_bytes(b'{"ezqcid":"SUB001","score":"Good","tag":true}')
+    rating_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "name": "AnatQC",
+                "rater": "rater1",
+                "ezqcid": "SUB001",
+                "scores": {},
+                "tags": {},
+                "notes": None,
+                "time": None,
+                "code_exe": {},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     rating_before = rating_path.read_bytes()
     workspace = window.table_workspace
     monkeypatch.setattr(

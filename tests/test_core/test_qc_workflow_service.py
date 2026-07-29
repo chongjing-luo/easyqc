@@ -171,7 +171,7 @@ def test_partial_viewer_launch_failure_cleans_started_processes(tmp_path) -> Non
 def test_watch_mode_without_rater_rejects_edits_and_writes_nothing(tmp_path) -> None:
     target = tmp_path / "should-not-exist"
     workflow = QcWorkflowService(
-        _module(rater="  "),
+        _module(rater=""),
         _subjects(),
         rating_dir=target,
         code_executor=_FakeExecutor(),
@@ -216,7 +216,7 @@ def test_save_preserves_full_module_payload_and_schema_version(tmp_path) -> None
     path = workflow.save()
     payload = json.loads(path.read_text(encoding="utf-8"))
 
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["name"] == "AnatQC"
     assert payload["label"] == "Anatomical image quality"
     assert payload["button"] == {"help": "Open SOP"}

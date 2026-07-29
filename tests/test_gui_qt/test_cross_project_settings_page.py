@@ -122,7 +122,7 @@ def test_cross_project_page_module_editor_preserves_hidden_payload(
     module = QCModule(
         name="AnatQC",
         label="Anatomical template",
-        rater="rater-a",
+        rater="rater_a",
         scores={
             "1": Score("1", "Quality", "Poor,Good", "Poor,Good"),
         },

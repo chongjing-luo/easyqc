@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
@@ -14,10 +15,15 @@ import pandas as pd
 from core.event_bus import Event, EventType
 from core.module_filter import resolve_module_filter_identities
 from core.project_service import (
-    MODULE_NAME_PATTERN,
     ProjectService,
     ProjectSettingsState,
     ProjectStateConflictError,
+)
+from core.rating_identity import (
+    RatingIdentityError,
+    validate_ezqcid,
+    validate_module_name,
+    validate_rater,
 )
 from core.table_service import TABLE_ALL, TableService
 from core.table_transform import TableTransformEngine, TableTransformError
@@ -280,9 +286,16 @@ class ConfigurationService:
         suffix = source.suffix.casefold()
         try:
             if suffix == ".csv":
-                frame = pd.read_csv(source, encoding="utf-8")
+                frame = pd.read_csv(
+                    source,
+                    encoding="utf-8",
+                    converters={"ezqcid": lambda value: value},
+                )
             elif suffix in {".xlsx", ".xls"}:
-                frame = pd.read_excel(source)
+                frame = pd.read_excel(
+                    source,
+                    converters={"ezqcid": lambda value: value},
+                )
             elif suffix in {".txt", ".list"}:
                 name = self._import_column_name(single_column_name or "")
                 values = [
@@ -330,7 +343,7 @@ class ConfigurationService:
         """Read one detached configuration view for UI-thread rendering."""
         project = self.current_project
         subjects = (
-            self._validated_subjects(self.subjects())
+            self.validate_subjects(self.subjects())
             if project is not None
             else pd.DataFrame(columns=["ezqcid"])
         )
@@ -342,7 +355,13 @@ class ConfigurationService:
             modules=self.modules(),
         )
 
-    def _validated_subjects(self, frame: pd.DataFrame) -> pd.DataFrame:
+    def validate_subjects(self, frame: pd.DataFrame) -> pd.DataFrame:
+        """Return a detached, identity-safe QC-list candidate.
+
+        All GUI implementations use this public boundary before a candidate
+        reaches either session state or durable table storage.
+        """
+
         if not isinstance(frame, pd.DataFrame):
             raise TypeError("质控名单必须是 pandas DataFrame")
         if frame.columns.has_duplicates:
@@ -350,14 +369,39 @@ class ConfigurationService:
         if "ezqcid" not in frame.columns:
             raise ConfigurationError("质控名单缺少 ezqcid")
         result = frame.copy(deep=True)
-        identities = result["ezqcid"].map(
-            lambda value: "" if value is None or pd.isna(value) else str(value).strip()
-        )
-        if identities.eq("").any():
+        if any(
+            value is None or (isinstance(value, str) and value == "")
+            for value in result["ezqcid"]
+        ):
             raise ConfigurationError("质控名单包含空白 ezqcid")
-        duplicates = sorted(identities[identities.duplicated(keep=False)].unique().tolist())
+        try:
+            identities = tuple(
+                validate_ezqcid(value)
+                for value in result["ezqcid"]
+            )
+        except RatingIdentityError as exc:
+            raise ConfigurationError(str(exc)) from exc
+
+        duplicates = sorted(
+            identity
+            for identity, count in Counter(identities).items()
+            if count > 1
+        )
         if duplicates:
             raise ConfigurationError(f"质控名单包含重复 ezqcid: {duplicates}")
+
+        casefolded: dict[str, str] = {}
+        case_collisions: set[tuple[str, str]] = set()
+        for identity in identities:
+            prior = casefolded.setdefault(identity.casefold(), identity)
+            if prior != identity:
+                case_collisions.add(tuple(sorted((prior, identity))))
+        if case_collisions:
+            raise ConfigurationError(
+                "质控名单包含 case-only ezqcid 冲突: "
+                f"{sorted(case_collisions)}"
+            )
+
         result["ezqcid"] = identities
         constant_collisions = sorted(set(map(str, result.columns)) & set(self.constants()))
         if constant_collisions:
@@ -367,7 +411,7 @@ class ConfigurationService:
         return result
 
     def replace_subjects(self, frame: pd.DataFrame, *, notify: bool = True) -> None:
-        validated = self._validated_subjects(frame)
+        validated = self.validate_subjects(frame)
         self.table_service.save_table(self._require_project(), TABLE_ALL, validated)
         if notify:
             self.publish_subjects_changed()
@@ -396,7 +440,7 @@ class ConfigurationService:
             raise ConfigurationError("删除名单行必须提供非空 ezqcid")
         if len(set(normalized)) != len(normalized):
             raise ConfigurationError("删除名单行包含重复 ezqcid")
-        frame = self._validated_subjects(self.subjects())
+        frame = self.validate_subjects(self.subjects())
         available = set(frame["ezqcid"])
         missing = tuple(value for value in normalized if value not in available)
         if missing:
@@ -432,7 +476,7 @@ class ConfigurationService:
             raise ConfigurationError("删除名单列包含重复列名")
         if "ezqcid" in normalized:
             raise ConfigurationError("质控前名单不能删除 ezqcid")
-        frame = self._validated_subjects(self.subjects())
+        frame = self.validate_subjects(self.subjects())
         missing = tuple(value for value in normalized if value not in frame.columns)
         if missing:
             raise ConfigurationError(f"质控前名单列不存在或已变化: {missing}")
@@ -465,7 +509,7 @@ class ConfigurationService:
                 frame,
                 request,
             )
-            frame = self._validated_subjects(frame)
+            frame = self.validate_subjects(frame)
         except (ArithmeticError, TypeError, ValueError) as exc:
             raise ConfigurationError(str(exc)) from exc
         self.table_service.save_table(
@@ -484,7 +528,11 @@ class ConfigurationService:
         mode: str = "replace",
         notify: bool = True,
     ) -> None:
-        frame = pd.read_csv(path, encoding="utf-8")
+        frame = pd.read_csv(
+            path,
+            encoding="utf-8",
+            converters={"ezqcid": lambda value: value},
+        )
         if mode == "replace":
             self.replace_subjects(frame, notify=notify)
         else:
@@ -547,8 +595,8 @@ class ConfigurationService:
             raise ConfigurationError(
                 f"质控名单导入方式 {mode} 不支持冲突策略: {conflict_policy}"
             )
-        incoming = self._validated_subjects(incoming)
-        current = self._validated_subjects(self.subjects())
+        incoming = self.validate_subjects(incoming)
+        current = self.validate_subjects(self.subjects())
         current_ids = current["ezqcid"].tolist()
         incoming_ids = incoming["ezqcid"].tolist()
         current_id_set = set(current_ids)
@@ -580,7 +628,7 @@ class ConfigurationService:
                 incoming,
                 conflict_policy=str(conflict_policy),
             )
-        candidate = self._validated_subjects(candidate)
+        candidate = self.validate_subjects(candidate)
         summary = SubjectImportSummary(
             mode=mode,
             conflict_policy=conflict_policy,
@@ -697,7 +745,7 @@ class ConfigurationService:
         mode: str,
         notify: bool = True,
     ) -> None:
-        incoming = self._validated_subjects(incoming)
+        incoming = self.validate_subjects(incoming)
         current = self.subjects()
         if current.empty and tuple(current.columns) == ("ezqcid",):
             self.replace_subjects(incoming, notify=notify)
@@ -826,8 +874,12 @@ class ConfigurationService:
     @staticmethod
     def _normalized_module_payload(module: QCModule | dict[str, Any]) -> dict[str, Any]:
         typed = deepcopy(module) if isinstance(module, QCModule) else QCModule.from_legacy_dict(deepcopy(module))
-        if not MODULE_NAME_PATTERN.match(typed.name):
-            raise ConfigurationError(f"Invalid module name: {typed.name}")
+        try:
+            validate_module_name(typed.name)
+            if typed.rater is not None and typed.rater != "":
+                validate_rater(typed.rater)
+        except RatingIdentityError as exc:
+            raise ConfigurationError(str(exc)) from exc
         typed.ezqcid = None
         typed.time = None
         typed.notes = None
@@ -847,18 +899,24 @@ class ConfigurationService:
         if not payloads:
             raise ConfigurationError("At least one QC module is required")
         names = [str(payload.get("name", "")) for payload in payloads]
-        if len(set(names)) != len(names):
+        if len({name.casefold() for name in names}) != len(names):
             raise ConfigurationError("Module name already exists")
         candidate = self._settings_candidate()
         candidate["qcmodule"] = {
             str(index): deepcopy(payload)
             for index, payload in enumerate(payloads, start=1)
         }
-        self.project_service.commit_settings(candidate, notify=notify)
+        try:
+            self.project_service.commit_settings(candidate, notify=notify)
+        except ValueError as exc:
+            raise ConfigurationError(str(exc)) from exc
 
     def add_module(self, name: str, label: str, *, index: int | None = None) -> None:
         name = name.strip()
-        if any(module.name == name for module in self.modules()):
+        if any(
+            module.name.casefold() == name.casefold()
+            for module in self.modules()
+        ):
             raise ConfigurationError(f"Module already exists: {name}")
         module = self.project_service.default_module(name, label.strip() or name)
         payloads = [module.to_legacy_dict() for module in self.modules()]
@@ -980,7 +1038,10 @@ class ConfigurationService:
     ) -> None:
         normalized = self._normalized_module_payload(payload)
         name = normalized["name"]
-        if any(module.name == name for module in self.modules()):
+        if any(
+            module.name.casefold() == name.casefold()
+            for module in self.modules()
+        ):
             raise ConfigurationError(f"Module already exists: {name}")
         payloads = [module.to_legacy_dict() for module in self.modules()]
         position = len(payloads) if index is None else max(0, min(len(payloads), int(index)))

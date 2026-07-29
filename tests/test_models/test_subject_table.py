@@ -47,6 +47,19 @@ def test_subject_table_from_csv_round_trip(tmp_path) -> None:
     assert list(table.dataframe["site"]) == ["A", "B"]
 
 
+def test_subject_table_from_csv_preserves_leading_zero_ezqcid(tmp_path) -> None:
+    csv = tmp_path / "ezqc_all.csv"
+    csv.write_text(
+        "ezqcid,visit\n001,1\n01-A,2\n",
+        encoding="utf-8",
+    )
+
+    table = SubjectTable.from_csv(csv)
+
+    assert table.dataframe["ezqcid"].tolist() == ["001", "01-A"]
+    assert table.dataframe["visit"].tolist() == [1, 2]
+
+
 def test_subject_table_dataframe_property_returns_string_typed_copy() -> None:
     df = pd.DataFrame({"ezqcid": ["S1"], "site": ["A"]})
     table = SubjectTable.from_dataframe(df)

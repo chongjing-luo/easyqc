@@ -1,4 +1,5 @@
 import json
+import threading
 
 from utils.file_utils import FileUtils
 
@@ -129,3 +130,49 @@ def test_atomic_write_to_missing_parent_creates_dirs(tmp_path) -> None:
     FileUtils.atomic_write(path, '{"ok": true}')
 
     assert json.loads(path.read_text(encoding="utf-8")) == {"ok": True}
+
+
+def test_atomic_write_uses_unique_short_same_directory_temps(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Two writes in one process must not reuse the same PID-based temp file."""
+    path = tmp_path / ("very-long-rating-filename-" + ("x" * 80) + ".json")
+    real_replace = __import__("os").replace
+    replace_barrier = threading.Barrier(2)
+    temp_paths = []
+    errors = []
+
+    def synchronized_replace(source, target):
+        temp_paths.append(source)
+        replace_barrier.wait(timeout=5)
+        real_replace(source, target)
+
+    monkeypatch.setattr("utils.file_utils.os.replace", synchronized_replace)
+
+    def write(content: str) -> None:
+        try:
+            FileUtils.atomic_write(path, content)
+        except Exception as exc:  # asserted below with useful failure evidence
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=write, args=('{"writer": 1}',)),
+        threading.Thread(target=write, args=('{"writer": 2}',)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert errors == []
+    assert len(set(temp_paths)) == 2
+    assert all(temp.parent == tmp_path for temp in temp_paths)
+    assert all(temp.name.startswith(".eqc-") for temp in temp_paths)
+    assert all(len(temp.name) < 32 for temp in temp_paths)
+    assert json.loads(path.read_text(encoding="utf-8")) in (
+        {"writer": 1},
+        {"writer": 2},
+    )
+    assert [item for item in tmp_path.iterdir() if item != path] == []

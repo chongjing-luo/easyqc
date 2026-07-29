@@ -54,9 +54,9 @@ class DataManager:
                 lines = [line.strip() for line in f.readlines()]  # 去除每行的换行符
             df = pd.DataFrame(lines, columns=['path'])
         elif path.endswith('.csv'):
-            df = pd.read_csv(path)
+            df = pd.read_csv(path, dtype=str, keep_default_na=False)
         elif path.endswith('.xlsx') or path.endswith('.xls'):
-            df = pd.read_excel(path)
+            df = pd.read_excel(path, dtype=str, keep_default_na=False)
         else:
             log_error(f"不支持的文件格式: {path}", "DataManager")
             df = None

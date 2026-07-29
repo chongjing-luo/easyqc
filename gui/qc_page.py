@@ -8,7 +8,7 @@ from typing import Any
 import pandas as pd
 
 from core.code_executor import CodeExecutor
-from core.rating_service import RatingService
+from core.rating_service import RatingRaterDirectoryIndex, RatingService
 from models.rating import Rating
 
 
@@ -64,6 +64,28 @@ class QCPageController:
     def __init__(self, rating_service: RatingService | None = None, code_executor: CodeExecutor | None = None):
         self.rating_service = rating_service
         self.code_executor = code_executor or CodeExecutor()
+        self._rating_directory_indexes: dict[
+            tuple[Path, str, str],
+            RatingRaterDirectoryIndex,
+        ] = {}
+
+    def _rating_directory_index(
+        self,
+        module_rater_dir: str | Path,
+        module_name: str,
+        rater: str,
+    ) -> RatingRaterDirectoryIndex:
+        target_dir = Path(module_rater_dir).absolute()
+        key = (target_dir, module_name, rater)
+        index = self._rating_directory_indexes.get(key)
+        if index is None:
+            index = RatingRaterDirectoryIndex.build(
+                target_dir,
+                module_name=module_name,
+                rater=rater,
+            )
+            self._rating_directory_indexes[key] = index
+        return index
 
     def current_module(self, settings: dict, module_index: str) -> dict:
         return settings["qcmodule"][module_index]
@@ -189,7 +211,17 @@ class QCPageController:
     def save_legacy_module_rating(self, module: dict, module_rater_dir: str | Path) -> Path:
         module["time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         rating = Rating.from_legacy_dict(module)
-        return RatingService.save_rating_to_rater_dir(Path(module_rater_dir), rating, module)
+        directory_index = self._rating_directory_index(
+            module_rater_dir,
+            rating.module_name,
+            rating.rater,
+        )
+        return RatingService.save_rating_to_rater_dir(
+            Path(module_rater_dir),
+            rating,
+            module,
+            directory_index=directory_index,
+        )
 
     def load_legacy_module_rating(
         self,
@@ -198,12 +230,12 @@ class QCPageController:
         ezqcid: str,
         rater: str,
     ) -> tuple[list[Path], dict | None]:
-        rating_files = RatingService.find_rating_files_in_rater_dir(
-            Path(module_rater_dir),
+        directory_index = self._rating_directory_index(
+            module_rater_dir,
             module["name"],
-            ezqcid,
             rater,
         )
+        rating_files = directory_index.find(ezqcid)
         if len(rating_files) != 1:
             return rating_files, None
         return rating_files, RatingService.load_legacy_rating_file(rating_files[0])
@@ -215,12 +247,12 @@ class QCPageController:
         ezqcid: str,
         rater: str,
     ) -> tuple[list[Path], dict | None]:
-        rating_files = RatingService.find_rating_files_in_rater_dir(
-            Path(module_rater_dir),
+        directory_index = self._rating_directory_index(
+            module_rater_dir,
             module["name"],
-            ezqcid,
             rater,
         )
+        rating_files = directory_index.find(ezqcid)
         if not rating_files:
             return rating_files, None
         return rating_files, RatingService.load_legacy_rating_file(rating_files[0])

@@ -16,12 +16,13 @@ from core.module_repository import (
     ModuleRepositoryError,
 )
 from models.project import Project, ProjectRegistry
+from core.rating_identity import validate_module_name, validate_rater
 from models.qcmodule import QCModule, Score, Tag
 from utils.file_utils import FileUtils
 from utils.validators import validate_project_name
 
 
-MODULE_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+MODULE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{1,32}$")
 
 
 @dataclass(frozen=True)
@@ -208,7 +209,10 @@ class ProjectService:
     def add_module(self, name: str, label: str, index: int | None = None) -> QCModule:
         self._require_current_project()
         self._validate_module_name(name)
-        if any(module.get("name") == name for module in self._settings.get("qcmodule", {}).values()):
+        if any(
+            str(module.get("name", "")).casefold() == name.casefold()
+            for module in self._settings.get("qcmodule", {}).values()
+        ):
             raise ValueError(f"模块已存在: {name}")
 
         module = self.default_module(name, label)
@@ -332,6 +336,9 @@ class ProjectService:
         invalid = set(kwargs) - allowed
         if invalid:
             raise ValueError(f"不允许更新字段: {sorted(invalid)}")
+        rater = kwargs.get("rater")
+        if rater is not None and rater != "":
+            validate_rater(rater)
 
         for module in self._settings.get("qcmodule", {}).values():
             if module.get("name") == name:
@@ -381,8 +388,11 @@ class ProjectService:
 
     def module_name_exists(self, name: str, exclude_name: str | None = None) -> bool:
         modules = self._settings.get("qcmodule", {})
+        requested = name.casefold()
+        excluded = exclude_name.casefold() if exclude_name is not None else None
         return any(
-            m.get("name") == name and name != exclude_name
+            str(m.get("name", "")).casefold() == requested
+            and requested != excluded
             for m in modules.values()
         )
 
@@ -466,79 +476,123 @@ class ProjectService:
                 raise ValueError(f"模块 {key} 必须是对象")
             module = QCModule.from_legacy_dict(payload)
             self._validate_module_name(module.name)
+            if module.rater is not None and module.rater != "":
+                validate_rater(module.rater)
             names.append(module.name)
-        if len(set(names)) != len(names):
+        if len({name.casefold() for name in names}) != len(names):
             raise ValueError("模块名称不能重复")
 
         with self._state_lock:
             self._require_current_project()
             current = self.current
             assert current is not None
-            if expected_state is not None:
-                if (
-                    current.name != expected_state.project_name
-                    or Path(current.path) != expected_state.project_path
-                ):
+            expected = (
+                expected_state
+                if expected_state is not None
+                else ProjectSettingsState(
+                    project_name=current.name,
+                    project_path=Path(current.path),
+                    settings=deepcopy(self._settings),
+                )
+            )
+            if (
+                current.name != expected.project_name
+                or Path(current.path) != expected.project_path
+            ):
+                raise ProjectStateConflictError(
+                    "project context changed before settings commit"
+                )
+            if self._settings != expected.settings:
+                raise ProjectStateConflictError(
+                    "Project settings changed in memory before commit"
+                )
+
+            repository = self._module_repository(current)
+            with repository.project_write_lock():
+                disk_settings = FileUtils.safe_json_load(current.settings_path)
+                if disk_settings != expected.settings:
                     raise ProjectStateConflictError(
-                        "QC module filter project context changed before settings commit"
+                        "Project settings changed on disk before commit"
                     )
-                if self._settings != expected_state.settings:
-                    raise ProjectStateConflictError(
-                        "QC module filter project settings changed before settings commit"
+                if repository.root.exists():
+                    disk_modules = repository.legacy_mapping(
+                        self._strict_project_module_records(repository)
                     )
-            previous = self._settings
-            self._settings = prepared
-            try:
-                self.save(notify=notify)
-            except Exception:
-                self._settings = previous
-                raise
-        if notify and change_event != "settings_saved":
-            self._notify(change_event)
+                    if disk_modules != expected.settings.get("qcmodule"):
+                        raise ProjectStateConflictError(
+                            "Project module catalog changed before settings commit"
+                        )
+
+                previous = self._settings
+                self._settings = prepared
+                try:
+                    self._save_project_locked(repository)
+                except Exception:
+                    self._settings = previous
+                    raise
+        if notify:
+            self.publish_change("settings_saved")
+            if change_event != "settings_saved":
+                self._notify(change_event)
 
     def save(self, *, notify: bool = True) -> None:
         self._save_registry()
-        if self.current is not None:
-            self._ensure_schema_version(self._settings)
-            repository = self._module_repository(self.current)
-            repository_existed = repository.root.exists()
-            prior_records = (
-                self._strict_project_module_records(repository)
-                if repository_existed
-                else ()
+        saved = False
+        with self._state_lock:
+            current = self.current
+            if current is not None:
+                repository = self._module_repository(current)
+                with repository.project_write_lock():
+                    self._save_project_locked(repository)
+                saved = True
+        if saved and notify:
+            self.publish_change("settings_saved")
+
+    def _save_project_locked(self, repository: ModuleRepository) -> None:
+        """Publish modules and settings while owning the project write lock."""
+
+        current = self.current
+        if current is None:
+            raise ProjectStateConflictError(
+                "Project context changed during settings save"
             )
-            modules = self._settings.get("qcmodule")
-            if not isinstance(modules, dict):
-                raise ValueError("qcmodule must be an object")
+        self._ensure_schema_version(self._settings)
+        repository_existed = repository.root.exists()
+        prior_records = (
+            self._strict_project_module_records(repository)
+            if repository_existed
+            else ()
+        )
+        modules = self._settings.get("qcmodule")
+        if not isinstance(modules, dict):
+            raise ValueError("qcmodule must be an object")
+        try:
+            published = repository._replace_legacy_unlocked(modules)
+        except ModuleRepositoryError as exc:
+            raise ValueError(
+                f"项目模块写入失败 {repository.root}: {exc}"
+            ) from exc
+        self._settings["qcmodule"] = repository.legacy_mapping(published)
+        try:
+            FileUtils.safe_json_save(
+                current.settings_path,
+                self._settings,
+            )
+        except Exception:
             try:
-                published = repository.replace_legacy(modules)
-            except ModuleRepositoryError as exc:
-                raise ValueError(
-                    f"项目模块写入失败 {repository.root}: {exc}"
-                ) from exc
-            self._settings["qcmodule"] = repository.legacy_mapping(published)
-            try:
-                FileUtils.safe_json_save(
-                    self.current.settings_path,
-                    self._settings,
-                )
-            except Exception:
-                try:
-                    if repository_existed:
-                        repository.replace_records(prior_records)
-                    else:
-                        repository.remove_catalog()
-                except Exception as rollback_exc:
-                    raise RuntimeError(
-                        "项目设置写入失败，且模块目录回滚失败: "
-                        f"{rollback_exc}"
-                    ) from rollback_exc
-                raise
-            # SETTINGS_SAVED is a typed-only event (new in P1-C). It is emitted
-            # directly rather than via _notify so it does not fire the legacy
-            # string observers, which only expect project/modules events.
-            if notify:
-                self.publish_change("settings_saved")
+                if repository_existed:
+                    repository._replace_records(
+                        prior_records,
+                        _trusted_rating_owners=prior_records,
+                    )
+                else:
+                    repository._remove_catalog_unlocked()
+            except Exception as rollback_exc:
+                raise RuntimeError(
+                    "项目设置写入失败，且模块目录回滚失败: "
+                    f"{rollback_exc}"
+                ) from rollback_exc
+            raise
 
     def publish_change(self, event: str, data: dict[str, Any] | None = None) -> None:
         """Publish a validated service change on the caller's thread."""
@@ -671,8 +725,7 @@ class ProjectService:
             raise ValueError("当前项目未加载")
 
     def _validate_module_name(self, name: str) -> None:
-        if not MODULE_NAME_PATTERN.match(name):
-            raise ValueError(f"模块名不合法: {name}")
+        validate_module_name(name)
 
 
 __all__ = [
