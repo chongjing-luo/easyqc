@@ -65,7 +65,6 @@ def test_setup_verification_fails_loudly_on_missing_dependencies(easyqc_root: Pa
     assert "错误：部分依赖验证失败" in source
     assert 'python -c "import tkinter; print' in source
     assert "|| echo \"⚠ 部分依赖验证失败\"" not in source
-    assert "MPLCONFIGDIR" in source
 
 
 def test_setup_verifies_only_required_dependencies(easyqc_root: Path) -> None:

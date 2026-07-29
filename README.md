@@ -147,7 +147,7 @@ EasyQC 会自动创建项目目录结构：
 
 ```text
 easyqc_<project>/
-├── settings_<project>.json    # 项目常量、变量和 legacy 模块兼容快照
+├── settings_<project>.json    # schema-v3 项目常量、变量和模块快照
 ├── modules/                   # 项目模块权威文件（每个模块一个 JSON）
 ├── Table/
 │   ├── easyqc_all.csv           # 受试者主表
@@ -218,7 +218,7 @@ Qt Preview 还可在 **跨项目设置 → 常量模板** 中保存常用起点�
 每次保存都会更新该记录、模块和评分者三元组的完整 JSON 快照；同一三元组
 始终写回同一路径，不建立保存事件历史。
 
-#### 5.1 评分身份、覆盖语义与旧格式迁移
+#### 5.1 评分身份与覆盖语义
 
 新格式把稳定身份直接写入目录和文件名：
 
@@ -234,7 +234,7 @@ RatingFiles/<module_name>/<rater>/
 ```regex
 module_name = ^[A-Za-z0-9_]{1,32}$
 rater       = ^[A-Za-z0-9_]{1,32}$
-easyqcid      = ^[A-Za-z0-9_.-]{1,128}$
+easyqcid    = ^[A-Za-z0-9_.-]{1,128}$
 ```
 
 模块名和评分者只能使用 ASCII 字母、数字及下划线；`easyqcid` 还允许点和
@@ -242,7 +242,7 @@ easyqcid      = ^[A-Za-z0-9_.-]{1,128}$
 模块名在项目内、同模块评分者身份和质控总名单中的 `easyqcid` 分别按
 case-insensitive 规则保持唯一，原始大小写仍保留。CSV/Excel 导入必须在
 类型推断前把 `easyqcid` 作为文本读取，不能在前导零已经丢失后再转字符串。
-新保存写入完整 legacy-compatible payload，并标记 `schema_version: 2`。
+新保存写入完整的当前模块快照，并标记 `schema_version: 3`。
 同一 `(module_name, rater, easyqcid)` 再次编辑时，EasyQC 在项目写锁内创建
 唯一临时文件，执行 flush/`fsync` 后用 `os.replace` 原子覆盖旧快照。
 
@@ -255,37 +255,15 @@ case-insensitive 规则保持唯一，原始大小写仍保留。CSV/Excel 导�
 同理，已有评分所引用的 rater 或 `easyqcid` 不能在原位置重新指代另一人或
 另一条记录。
 
-旧版
-`<module>._.<easyqcid>._.<rater>._.<score>._.<tag>.json`
-仍可读取，但新程序只写规范文件名。若同一三元组仍有旧文件，普通保存会
-拒绝覆盖，必须先执行单独授权的冲突优先迁移。默认命令只生成只读计划：
+当前程序只接受 `settings version: 3`、`schema_version: 3`、
+`easyqcid` 和 `easyqc_*.csv`。旧 `ezqc`/`ezqcid` 项目、旧评分文件名和
+schema 0/1/2 评分不会被自动读取或迁移；需要继续使用旧项目时，应启动迁移前
+备份版本。这个明确断代避免了双格式分支长期污染保存、扫描和聚合逻辑。
 
-```bash
-python scripts/migrate_rating_files.py /exact/project/RatingFiles
-```
-
-计划会报告非法 ID、重复身份、仅大小写冲突、目标占用、新旧共存、损坏或
-错位记录；它不清洗名称，也不按 mtime、payload 时间或扫描顺序猜测赢家。
-只有计划无冲突且操作者明确批准时，才可准备候选：
-
-```bash
-python scripts/migrate_rating_files.py /exact/project/RatingFiles --apply
-```
-
-`--apply` 只在活动 `RatingFiles` 旁构建并完整回读验证一个未激活的 sibling
-candidate tree；它不切换活动目录、不移动或删除源文件。对真实项目执行
-计划、候选构建、后续激活或归档都需要分别授权，不能把候选构建理解成已经
-完成真实数据迁移。
-
-常规容量目标是质控总名单通常不超过约 100,000 行。迁移规划和校验逐文件
-处理，内存中只保留一个 payload 及轻量身份/哈希元数据，不一次装入全部
-评分正文；但评分文件数仍会随模块和评分者增加，候选树也需要额外磁盘空间，
-因此这一约束不是对任意规模评分聚合或迁移速度的承诺。
-
-单次 QC 会话中，canonical 记录始终通过确定性路径定位。为兼容旧文件名，
-EasyQC 对当前 module/rater 目录建立一次轻量 basename 索引，随后按
-`easyqcid` 二分查找；目录元数据发生外部变化时会刷新索引。这只说明查找
-路径和定性复杂度，不构成 100,000 个评分文件的性能证明。
+单次 QC 会话中，当前记录通过确定性规范路径定位。常规容量目标是质控总名单
+通常不超过约 100,000 行；另有真实创建并扫描 100,000 个 schema-v3 JSON 的
+Ubuntu 基准，对扫描、验证、展平、透视、评分字典与名单合并全链路设置
+60 秒和 4 GiB 的 fail-loud 门槛。
 
 ### 6. 提取和聚合结果
 
@@ -358,14 +336,13 @@ freeview -v $SUBJECTS_DIR/{easyqcid}/mri/T1.mgz \
   两种模式都以当前操作系统用户权限运行；Shell 模式还会让操作系统解释
   整条命令及替换后的值，因此命令模板应由本地用户审核。
 
-### 受试者筛选（Subject Filter）
+### 质控名单筛选（QC-list Filter）
 
-筛选规则限定哪些受试者进入当前模块。支持两种方式：
+筛选规则限定哪些记录进入当前模块。用户在 GUI 中配置结构化比较条件
+（`column operator value`），例如 `batch == baseline`；界面不要求编写
+JSON、SQL 或 Python。
 
-1. **结构化筛选条件**：在 GUI 中直接配置比较条件（`column operator value`），如 `batch == baseline`
-2. **兼容旧版 SELECT 语法**：`SELECT * FROM df WHERE batch = 'baseline'`（向后兼容，仅支持简单 AND 条件）
-
-不设置筛选规则时，主表中所有受试者均进入模块。
+不设置筛选规则时，质控总名单中的所有记录均进入模块。
 
 ### 观察模式（Watch Mode）
 
@@ -430,13 +407,12 @@ easyqc/
 │
 ├── core/                       # 核心服务层（不依赖 GUI）
 │   ├── project_service.py      # 项目 CRUD + 模块管理 + 观察者通知
-│   ├── module_repository.py     # 每模块一个 JSON 的加载、迁移与原子发布
+│   ├── module_repository.py     # 每模块一个 schema-v3 JSON 的加载与原子发布
 │   ├── template_service.py      # 安装级模板与命令设置
 │   ├── project_template_service.py # 复制模板为项目自有配置
 │   ├── rating_identity.py      # 稳定评分身份、文件名和可移植路径契约
-│   ├── rating_service.py       # 双格式扫描、规范保存、验证、聚合和透视
+│   ├── rating_service.py       # schema-v3 扫描、规范保存、验证、聚合和透视
 │   ├── rating_write_lock.py    # 项目级跨线程/跨进程评分写锁
-│   ├── rating_migration.py     # 冲突优先计划与未激活候选树构建/验证
 │   ├── table_service.py        # CSV 表格加载/保存（原子写入）
 │   ├── code_executor.py        # 用户可选 direct/Shell 的外部进程控制
 │   ├── table_transform.py      # 结构化表格操作引擎（8 种操作）
@@ -457,7 +433,7 @@ easyqc/
 │   ├── gui_qcpage.py           # QC 评分页 GUI（启动命令、记录评分）
 │   ├── table_view.py           # 表格浏览与操作
 │   ├── gui_table.py            # 表格显示组件
-│   ├── state_adapter.py        # GUI 状态适配层（兼容旧 GUI → 新 models）
+│   ├── state_adapter.py        # tkinter 状态到共享 models/services 的适配层
 │   ├── dialog_main.py          # 对话框（设置变量、命令模板、筛选等）
 │   ├── dialogs.py              # 新对话框组件
 │   └── widgets.py              # 通用 GUI 组件
@@ -469,20 +445,20 @@ easyqc/
 │
 ├── utils/                      # 工具模块
 │   ├── data_manager.py         # 数据管理（主表构建、导入）
-│   ├── projects_manager.py     # 项目管理器（旧版兼容层）
+│   ├── projects_manager.py     # tkinter 项目管理适配器
 │   ├── file_utils.py           # 文件操作（原子写入、JSON 安全读写）
 │   ├── validators.py           # 输入验证（score 解析、名称校验）
 │   └── logger.py               # 统一日志系统
 │
 ├── easyqc.spec                 # PyInstaller 打包配置
 ├── build.py                    # 一键打包脚本 (Linux/macOS/Windows)
-├── tests/                      # pytest 自动化测试（当前 1585 个测试项）
+├── tests/                      # pytest 自动化测试
 │   ├── test_core/              # 核心服务测试
 │   ├── test_models/            # 数据模型测试
 │   ├── test_gui/               # GUI 组件测试
 │   ├── test_utils/             # 工具模块测试
-│   ├── test_integration/       # 集成测试（含 devCCNP 兼容性）
-│   └── test_characterization/  # 旧版兼容性特征测试
+│   ├── test_integration/       # 跨服务与入口集成测试
+│   └── test_characterization/  # 重构行为特征守卫
 │
 └── logs/                       # 日志文件
 ```
@@ -510,7 +486,8 @@ xvfb-run -a .venv/bin/python -m pytest
 显式使用 offscreen 平台，从而避免迁移期在同一 Python 进程混用两个 GUI
 runtime。普通 `pytest` 保留为诊断手段，不作为双 GUI 迁移期的完整发布证据。
 
-测试覆盖：核心服务（项目 CRUD、评分聚合、命令执行、表格转换）、数据模型序列化/反序列化、输入验证、GUI 状态适配、旧版数据兼容性。
+测试覆盖：核心服务（项目 CRUD、评分聚合、命令执行、表格转换）、schema-v3
+数据模型序列化/反序列化、输入验证、GUI 状态适配，以及 Qt/tkinter 隔离入口。
 
 ---
 
