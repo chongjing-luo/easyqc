@@ -53,3 +53,17 @@ def test_rating_rejects_an_untyped_legacy_module() -> None:
 
     with pytest.raises(TypeError, match="mapping or typed module"):
         rating.to_legacy_dict(object())
+
+
+@pytest.mark.parametrize("value", ("False", "True", 0, 1, None))
+def test_rating_rejects_non_boolean_tag_values(value) -> None:
+    payload = {
+        "name": "example",
+        "rater": "r1",
+        "easyqcid": "SUB001",
+        "scores": {},
+        "tags": {"1": {"label": "Review", "value": value}},
+    }
+
+    with pytest.raises(ValueError, match="Boolean"):
+        Rating.from_legacy_dict(payload)

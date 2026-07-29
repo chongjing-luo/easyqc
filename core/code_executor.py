@@ -50,39 +50,29 @@ class CodeExecutor:
     # shell constructs, not template vars — F-VIEW-4 MRIcroGL compatibility).
     _BRACE_PLACEHOLDER = re.compile(r"\$\{(\w+)\}|\{(\w+)\}")
     _BARE_DOLLAR = re.compile(r"\$(\w+)")
+    _PLACEHOLDER = re.compile(
+        r"\$\{(?P<dollar_brace>\w+)\}"
+        r"|\{(?P<brace>\w+)\}"
+        r"|\$(?P<bare>\w+)"
+    )
 
     def parse_template(self, template: str, variables: Mapping[str, Any]) -> str:
         var_lookup = dict(variables)
-
-        # Detect unresolved placeholders from the ORIGINAL template (a variable
-        # VALUE that happens to contain {x} must not be flagged as unresolved —
-        # only placeholders the author wrote in the template are checked).
         unresolved: set[str] = set()
-        for match in self._BRACE_PLACEHOLDER.finditer(template):
-            name = match.group(1) or match.group(2)
-            if name and name not in var_lookup:
+
+        def _substitute(match: re.Match) -> str:
+            name = (
+                match.group("dollar_brace")
+                or match.group("brace")
+                or match.group("bare")
+            )
+            if name in var_lookup:
+                return str(var_lookup[name])
+            if match.group("bare") is None:
                 unresolved.add(name)
-
-        # Pass 1 — ${var} and {var}: single-pass via re.sub callback, so a
-        # variable VALUE containing $ or { is never re-interpreted by a later
-        # variable (the old multi-pass str.replace bug).
-        def _brace_sub(match: re.Match) -> str:
-            name = match.group(1) or match.group(2)
-            if name in var_lookup:
-                return str(var_lookup[name])
-            return match.group(0)  # leave in place
-
-        result = self._BRACE_PLACEHOLDER.sub(_brace_sub, template)
-
-        # Pass 2 — bare $var: backward-compat substitution. Only replaces names
-        # that ARE variables; $TMP / $(...) pass through untouched.
-        def _dollar_sub(match: re.Match) -> str:
-            name = match.group(1)
-            if name in var_lookup:
-                return str(var_lookup[name])
             return match.group(0)
 
-        result = self._BARE_DOLLAR.sub(_dollar_sub, result)
+        result = self._PLACEHOLDER.sub(_substitute, template)
 
         # Fail loud on author-intended placeholders that have no variable.
         # Bare $word (shell vars like $TMP) is NOT checked — F-VIEW-4.
@@ -270,8 +260,12 @@ class CodeExecutor:
         for temp_file in temp_files:
             try:
                 temp_file.unlink(missing_ok=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                log_error(
+                    f"viewer 临时文件清理失败: {temp_file}: {exc}",
+                    "CodeExecutor",
+                    show_popup=False,
+                )
 
     def _cleanup_process_temp_files(self, process: subprocess.Popen) -> None:
         self._cleanup_temp_files(self._process_temp_files.pop(process.pid, []))
@@ -335,7 +329,7 @@ class CodeExecutor:
         if self.system == "Windows":
             popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         else:
-            popen_kwargs["preexec_fn"] = os.setsid
+            popen_kwargs["start_new_session"] = True
 
         try:
             process = subprocess.Popen(args, **popen_kwargs)
@@ -394,7 +388,13 @@ class CodeExecutor:
             except ProcessLookupError:
                 self._cleanup_process_temp_files(process)
                 continue
-            except Exception:
+            except Exception as exc:
+                log_error(
+                    f"viewer 进程清理失败 (PID {getattr(process, 'pid', '?')}): "
+                    f"{exc}",
+                    "CodeExecutor",
+                    show_popup=False,
+                )
                 remaining.append(process)
 
         self.current_processes = remaining

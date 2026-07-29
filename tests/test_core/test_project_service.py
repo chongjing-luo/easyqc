@@ -506,6 +506,7 @@ def test_project_service_add_tag_and_delete_tag(tmp_path) -> None:
     modules = service.get_modules()
     module = next(m for m in modules.values() if m.name == "t1_qc")
     assert "2" in module.tags
+    assert module.tags["2"].value is False
 
     service.delete_tag("t1_qc", index=2)
     modules = service.get_modules()

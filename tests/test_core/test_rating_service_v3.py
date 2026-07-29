@@ -13,6 +13,7 @@ from core.rating_service import (
     RatingIdentityConflictError,
     RatingScanError,
     RatingService,
+    RatingServiceError,
 )
 from models.project import Project
 from models.rating import Rating
@@ -142,6 +143,116 @@ def test_structured_scan_keeps_valid_sibling_and_reports_bad_file(
     with pytest.raises(RatingScanError) as exc_info:
         service.load_all_rating_records()
     assert exc_info.value.result == scan
+
+
+def test_scan_rejects_file_symlink_before_loading_outside_target(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    outside = tmp_path / "outside.json"
+    outside.write_text("{not json", encoding="utf-8")
+    link = (
+        project.rating_dir
+        / "AnatQC"
+        / "rater_1"
+        / "AnatQC-rater_1-SUB001-session-1.json"
+    )
+    link.parent.mkdir(parents=True)
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+
+    scan = RatingService(project).scan_rating_records()
+
+    assert not scan.records
+    assert [(issue.path, issue.code) for issue in scan.errors] == [
+        (link, "symlink")
+    ]
+
+
+def test_scan_reports_linked_directory_without_traversing_it(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    outside = tmp_path / "outside-module"
+    outside.mkdir()
+    (outside / "should-not-be-read.json").write_text(
+        "{not json",
+        encoding="utf-8",
+    )
+    project.rating_dir.mkdir(parents=True)
+    link = project.rating_dir / "AnatQC"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+
+    scan = RatingService(project).scan_rating_records()
+
+    assert not scan.records
+    assert [(issue.path, issue.code) for issue in scan.errors] == [
+        (link, "symlink")
+    ]
+
+
+def test_ratingfiles_root_symlink_is_rejected_for_scan_and_save(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    project.path.mkdir(parents=True)
+    outside = tmp_path / "outside-rating-root"
+    outside.mkdir()
+    try:
+        project.rating_dir.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+
+    scan = RatingService(project).scan_rating_records()
+
+    assert [(issue.path, issue.code) for issue in scan.errors] == [
+        (project.rating_dir, "symlink")
+    ]
+    with pytest.raises(RatingServiceError, match="symlink"):
+        RatingService(project).save_rating(_rating())
+    assert list(outside.iterdir()) == []
+
+
+def test_save_rejects_symlinked_rater_directory_without_outside_write(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    module_dir = project.rating_dir / "AnatQC"
+    module_dir.mkdir(parents=True)
+    outside = tmp_path / "outside-rater"
+    outside.mkdir()
+    link = module_dir / "rater_1"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+
+    with pytest.raises(RatingServiceError, match="symlink"):
+        RatingService(project).save_rating(_rating())
+
+    assert list(outside.iterdir()) == []
+
+
+def test_save_synchronizes_rating_and_new_directory_entries(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project = _project(tmp_path)
+    synced: list[Path] = []
+    monkeypatch.setattr(
+        "core.rating_service._fsync_directory",
+        synced.append,
+    )
+
+    target = RatingService(project).save_rating(_rating())
+
+    assert target.parent in synced
+    assert project.path in synced
 
 
 def test_scan_reports_directory_filename_body_mismatch(tmp_path: Path) -> None:

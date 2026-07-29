@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from models.qcmodule import QCModule, Score, Tag
 from models.rating import Rating
 
@@ -12,6 +14,15 @@ def test_score_and_tag_round_trip() -> None:
     assert score.allowed_values == ["1", "2", "3"]
     assert score.to_legacy_dict() == {"label": "Quality", "num": "1-3", "num_": "1,2,3", "value": "2"}
     assert tag.to_legacy_dict() == {"label": "Artifact", "value": True}
+
+
+@pytest.mark.parametrize("value", ("False", "True", 0, 1, None))
+def test_tag_rejects_non_boolean_values(value) -> None:
+    with pytest.raises(ValueError, match="Boolean"):
+        Tag.from_legacy_dict(
+            "1",
+            {"label": "Artifact", "value": value},
+        )
 
 
 def test_qcmodule_round_trip_from_legacy_fixture(fixtures_dir: Path) -> None:

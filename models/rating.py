@@ -35,6 +35,12 @@ def _format_datetime(value: datetime | None) -> str | None:
     return value.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _parse_tag_value(value: Any) -> bool:
+    if type(value) is not bool:
+        raise ValueError("rating tag value must be a JSON Boolean")
+    return value
+
+
 @dataclass
 class Rating:
     module_name: str
@@ -78,7 +84,11 @@ class Rating:
                 for key, value in data.get("scores", {}).items()
             },
             tags={
-                str(key): bool(value.get("value", False)) if isinstance(value, dict) else bool(value)
+                str(key): _parse_tag_value(
+                    value.get("value", False)
+                    if isinstance(value, dict)
+                    else value
+                )
                 for key, value in data.get("tags", {}).items()
             },
             notes=data.get("notes"),

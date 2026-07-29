@@ -277,7 +277,7 @@ class ProjectService:
         qcidx = self._module_index_by_name(name)
         tags = self._settings["qcmodule"][qcidx].setdefault("tags", {})
         self._settings["qcmodule"][qcidx]["tags"] = self.add_key(
-            tags, index, {"label": None, "value": None}
+            tags, index, {"label": None, "value": False}
         )
         self._notify("modules_changed")
 

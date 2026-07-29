@@ -32,6 +32,12 @@ def _normalize_num_list(value: Any) -> str:
     return str(value)
 
 
+def _parse_tag_value(value: Any) -> bool:
+    if type(value) is not bool:
+        raise ValueError("module tag value must be a JSON Boolean")
+    return value
+
+
 @dataclass
 class Score:
     key: str
@@ -109,7 +115,7 @@ class Tag:
         return cls(
             key=str(key),
             label=data.get("label", ""),
-            value=bool(data.get("value", False)),
+            value=_parse_tag_value(data.get("value", False)),
         )
 
     def to_legacy_dict(self) -> dict[str, Any]:

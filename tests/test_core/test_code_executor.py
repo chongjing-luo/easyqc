@@ -104,6 +104,55 @@ def test_start_command_uses_current_shell_setting(monkeypatch) -> None:
     assert observed[1][1]["shell"] is True
 
 
+def test_start_command_uses_safe_posix_session_option(monkeypatch) -> None:
+    observed = []
+
+    class FakeProcess:
+        pid = 4722
+
+    def fake_popen(command, **options):
+        observed.append((command, options))
+        return FakeProcess()
+
+    monkeypatch.setattr("core.code_executor.subprocess.Popen", fake_popen)
+
+    CodeExecutor(system="Linux").start_command("viewer image.nii.gz")
+
+    assert observed[0][1]["start_new_session"] is True
+    assert "preexec_fn" not in observed[0][1]
+
+
+def test_process_cleanup_failure_is_logged_and_remains_tracked(
+    monkeypatch,
+) -> None:
+    logged = []
+
+    class BrokenProcess:
+        pid = 4811
+
+        @staticmethod
+        def poll():
+            return None
+
+    process = BrokenProcess()
+    executor = CodeExecutor(system="Linux")
+    executor.current_processes = [process]
+    monkeypatch.setattr("core.code_executor.os.getpgid", lambda _pid: process.pid)
+    monkeypatch.setattr(
+        "core.code_executor.os.killpg",
+        lambda *_args: (_ for _ in ()).throw(PermissionError("denied")),
+    )
+    monkeypatch.setattr(
+        "core.code_executor.log_error",
+        lambda message, *_args, **_kwargs: logged.append(message),
+    )
+
+    executor.close_current_processes()
+
+    assert executor.current_processes == [process]
+    assert any("4811" in message and "denied" in message for message in logged)
+
+
 def test_run_command_uses_one_shell_mode_snapshot(monkeypatch) -> None:
     observed = []
     executor = CodeExecutor(shell_enabled=False)
@@ -253,6 +302,17 @@ def test_parse_template_single_pass_no_re_substitution_on_values() -> None:
     # var 'a' value contains literal '{b}' which must NOT be eaten by var 'b'
     result = executor.parse_template("X={a}", {"a": "val{b}", "b": "OTHER"})
     assert result == "X=val{b}"
+
+
+def test_parse_template_does_not_reinterpret_dollar_syntax_in_inserted_value() -> None:
+    executor = CodeExecutor()
+
+    result = executor.parse_template(
+        "X={a}",
+        {"a": "literal-$b", "b": "REPLACED"},
+    )
+
+    assert result == "X=literal-$b"
 
 
 def test_parse_template_passes_through_mricrogl_shell_variables() -> None:

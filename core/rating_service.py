@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import os
 import re
 from dataclasses import dataclass
@@ -21,6 +22,26 @@ from models.project import Project
 from models.qcmodule import QCModule
 from models.rating import Rating
 from utils.file_utils import FileUtils
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name != "posix":
+        return
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        descriptor = os.open(path, flags)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError as exc:
+        if exc.errno in {
+            errno.EBADF,
+            errno.EINVAL,
+            getattr(errno, "ENOTSUP", errno.EINVAL),
+        }:
+            return
+        raise
 
 
 def _load_rating_file(path: Path) -> Rating:
@@ -142,9 +163,12 @@ class RatingRaterDirectoryIndex:
     def find(self, easyqcid: str) -> list[Path]:
         identity = self._identity(easyqcid)
         canonical = self.target_dir / build_rating_filename(identity)
-        if not canonical.exists():
+        if not canonical.exists() and not canonical.is_symlink():
             return []
-        return RatingService._validated_matching_paths([canonical])
+        return RatingService._validated_matching_paths(
+            [canonical],
+            rating_root=self.target_dir.parent.parent,
+        )
 
     def note_canonical_write(self) -> None:
         """Canonical lookups are path-derived and need no mutable index update."""
@@ -172,13 +196,61 @@ class RatingService:
 
     def scan_rating_files(self) -> list[Path]:
         rating_dir = self.project.rating_dir
+        if rating_dir.is_symlink():
+            return [rating_dir]
         if not rating_dir.exists():
             return []
-        return sorted(
-            path
-            for path in rating_dir.rglob("*")
-            if path.is_file() and path.suffix.casefold() == ".json"
-        )
+        candidates: list[Path] = []
+        for root, directory_names, file_names in os.walk(
+            rating_dir,
+            followlinks=False,
+        ):
+            root_path = Path(root)
+            linked_directories = [
+                root_path / name
+                for name in directory_names
+                if (root_path / name).is_symlink()
+            ]
+            candidates.extend(linked_directories)
+            directory_names[:] = [
+                name
+                for name in directory_names
+                if not (root_path / name).is_symlink()
+            ]
+            candidates.extend(
+                path
+                for path in (root_path / name for name in file_names)
+                if path.is_symlink() or path.suffix.casefold() == ".json"
+            )
+        return sorted(candidates)
+
+    @staticmethod
+    def _path_safety_issue(
+        path: Path,
+        rating_root: Path,
+    ) -> RatingScanIssue | None:
+        absolute_root = Path(os.path.abspath(rating_root))
+        absolute_path = Path(os.path.abspath(path))
+        try:
+            relative = absolute_path.relative_to(absolute_root)
+        except ValueError:
+            return RatingScanIssue(
+                path,
+                "path_escape",
+                "rating path is outside RatingFiles",
+            )
+
+        current = absolute_root
+        for component in (None, *relative.parts):
+            if component is not None:
+                current = current / component
+            if current.is_symlink():
+                return RatingScanIssue(
+                    path,
+                    "symlink",
+                    f"rating path contains symlink component: {current}",
+                )
+        return None
 
     @staticmethod
     def _scan_one(
@@ -187,6 +259,9 @@ class RatingService:
         rating_root: Path | None = None,
     ) -> tuple[RatingScanRecord | None, RatingScanIssue | None]:
         if rating_root is not None:
+            safety_issue = RatingService._path_safety_issue(path, rating_root)
+            if safety_issue is not None:
+                return None, safety_issue
             try:
                 relative_parts = path.relative_to(rating_root).parts
             except ValueError:
@@ -197,6 +272,12 @@ class RatingService:
                     "path_depth",
                     "rating path must be exactly module/rater/file below RatingFiles",
                 )
+        elif path.is_symlink():
+            return None, RatingScanIssue(
+                path,
+                "symlink",
+                f"rating path is a symlink: {path}",
+            )
 
         try:
             canonical_identity = parse_rating_filename(path.name)
@@ -281,11 +362,18 @@ class RatingService:
         return index.find(easyqcid)
 
     @staticmethod
-    def _validated_matching_paths(matches: list[Path]) -> list[Path]:
+    def _validated_matching_paths(
+        matches: list[Path],
+        *,
+        rating_root: Path | None = None,
+    ) -> list[Path]:
         records: list[RatingScanRecord] = []
         errors: list[RatingScanIssue] = []
         for path in sorted(set(matches)):
-            record, issue = RatingService._scan_one(path)
+            record, issue = RatingService._scan_one(
+                path,
+                rating_root=rating_root,
+            )
             if issue is not None:
                 errors.append(issue)
             elif record is None:
@@ -300,7 +388,10 @@ class RatingService:
 
     @staticmethod
     def load_rating_payload(path: Path) -> dict[str, Any]:
-        return RatingService._validated_record(path).rating.to_legacy_dict()
+        return RatingService._validated_record(
+            path,
+            rating_root=path.parents[2],
+        ).rating.to_legacy_dict()
 
     @staticmethod
     def _casefold_sibling(
@@ -423,8 +514,27 @@ class RatingService:
 
         payload = rating.to_legacy_dict(module_snapshot)
         payload["schema_version"] = 3
+        rating_root = target_path.parents[2]
+        safety_issue = RatingService._path_safety_issue(
+            target_path,
+            rating_root,
+        )
+        if safety_issue is not None:
+            raise RatingServiceError(safety_issue.message)
+
+        directory_parents_to_sync: list[Path] = []
+        current = target_path.parent
+        while not current.exists():
+            directory_parents_to_sync.append(current.parent)
+            current = current.parent
 
         with rating_write_lock(target_path):
+            safety_issue = RatingService._path_safety_issue(
+                target_path,
+                rating_root,
+            )
+            if safety_issue is not None:
+                raise RatingServiceError(safety_issue.message)
             RatingService._reject_casefold_write_conflicts(target_path, identity)
             if directory_index is not None:
                 if not directory_index.owns(target_path.parent, identity):
@@ -455,6 +565,10 @@ class RatingService:
 
             target_path.parent.mkdir(parents=True, exist_ok=True)
             FileUtils.safe_json_save(target_path, payload)
+            for directory in dict.fromkeys(
+                [target_path.parent, *directory_parents_to_sync]
+            ):
+                _fsync_directory(directory)
             if directory_index is not None:
                 directory_index.note_canonical_write()
         return target_path
