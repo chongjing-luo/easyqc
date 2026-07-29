@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "module_id": "85756535-1dd0-405d-8b6d-4ecd3f847f9b",
+  "scope": "project",
+  "display_order": 20,
+  "module": {
+    "name": "openSUBJECT_DIR",
+    "label": "openSUBJECT_DIR",
+    "rater": null,
+    "easyqcid": "CCNPPEK0001_02_rest01",
+    "watch_mode": false,
+    "tags": {
+      "1": {
+        "label": "prepdone",
+        "value": false
+      }
+    },
+    "scores": {
+      "1": {
+        "label": "prepdone",
+        "num": "0-4",
+        "num_": "0,1,2,3,4",
+        "value": null
+      }
+    },
+    "code": "open {subjects_dir}/{fsrecon_dir}",
+    "interper": "shell",
+    "control": false,
+    "select_filter": null,
+    "qc_filter": null,
+    "showing": false,
+    "code_exe": {
+      "0": "open /home/ubuntu/disc_luo/ProjectLCJ/stage1Prep/SUBJECTS_DIRs/CCNPPEKI/CCNPPEK0001_02"
+    },
+    "time": null,
+    "notes": null,
+    "button": {}
+  }
+}

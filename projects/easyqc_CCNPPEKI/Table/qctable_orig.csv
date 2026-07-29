@@ -1,4 +1,4 @@
-label,ezqcid,rater,watch_mode,interper,code,notes,time,control,showing,select_filter,button,code_exe,score1label,score1num,score1num_,score1,score2label,score2num,score2num_,score2,score3label,score3num,score3num_,score3,score4label,score4num,score4num_,score4,tag1label,tag1,tag2label,tag2,tag3label,tag3,filename,filepath,module_name,schema_version
+label,easyqcid,rater,watch_mode,interper,code,notes,time,control,showing,select_filter,button,code_exe,score1label,score1num,score1num_,score1,score2label,score2num,score2num_,score2,score3label,score3num,score3num_,score3,score4label,score4num,score4num_,score4,tag1label,tag1,tag2label,tag2,tag3label,tag3,filename,filepath,module_name,schema_version
 AnatRestAll,CCNPPEK0001_01_anat,rf,False,shell,"MULTICMD
 TMP=$(mktemp /tmp/mgl.XXXXXX); TMP=""$TMP.py""; printf 'import gl\ngl.windowposition(0,0,1400,1000)\ngl.loadimage(""{subjects_dir}/{fsrecon_dir}/mri/orig/001.mgz"")\ngl.overlayload(""{subjects_dir}/{fsrecon_dir}/mri/mask.nii.gz"")\ngl.opacity(1,30)\n' > ""$TMP""; ${mricrogl_dir} ""$TMP""; rm -f ""$TMP""
 ;|

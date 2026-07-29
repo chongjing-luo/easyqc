@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "module_id": "bde28801-0826-41a6-9e1d-2a37ab5e5687",
+  "scope": "project",
+  "display_order": 10,
+  "module": {
+    "name": "openCCS_DIR",
+    "label": "openCCS_DIR",
+    "rater": null,
+    "easyqcid": null,
+    "watch_mode": false,
+    "tags": {
+      "1": {
+        "label": "prepdone",
+        "value": false
+      }
+    },
+    "scores": {
+      "1": {
+        "label": "prepdone",
+        "num": "0,1,2,3,4",
+        "num_": "0,1,2,3,4",
+        "value": null
+      }
+    },
+    "code": "open ${ccs_dir}/{sublist}/{moddir}",
+    "interper": "shell",
+    "control": true,
+    "select_filter": null,
+    "qc_filter": null,
+    "showing": false,
+    "code_exe": null,
+    "time": null,
+    "notes": null,
+    "button": {}
+  }
+}

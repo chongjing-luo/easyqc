@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "module_id": "4c54ba8f-38af-422f-8d46-8e710a266d4c",
+  "scope": "project",
+  "display_order": 30,
+  "module": {
+    "name": "openHCP_DIR",
+    "label": "openHCP_DIR",
+    "rater": "lcj",
+    "easyqcid": "CCNPPEK0002_01_anat",
+    "watch_mode": false,
+    "tags": {
+      "1": {
+        "label": "open",
+        "value": false
+      }
+    },
+    "scores": {
+      "1": {
+        "label": "open",
+        "num": "0-4",
+        "num_": "0,1,2,3,4",
+        "value": null
+      }
+    },
+    "code": "open ${hcp_dir}/${group}/${sublist}",
+    "interper": "shell",
+    "control": false,
+    "select_filter": null,
+    "qc_filter": null,
+    "showing": false,
+    "code_exe": {
+      "0": "open /home/ubuntu/disc_luo/ProjectLCJ/stage1Prep/HCP_DIRs/CCNPPEKI/CCNPPEK0002_01"
+    },
+    "time": null,
+    "notes": null,
+    "button": {}
+  }
+}

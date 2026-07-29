@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "module_id": "0e55b9f0-3196-4696-a155-deca0cbe25c3",
+  "scope": "project",
+  "display_order": 70,
+  "module": {
+    "name": "hcpall",
+    "label": "hcpall",
+    "rater": "lcj",
+    "easyqcid": null,
+    "watch_mode": false,
+    "tags": {
+      "1": {
+        "label": "anatfailed",
+        "value": false
+      },
+      "2": {
+        "label": "checkdone",
+        "value": false
+      }
+    },
+    "scores": {
+      "1": {
+        "label": "hcpcoregistration",
+        "num": "0,1,2,3,4",
+        "num_": "0,1,2,3,4",
+        "value": null
+      },
+      "2": {
+        "label": "质量",
+        "num": "差,一般,好",
+        "num_": "差,一般,好",
+        "value": null
+      }
+    },
+    "code": "wb_view \\\n${hcp_dir}/${group}/${sublist}/MNINonLinear/Results/${moddir}/${moddir}.nii.gz \\\n${hcp_dir}/${group}/${sublist}/MNINonLinear/T1w.nii.gz \\\n${hcp_dir}/${group}/${sublist}/MNINonLinear/${sublist}.L.pial.164k_fs_LR.surf.gii \\\n${hcp_dir}/${group}/${sublist}/MNINonLinear/${sublist}.R.pial.164k_fs_LR.surf.gii \\\n${hcp_dir}/${group}/${sublist}/MNINonLinear/${sublist}.L.white.164k_fs_LR.surf.gii \\\n${hcp_dir}/${group}/${sublist}/MNINonLinear/${sublist}.R.white.164k_fs_LR.surf.gii",
+    "interper": "shell",
+    "control": true,
+    "select_filter": null,
+    "qc_filter": {
+      "schema_version": 1,
+      "group_join": "all",
+      "groups": [
+        {
+          "group_id": "legacy-select-filter",
+          "join": "all",
+          "conditions": [
+            {
+              "column": "RUN",
+              "operator": "==",
+              "value": 1.0,
+              "condition_id": "legacy-select-filter-0001",
+              "enabled": true
+            }
+          ]
+        }
+      ]
+    },
+    "showing": true,
+    "code_exe": null,
+    "time": null,
+    "notes": null,
+    "button": {}
+  }
+}

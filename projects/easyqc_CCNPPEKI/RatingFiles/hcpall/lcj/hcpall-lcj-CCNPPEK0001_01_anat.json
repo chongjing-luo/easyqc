@@ -1,0 +1,39 @@
+{
+  "name": "hcpall",
+  "label": "hcpall",
+  "rater": "lcj",
+  "easyqcid": "CCNPPEK0001_01_anat",
+  "watch_mode": false,
+  "tags": {
+    "1": {
+      "label": "checkdone",
+      "value": false
+    },
+    "2": {
+      "label": "anatfailed",
+      "value": false
+    },
+    "3": {
+      "label": "restfailed",
+      "value": false
+    }
+  },
+  "scores": {
+    "1": {
+      "label": "hcpcoregistration",
+      "num": "0-4",
+      "num_": "0,1,2,3,4",
+      "value": null
+    }
+  },
+  "code": "wb_view \\\n${hcp_dir}/${group}/${sublist}/MNINonLinear/Results/${moddir}/${moddir}.nii.gz \\\n${hcp_dir}/${group}/${sublist}/MNINonLinear/T1w.nii.gz \\\n${hcp_dir}/${group}/${sublist}/MNINonLinear/${sublist}.L.pial.164k_fs_LR.surf.gii \\\n${hcp_dir}/${group}/${sublist}/MNINonLinear/${sublist}.R.pial.164k_fs_LR.surf.gii \\\n${hcp_dir}/${group}/${sublist}/MNINonLinear/${sublist}.L.white.164k_fs_LR.surf.gii \\\n${hcp_dir}/${group}/${sublist}/MNINonLinear/${sublist}.R.white.164k_fs_LR.surf.gii",
+  "interper": "shell",
+  "control": true,
+  "select_filter": "SELECT * FROM df WHERE mod = 'rest'",
+  "showing": true,
+  "code_exe": null,
+  "time": "2026-07-23 15:08:42",
+  "notes": null,
+  "button": {},
+  "schema_version": 3
+}
