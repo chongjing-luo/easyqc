@@ -17,7 +17,7 @@ from models.table_view_state import FilterCondition, FilterExpression, FilterGro
 def _profiles():
     source = pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002", "SUB003"],
+            "easyqcid": ["SUB001", "SUB002", "SUB003"],
             "site": ["North,East", "南区", "West"],
             "age": [29.5, 31.0, 42.0],
             "passed": [True, False, True],
@@ -98,7 +98,7 @@ def test_add_remove_reset_and_cancel_change_only_the_dialog_draft(qtbot):
 
     added = dialog.editor.add_group()
     added.join_combo.setCurrentIndex(added.join_combo.findData("any"))
-    added.add_condition(FilterCondition("ezqcid", "contains", "003", "subject"))
+    added.add_condition(FilterCondition("easyqcid", "contains", "003", "subject"))
     assert len(dialog.editor.expression().groups) == 3
     dialog.editor.remove_group(added)
     assert dialog.editor.expression() == applied

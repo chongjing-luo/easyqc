@@ -15,7 +15,7 @@ from models.table_view_state import FilterCondition, SortRule
 def _source() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002", "SUB003"],
+            "easyqcid": ["SUB001", "SUB002", "SUB003"],
             "site": ["A", "B", "A"],
             "AnatQC.rater1.score1": ["Good", "Fair", None],
         }
@@ -58,7 +58,7 @@ def test_results_page_is_direct_read_only_shared_table_without_repeated_title(
         "查找",
         "导出…",
     ]
-    assert table.find_edit.placeholderText() == "搜索 ezqcid"
+    assert table.find_edit.placeholderText() == "搜索 easyqcid"
     assert all(
         label.text().strip() != "质控结果" for label in page.findChildren(QLabel)
     )
@@ -105,7 +105,7 @@ def test_results_statuses_stay_english_when_state_changes_after_language_switch(
         (FilterCondition("site", "==", "A", "site-a"),)
     )
     assert table.apply_filter_draft()
-    assert table.apply_sort_rules((SortRule("ezqcid", False),))
+    assert table.apply_sort_rules((SortRule("easyqcid", False),))
     assert table.select_source_position(0)
 
     assert table.filter_action.text() == "Filter (1)"
@@ -120,7 +120,7 @@ def test_results_statuses_stay_english_when_state_changes_after_language_switch(
 def test_results_page_refresh_empty_and_error_states_are_explicit(qtbot) -> None:
     refresh_calls = []
     page = QtQcResultsPage(
-        pd.DataFrame(columns=["ezqcid"]),
+        pd.DataFrame(columns=["easyqcid"]),
         refresh_callback=lambda: refresh_calls.append(True) or True,
     )
     qtbot.addWidget(page)
@@ -164,7 +164,7 @@ def test_results_page_export_delegates_to_shared_core_export(qtbot, tmp_path) ->
     assert receipt.destination == destination
     assert receipt.rows == 3
     exported = pd.read_csv(destination)
-    assert exported["ezqcid"].tolist() == ["SUB001", "SUB002", "SUB003"]
+    assert exported["easyqcid"].tolist() == ["SUB001", "SUB002", "SUB003"]
 
 
 def test_results_page_close_owns_shared_workspace_lifecycle(

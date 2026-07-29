@@ -11,12 +11,12 @@ shows a confirmation containing the exact row count or column name and states
 that existing rating records are retained.
 
 The import page edits only its detached draft. It may remove any column,
-including `ezqcid`; the existing merge validation then prevents writing until a
+including `easyqcid`; the existing merge validation then prevents writing until a
 valid identity column is restored.
 
-The Pre-QC page removes exact current `ezqcid` identities or exact ordinary
+The Pre-QC page removes exact current `easyqcid` identities or exact ordinary
 column names from the authoritative list. It never permits deletion of
-`ezqcid`. A successful operation uses existing validation and atomic CSV
+`easyqcid`. A successful operation uses existing validation and atomic CSV
 replacement, then publishes the existing subject-change event so all views
 reload. Missing/stale targets fail without a partial update.
 
@@ -26,7 +26,7 @@ reload. Missing/stale targets fail without a partial update.
 Import selection -> draft-position mapping -> detached replacement -> preview
 
 Pre-QC selection -> exact identities/column -> ConfigurationService
- -> reload authoritative ezqc_all.csv -> validate candidate
+ -> reload authoritative easyqc_all.csv -> validate candidate
  -> atomic TableService replacement -> SUBJECTS_CHANGED -> context refresh
 
 RatingFiles ----------------------------------------------------> untouched

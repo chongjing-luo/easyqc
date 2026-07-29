@@ -30,7 +30,7 @@ def _service(tmp_path):
 
 def _subjects():
     return pd.DataFrame(
-        {"ezqcid": ["SUB001", "SUB002"], "site": ["A", "B"], "age": [29, 31]}
+        {"easyqcid": ["SUB001", "SUB002"], "site": ["A", "B"], "age": [29, 31]}
     )
 
 
@@ -70,7 +70,7 @@ def test_project_and_subject_configuration_use_temporary_atomic_files(tmp_path) 
     pd.testing.assert_frame_equal(result, _subjects())
     assert projects.current_project.name == "SAMPLE"
     assert projects.current_project.settings_path.exists()
-    assert (projects.current_project.table_dir / "ezqc_all.csv").exists()
+    assert (projects.current_project.table_dir / "easyqc_all.csv").exists()
 
 
 def test_derive_subject_column_persists_values_once_and_publishes_change(
@@ -101,7 +101,7 @@ def test_derive_subject_column_persists_values_once_and_publishes_change(
     assert service.subjects()["age_next"].tolist() == [30, 32]
     assert events and events[-1].source == "ConfigurationService"
     csv_text = (
-        projects.current_project.table_dir / "ezqc_all.csv"
+        projects.current_project.table_dir / "easyqc_all.csv"
     ).read_text(encoding="utf-8")
     assert "age_next" in csv_text.splitlines()[0]
     assert "age + 1" not in csv_text
@@ -119,8 +119,8 @@ def test_derive_subject_column_persists_values_once_and_publishes_change(
             "未知函数",
         ),
         (
-            DerivedColumnFormula("ezqcid", "[age]"),
-            "ezqcid",
+            DerivedColumnFormula("easyqcid", "[age]"),
+            "easyqcid",
         ),
         (None, "DerivedColumnFormula"),
     ],
@@ -132,7 +132,7 @@ def test_derive_subject_column_rejects_invalid_request_without_writing(
 ) -> None:
     service, projects = _service(tmp_path)
     service.replace_subjects(_subjects(), notify=False)
-    table_path = projects.current_project.table_dir / "ezqc_all.csv"
+    table_path = projects.current_project.table_dir / "easyqc_all.csv"
     before = table_path.read_bytes()
 
     with pytest.raises(ConfigurationError, match=match):
@@ -149,13 +149,13 @@ def test_derive_subject_column_failed_row_policy_keeps_csv_byte_identical(
     service.replace_subjects(
         pd.DataFrame(
             {
-                "ezqcid": ["SUB001", "SUB002"],
+                "easyqcid": ["SUB001", "SUB002"],
                 "label": ["4", "bad"],
             }
         ),
         notify=False,
     )
-    table_path = projects.current_project.table_dir / "ezqc_all.csv"
+    table_path = projects.current_project.table_dir / "easyqc_all.csv"
     before = table_path.read_bytes()
     request = DerivedColumnFormula(
         "identifier",
@@ -171,8 +171,8 @@ def test_derive_subject_column_failed_row_policy_keeps_csv_byte_identical(
 @pytest.mark.parametrize(
     "frame",
     [
-        pd.DataFrame({"ezqcid": ["SUB001", "SUB001"]}),
-        pd.DataFrame({"ezqcid": ["SUB001", " "]}),
+        pd.DataFrame({"easyqcid": ["SUB001", "SUB001"]}),
+        pd.DataFrame({"easyqcid": ["SUB001", " "]}),
         pd.DataFrame({"subject": ["SUB001"]}),
     ],
 )
@@ -190,14 +190,14 @@ def test_subject_merge_and_constant_column_collisions_fail_loud(tmp_path) -> Non
 
     with pytest.raises(ConfigurationError, match="overlap"):
         service.merge_subjects(
-            pd.DataFrame({"ezqcid": ["SUB001"], "site": ["changed"]}),
+            pd.DataFrame({"easyqcid": ["SUB001"], "site": ["changed"]}),
             mode="columns",
         )
     with pytest.raises(ConfigurationError, match="column"):
         service.set_constant("site", "bad")
     with pytest.raises(ConfigurationError, match="常量"):
         service.replace_subjects(
-            pd.DataFrame({"ezqcid": ["SUB001"], "DATA_ROOT": ["shadow"]})
+            pd.DataFrame({"easyqcid": ["SUB001"], "DATA_ROOT": ["shadow"]})
         )
 
 
@@ -250,7 +250,7 @@ def test_module_add_move_import_collision_and_atomic_export(tmp_path) -> None:
         "name": "ImportedQC",
         "label": "Imported QC",
         "rater": "external",
-        "ezqcid": "SUB999",
+        "easyqcid": "SUB999",
         "watch_mode": False,
         "scores": {"1": {"label": "Quality", "num": "A,B", "num_": "A,B", "value": "A"}},
         "tags": {"1": {"label": "Artifact", "value": True}},
@@ -266,7 +266,7 @@ def test_module_add_move_import_collision_and_atomic_export(tmp_path) -> None:
     }
     service.import_module_payload(imported)
     module = next(item for item in service.modules() if item.name == "ImportedQC")
-    assert module.ezqcid is None
+    assert module.easyqcid is None
     assert module.notes is None
     assert module.scores["1"].value is None
     assert module.tags["1"].value is False
@@ -278,7 +278,7 @@ def test_module_add_move_import_collision_and_atomic_export(tmp_path) -> None:
     service.export_module("ImportedQC", output)
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["rater"] is None
-    assert payload["ezqcid"] is None
+    assert payload["easyqcid"] is None
 
 
 def test_remove_project_only_unregisters_it(tmp_path) -> None:
@@ -324,7 +324,7 @@ def test_configuration_snapshot_is_detached_from_authoritative_subjects(tmp_path
 def test_list_import_draft_readers_do_not_mutate_the_active_table(tmp_path) -> None:
     service, projects = _service(tmp_path)
     service.replace_subjects(_subjects())
-    table_path = projects.current_project.table_dir / "ezqc_all.csv"
+    table_path = projects.current_project.table_dir / "easyqc_all.csv"
     before_bytes = table_path.read_bytes()
 
     folder = tmp_path / "incoming-folders"
@@ -333,30 +333,30 @@ def test_list_import_draft_readers_do_not_mutate_the_active_table(tmp_path) -> N
     (folder / "ignored.txt").write_text("not a directory", encoding="utf-8")
     csv_path = tmp_path / "incoming.csv"
     pd.DataFrame(
-        {"ezqcid": ["SUB005"], "site": ["C"], "scanner_model": ["Prisma"]}
+        {"easyqcid": ["SUB005"], "site": ["C"], "scanner_model": ["Prisma"]}
     ).to_csv(csv_path, index=False)
 
-    folder_draft = service.draft_from_folder(folder, "ezqcid")
+    folder_draft = service.draft_from_folder(folder, "easyqcid")
     file_draft = service.draft_from_file(csv_path)
-    text_draft = service.draft_from_text("SUB006, SUB007\nSUB008", "ezqcid")
+    text_draft = service.draft_from_text("SUB006, SUB007\nSUB008", "easyqcid")
 
-    assert folder_draft.to_dict("list") == {"ezqcid": ["SUB003", "SUB004"]}
+    assert folder_draft.to_dict("list") == {"easyqcid": ["SUB003", "SUB004"]}
     assert file_draft.to_dict("records") == [
-        {"ezqcid": "SUB005", "site": "C", "scanner_model": "Prisma"}
+        {"easyqcid": "SUB005", "site": "C", "scanner_model": "Prisma"}
     ]
-    assert text_draft["ezqcid"].tolist() == ["SUB006", "SUB007", "SUB008"]
+    assert text_draft["easyqcid"].tolist() == ["SUB006", "SUB007", "SUB008"]
     pd.testing.assert_frame_equal(service.subjects(), _subjects())
     assert table_path.read_bytes() == before_bytes
 
 
-def test_file_import_drafts_preserve_text_ezqcid_for_csv_and_excel(
+def test_file_import_drafts_preserve_text_easyqcid_for_csv_and_excel(
     tmp_path,
     monkeypatch,
 ) -> None:
     service, _projects = _service(tmp_path)
     csv_path = tmp_path / "incoming.csv"
     csv_path.write_text(
-        "ezqcid,visit\n001,1\n01-A,2\n",
+        "easyqcid,visit\n001,1\n01-A,2\n",
         encoding="utf-8",
     )
     excel_path = tmp_path / "incoming.xlsx"
@@ -366,7 +366,7 @@ def test_file_import_drafts_preserve_text_ezqcid_for_csv_and_excel(
     def fake_read_excel(path, **kwargs):
         read_excel_calls.append((path, kwargs))
         return pd.DataFrame(
-            {"ezqcid": ["001", "01-A"], "visit": [1, 2]}
+            {"easyqcid": ["001", "01-A"], "visit": [1, 2]}
         )
 
     monkeypatch.setattr(
@@ -377,29 +377,29 @@ def test_file_import_drafts_preserve_text_ezqcid_for_csv_and_excel(
     csv_draft = service.draft_from_file(csv_path)
     excel_draft = service.draft_from_file(excel_path)
 
-    assert csv_draft["ezqcid"].tolist() == ["001", "01-A"]
+    assert csv_draft["easyqcid"].tolist() == ["001", "01-A"]
     assert csv_draft["visit"].tolist() == [1, 2]
-    assert excel_draft["ezqcid"].tolist() == ["001", "01-A"]
+    assert excel_draft["easyqcid"].tolist() == ["001", "01-A"]
     assert excel_draft["visit"].tolist() == [1, 2]
     assert read_excel_calls[0][0] == excel_path
-    converter = read_excel_calls[0][1]["converters"]["ezqcid"]
+    converter = read_excel_calls[0][1]["converters"]["easyqcid"]
     assert converter("NA") == "NA"
     assert converter("001") == "001"
     assert converter(7) == 7
 
 
-def test_import_subject_csv_preserves_leading_zero_ezqcid(tmp_path) -> None:
+def test_import_subject_csv_preserves_leading_zero_easyqcid(tmp_path) -> None:
     service, _projects = _service(tmp_path)
     source = tmp_path / "subjects.csv"
     source.write_text(
-        "ezqcid,visit\n001,1\n01-A,2\n",
+        "easyqcid,visit\n001,1\n01-A,2\n",
         encoding="utf-8",
     )
 
     service.import_subject_csv(source)
 
     result = service.subjects()
-    assert result["ezqcid"].tolist() == ["001", "01-A"]
+    assert result["easyqcid"].tolist() == ["001", "01-A"]
     assert result["visit"].tolist() == [1, 2]
 
 
@@ -409,11 +409,11 @@ def test_list_import_draft_readers_fail_loud_on_invalid_sources(tmp_path) -> Non
     unsupported.write_text("{}", encoding="utf-8")
 
     with pytest.raises(ConfigurationError, match="目录"):
-        service.draft_from_folder(tmp_path / "missing", "ezqcid")
+        service.draft_from_folder(tmp_path / "missing", "easyqcid")
     with pytest.raises(ConfigurationError, match="格式"):
         service.draft_from_file(unsupported)
     with pytest.raises(ConfigurationError, match="为空"):
-        service.draft_from_text("  , \n", "ezqcid")
+        service.draft_from_text("  , \n", "easyqcid")
     with pytest.raises(ConfigurationError, match="字段名"):
         service.draft_from_text("SUB001", "not a valid field")
 
@@ -609,19 +609,19 @@ def test_folder_match_request_rejects_ambiguous_or_unsafe_rules(
         _folder_request(**changes)
 
 
-def test_list_import_merge_columns_and_append_rows_use_exact_validated_ezqcid(
+def test_list_import_merge_columns_and_append_rows_use_exact_validated_easyqcid(
     tmp_path,
 ) -> None:
     service, _projects = _service(tmp_path)
     service.replace_subjects(
-        pd.DataFrame({"ezqcid": ["SUB001", "SUB002"], "site": ["A", "B"]})
+        pd.DataFrame({"easyqcid": ["SUB001", "SUB002"], "site": ["A", "B"]})
     )
 
     service.merge_subjects(
-        pd.DataFrame({"ezqcid": ["SUB001", "SUB003"], "batch": ["X", "Y"]}),
+        pd.DataFrame({"easyqcid": ["SUB001", "SUB003"], "batch": ["X", "Y"]}),
         mode="columns",
     )
-    merged = service.subjects().set_index("ezqcid")
+    merged = service.subjects().set_index("easyqcid")
     assert list(merged.index) == ["SUB001", "SUB002", "SUB003"]
     assert merged.loc["SUB001", "batch"] == "X"
     assert merged.loc["SUB003", "batch"] == "Y"
@@ -629,14 +629,14 @@ def test_list_import_merge_columns_and_append_rows_use_exact_validated_ezqcid(
     service.merge_subjects(
         pd.DataFrame(
             {
-                "ezqcid": ["SUB004"],
+                "easyqcid": ["SUB004"],
                 "site": ["D"],
                 "batch": ["Z"],
             }
         ),
         mode="rows",
     )
-    assert service.subjects()["ezqcid"].tolist() == [
+    assert service.subjects()["easyqcid"].tolist() == [
         "SUB001",
         "SUB002",
         "SUB003",
@@ -647,14 +647,14 @@ def test_list_import_merge_columns_and_append_rows_use_exact_validated_ezqcid(
 @pytest.mark.parametrize(
     "incoming, mode, match",
     [
-        (pd.DataFrame({"ezqcid": ["", "SUB003"], "batch": ["X", "Y"]}), "columns", "空白"),
+        (pd.DataFrame({"easyqcid": ["", "SUB003"], "batch": ["X", "Y"]}), "columns", "空白"),
         (
-            pd.DataFrame({"ezqcid": ["SUB003", "SUB003"], "batch": ["X", "Y"]}),
+            pd.DataFrame({"easyqcid": ["SUB003", "SUB003"], "batch": ["X", "Y"]}),
             "columns",
             "重复",
         ),
-        (pd.DataFrame({"ezqcid": ["SUB001"], "site": ["changed"]}), "columns", "overlap"),
-        (pd.DataFrame({"ezqcid": ["SUB003"], "other": ["X"]}), "rows", "same columns"),
+        (pd.DataFrame({"easyqcid": ["SUB001"], "site": ["changed"]}), "columns", "overlap"),
+        (pd.DataFrame({"easyqcid": ["SUB003"], "other": ["X"]}), "rows", "same columns"),
     ],
 )
 def test_failed_list_import_preserves_memory_and_atomic_table(
@@ -664,9 +664,9 @@ def test_failed_list_import_preserves_memory_and_atomic_table(
     match,
 ) -> None:
     service, projects = _service(tmp_path)
-    current = pd.DataFrame({"ezqcid": ["SUB001", "SUB002"], "site": ["A", "B"]})
+    current = pd.DataFrame({"easyqcid": ["SUB001", "SUB002"], "site": ["A", "B"]})
     service.replace_subjects(current)
-    table_path = projects.current_project.table_dir / "ezqc_all.csv"
+    table_path = projects.current_project.table_dir / "easyqc_all.csv"
     before_bytes = table_path.read_bytes()
 
     with pytest.raises(ConfigurationError, match=match):
@@ -679,7 +679,7 @@ def test_failed_list_import_preserves_memory_and_atomic_table(
 def test_module_filter_resolution_matches_table_positions_in_source_order() -> None:
     subjects = pd.DataFrame(
         {
-            "ezqcid": ["SUB003", "SUB001", "SUB002"],
+            "easyqcid": ["SUB003", "SUB001", "SUB002"],
             "site": ["C", "A", "B"],
             "age": [27, 29, 31],
         }
@@ -708,7 +708,7 @@ def test_module_filter_resolution_matches_table_positions_in_source_order() -> N
         table_service.default_state().with_filter(expression)
     )
     expected = tuple(
-        subjects.iloc[expected_result.source_positions]["ezqcid"].tolist()
+        subjects.iloc[expected_result.source_positions]["easyqcid"].tolist()
     )
 
     assert resolve_module_filter_identities(subjects, expression) == expected
@@ -722,7 +722,7 @@ def test_module_filter_resolution_matches_table_positions_in_source_order() -> N
 def test_module_filter_does_not_profile_unreferenced_complete_list_columns() -> None:
     subjects = pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002", "SUB003"],
+            "easyqcid": ["SUB001", "SUB002", "SUB003"],
             "site": ["A", "B", "A"],
             "unused_object_payload": [["not"], ["hashable"], ["values"]],
         }
@@ -944,7 +944,7 @@ def test_subject_row_deletion_atomically_persists_and_retains_ratings(
         / "rating.json"
     )
     rating_path.parent.mkdir(parents=True)
-    rating_path.write_bytes(b'{"ezqcid":"SUB001","score":"Good"}')
+    rating_path.write_bytes(b'{"easyqcid":"SUB001","score":"Good"}')
     rating_before = rating_path.read_bytes()
     events = []
     service.project_service.event_bus.subscribe(
@@ -955,18 +955,18 @@ def test_subject_row_deletion_atomically_persists_and_retains_ratings(
     removed = service.delete_subject_rows(("SUB001",))
 
     assert removed == 1
-    assert service.subjects()["ezqcid"].tolist() == ["SUB002"]
+    assert service.subjects()["easyqcid"].tolist() == ["SUB002"]
     assert rating_path.read_bytes() == rating_before
     assert events and events[-1].type is EventType.SUBJECTS_CHANGED
     table_after = (
-        projects.current_project.table_dir / "ezqc_all.csv"
+        projects.current_project.table_dir / "easyqc_all.csv"
     ).read_bytes()
 
     with pytest.raises(ConfigurationError, match="不存在"):
         service.delete_subject_rows(("MISSING",))
 
     assert (
-        projects.current_project.table_dir / "ezqc_all.csv"
+        projects.current_project.table_dir / "easyqc_all.csv"
     ).read_bytes() == table_after
     assert rating_path.read_bytes() == rating_before
 
@@ -976,7 +976,7 @@ def test_subject_column_deletion_protects_identity_and_retains_ratings(
 ) -> None:
     service, projects = _service(tmp_path)
     service.replace_subjects(_subjects(), notify=False)
-    table_path = projects.current_project.table_dir / "ezqc_all.csv"
+    table_path = projects.current_project.table_dir / "easyqc_all.csv"
     rating_path = (
         projects.current_project.path
         / "RatingFiles"
@@ -985,18 +985,18 @@ def test_subject_column_deletion_protects_identity_and_retains_ratings(
         / "rating.json"
     )
     rating_path.parent.mkdir(parents=True)
-    rating_path.write_bytes(b'{"ezqcid":"SUB001","notes":"retain"}')
+    rating_path.write_bytes(b'{"easyqcid":"SUB001","notes":"retain"}')
     rating_before = rating_path.read_bytes()
 
     removed = service.delete_subject_columns(("site", "age"))
 
     assert removed == 2
-    assert service.subjects().columns.tolist() == ["ezqcid"]
+    assert service.subjects().columns.tolist() == ["easyqcid"]
     assert rating_path.read_bytes() == rating_before
     table_before = table_path.read_bytes()
 
-    with pytest.raises(ConfigurationError, match="ezqcid"):
-        service.delete_subject_columns(("ezqcid",))
+    with pytest.raises(ConfigurationError, match="easyqcid"):
+        service.delete_subject_columns(("easyqcid",))
     with pytest.raises(ConfigurationError, match="不存在"):
         service.delete_subject_columns(("missing",))
 
@@ -1010,7 +1010,7 @@ def test_subject_deletion_save_failure_leaves_table_ratings_and_events_unchanged
 ) -> None:
     service, projects = _service(tmp_path)
     service.replace_subjects(_subjects(), notify=False)
-    table_path = projects.current_project.table_dir / "ezqc_all.csv"
+    table_path = projects.current_project.table_dir / "easyqc_all.csv"
     rating_path = (
         projects.current_project.path
         / "RatingFiles"
@@ -1019,7 +1019,7 @@ def test_subject_deletion_save_failure_leaves_table_ratings_and_events_unchanged
         / "rating.json"
     )
     rating_path.parent.mkdir(parents=True)
-    rating_path.write_bytes(b'{"ezqcid":"SUB001","tag":true}')
+    rating_path.write_bytes(b'{"easyqcid":"SUB001","tag":true}')
     table_before = table_path.read_bytes()
     rating_before = rating_path.read_bytes()
     events = []
@@ -1047,7 +1047,7 @@ def test_explicit_subject_import_append_policies_preserve_order_and_report(
     service, _projects = _service(tmp_path)
     current = pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002"],
+            "easyqcid": ["SUB001", "SUB002"],
             "site": ["A", "B"],
             "age": [20, 30],
         }
@@ -1056,7 +1056,7 @@ def test_explicit_subject_import_append_policies_preserve_order_and_report(
         {
             "age": [31, 40],
             "site": ["B2", "C"],
-            "ezqcid": ["SUB002", "SUB003"],
+            "easyqcid": ["SUB002", "SUB003"],
         }
     )
     service.replace_subjects(current, notify=False)
@@ -1083,7 +1083,7 @@ def test_explicit_subject_import_append_policies_preserve_order_and_report(
         service.subjects(),
         pd.DataFrame(
             {
-                "ezqcid": ["SUB001", "SUB002", "SUB003"],
+                "easyqcid": ["SUB001", "SUB002", "SUB003"],
                 "site": ["A", "B", "C"],
                 "age": [20, 30, 40],
             }
@@ -1102,7 +1102,7 @@ def test_explicit_subject_import_append_policies_preserve_order_and_report(
         service.subjects(),
         pd.DataFrame(
             {
-                "ezqcid": ["SUB001", "SUB002", "SUB003"],
+                "easyqcid": ["SUB001", "SUB002", "SUB003"],
                 "site": ["A", "B2", "C"],
                 "age": [20, 31, 40],
             }
@@ -1117,7 +1117,7 @@ def test_explicit_subject_import_merge_policies_avoid_suffixes_and_blank_clears(
     service, _projects = _service(tmp_path)
     current = pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002"],
+            "easyqcid": ["SUB001", "SUB002"],
             "site": ["A", "B"],
             "age": [20, 30],
             "passed": [True, True],
@@ -1125,7 +1125,7 @@ def test_explicit_subject_import_merge_policies_avoid_suffixes_and_blank_clears(
     )
     incoming = pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002", "SUB003"],
+            "easyqcid": ["SUB001", "SUB002", "SUB003"],
             "site": ["  ", "B2", "C"],
             "age": [0, pd.NA, 40],
             "passed": [False, pd.NA, True],
@@ -1148,7 +1148,7 @@ def test_explicit_subject_import_merge_policies_avoid_suffixes_and_blank_clears(
     )
     preserved = service.subjects()
     assert preserved.columns.tolist() == [
-        "ezqcid",
+        "easyqcid",
         "site",
         "age",
         "passed",
@@ -1157,7 +1157,7 @@ def test_explicit_subject_import_merge_policies_avoid_suffixes_and_blank_clears(
     assert not any(
         str(column).endswith(("_x", "_y")) for column in preserved.columns
     )
-    preserved_by_id = preserved.set_index("ezqcid")
+    preserved_by_id = preserved.set_index("easyqcid")
     assert preserved_by_id.loc["SUB001", "site"] == "A"
     assert preserved_by_id.loc["SUB001", "age"] == 20
     assert bool(preserved_by_id.loc["SUB001", "passed"]) is True
@@ -1171,7 +1171,7 @@ def test_explicit_subject_import_merge_policies_avoid_suffixes_and_blank_clears(
         conflict_policy="update",
         notify=False,
     )
-    updated = service.subjects().set_index("ezqcid")
+    updated = service.subjects().set_index("easyqcid")
     assert updated.loc["SUB001", "site"] == "A"
     assert updated.loc["SUB001", "age"] == 0
     assert bool(updated.loc["SUB001", "passed"]) is False
@@ -1187,13 +1187,13 @@ def test_explicit_subject_import_replace_is_atomic_and_retains_ratings(
 ) -> None:
     service, projects = _service(tmp_path)
     current = pd.DataFrame(
-        {"ezqcid": ["SUB001", "SUB002"], "site": ["A", "B"]}
+        {"easyqcid": ["SUB001", "SUB002"], "site": ["A", "B"]}
     )
     replacement = pd.DataFrame(
-        {"ezqcid": ["NEW001"], "batch": ["X"]}
+        {"easyqcid": ["NEW001"], "batch": ["X"]}
     )
     service.replace_subjects(current, notify=False)
-    table_path = projects.current_project.table_dir / "ezqc_all.csv"
+    table_path = projects.current_project.table_dir / "easyqc_all.csv"
     rating_path = (
         projects.current_project.path
         / "RatingFiles"
@@ -1202,7 +1202,7 @@ def test_explicit_subject_import_replace_is_atomic_and_retains_ratings(
         / "rating.json"
     )
     rating_path.parent.mkdir(parents=True)
-    rating_path.write_bytes(b'{"ezqcid":"SUB001","score":"Good"}')
+    rating_path.write_bytes(b'{"easyqcid":"SUB001","score":"Good"}')
     rating_before = rating_path.read_bytes()
     events = []
     service.project_service.event_bus.subscribe(
@@ -1245,7 +1245,7 @@ def test_explicit_subject_import_replace_is_atomic_and_retains_ratings(
     [
         (
             pd.DataFrame(
-                {"ezqcid": ["SUB003", "SUB003"], "site": ["C", "D"]}
+                {"easyqcid": ["SUB003", "SUB003"], "site": ["C", "D"]}
             ),
             "append",
             "deduplicate",
@@ -1254,26 +1254,26 @@ def test_explicit_subject_import_replace_is_atomic_and_retains_ratings(
         (
             pd.DataFrame(
                 [["SUB003", "C", "D"]],
-                columns=["ezqcid", "site", "site"],
+                columns=["easyqcid", "site", "site"],
             ),
             "replace",
             None,
             "重复字段",
         ),
         (
-            pd.DataFrame({"ezqcid": ["SUB003"], "other": ["C"]}),
+            pd.DataFrame({"easyqcid": ["SUB003"], "other": ["C"]}),
             "append",
             "replace",
             "相同字段",
         ),
         (
-            pd.DataFrame({"ezqcid": ["SUB003"], "site": ["C"]}),
+            pd.DataFrame({"easyqcid": ["SUB003"], "site": ["C"]}),
             "append",
             "update",
             "冲突策略",
         ),
         (
-            pd.DataFrame({"ezqcid": ["SUB003"], "site": ["C"]}),
+            pd.DataFrame({"easyqcid": ["SUB003"], "site": ["C"]}),
             "replace",
             "deduplicate",
             "冲突策略",
@@ -1289,10 +1289,10 @@ def test_explicit_subject_import_rejects_ambiguous_inputs_before_write(
 ) -> None:
     service, projects = _service(tmp_path)
     current = pd.DataFrame(
-        {"ezqcid": ["SUB001", "SUB002"], "site": ["A", "B"]}
+        {"easyqcid": ["SUB001", "SUB002"], "site": ["A", "B"]}
     )
     service.replace_subjects(current, notify=False)
-    table_path = projects.current_project.table_dir / "ezqc_all.csv"
+    table_path = projects.current_project.table_dir / "easyqc_all.csv"
     before_bytes = table_path.read_bytes()
 
     with pytest.raises(ConfigurationError, match=match):

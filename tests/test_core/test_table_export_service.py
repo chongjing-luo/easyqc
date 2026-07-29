@@ -21,7 +21,7 @@ from models.table_view_state import ColumnViewState, FilterCondition, SortRule
 def _applied_view():
     source = pd.DataFrame(
         {
-            "ezqcid": ["S1", "S2", "S3", "S4", "S5", "S6", "S7"],
+            "easyqcid": ["S1", "S2", "S3", "S4", "S5", "S6", "S7"],
             "group": ["B", "A", "A", "B", "A", "B", "A"],
             "score": [1, 2, 2, 3, 4, 3, 0],
             "note": ["one", "中文", "comma, value", None, "five", "six", "seven"],
@@ -32,9 +32,9 @@ def _applied_view():
     state = replace(
         service.default_state(page_size=2),
         columns=ColumnViewState(
-            order=("ezqcid", "note", "score", "group", "hidden"),
+            order=("easyqcid", "note", "score", "group", "hidden"),
             hidden=("hidden",),
-            pinned=("ezqcid",),
+            pinned=("easyqcid",),
         ),
         conditions=(FilterCondition("score", ">=", 1, "scored"),),
         sort_rules=(SortRule("group", True), SortRule("score", False)),
@@ -84,12 +84,12 @@ def test_export_writes_all_applied_rows_in_bounded_order_with_exact_receipt(
     expected.to_csv(expected_csv, index=False, lineterminator="\n")
     actual = pd.read_csv(destination, encoding="utf-8")
     assert_frame_equal(actual, pd.read_csv(StringIO(expected_csv.getvalue())))
-    assert actual["ezqcid"].tolist() == ["S5", "S2", "S3", "S4", "S6", "S1"]
+    assert actual["easyqcid"].tolist() == ["S5", "S2", "S3", "S4", "S6", "S1"]
     assert tuple(actual.columns) == columns
     assert calls == [(0, 2, columns), (2, 2, columns), (4, 2, columns)]
     assert progress == [(2, 6), (4, 6), (6, 6)]
     assert destination.read_text(encoding="utf-8").splitlines()[0] == (
-        "ezqcid,note,score,group"
+        "easyqcid,note,score,group"
     )
     assert receipt.destination == destination
     assert receipt.rows == 6
@@ -117,7 +117,7 @@ def test_empty_export_writes_one_header_and_reports_zero_progress(tmp_path) -> N
         chunk_size=2,
     )
 
-    assert destination.read_text(encoding="utf-8") == "ezqcid,note,score,group\n"
+    assert destination.read_text(encoding="utf-8") == "easyqcid,note,score,group\n"
     assert progress == [(0, 0)]
     assert receipt.rows == 0
     assert receipt.sha256 == hashlib.sha256(destination.read_bytes()).hexdigest()

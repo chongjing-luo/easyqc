@@ -34,7 +34,7 @@ python easyqc.py --ui qt-preview
 
 当前 Preview 已提供“共享 Core 服务 → 完整数据筛选/多列排序 → 有界行窗口 →
 QAbstractTableModel/QTableView”的专业只读 Table 工作区。Filter/Sort/Columns
-均为类型化可视控件，不再以 JSON 作为用户输入界面；同时包含固定 `ezqcid`、
+均为类型化可视控件，不再以 JSON 作为用户输入界面；同时包含固定 `easyqcid`、
 计数、分页、精确查找、稳定选择和 QC 身份安全门。Qt 的 Table、QC 与项目配置
 已通过同一个共享 Core 上下文接通真实项目；仍保持显式 Preview，是因为完整
 第三方组件清单、三平台原生包和人工可访问性门禁尚未完成，而不是缺少产品路由。
@@ -69,7 +69,7 @@ CLI 直达 QC 页面：
 
 ```bash
 cd easyqc
-python easyqc.py <project> <module> <rater> <ezqcid>
+python easyqc.py <project> <module> <rater> <easyqcid>
 ```
 
 示例：
@@ -88,9 +88,9 @@ python easyqc.py CCNPPEKI AnatRestAll rf CCNPPEK0001_01_rest01
 easyqc_<PROJECT>/
 ├── settings_<PROJECT>.json
 ├── Table/
-│   ├── ezqc_all.csv
-│   ├── ezqc_qctable.csv
-│   └── ezqc_qctable_filter.csv
+│   ├── easyqc_all.csv
+│   ├── easyqc_qctable.csv
+│   └── easyqc_qctable_filter.csv
 └── RatingFiles/
     └── <module>/<rater>/*.json
 ```
@@ -101,7 +101,7 @@ easyqc_<PROJECT>/
 - 变量导入和合并，包括路径导入。
 - 评分保存、旧评分文件清理和观察模式。
 - 旧评分 JSON 的读取、验证和聚合。
-- 真实 `easyqc_CCNPPEKI` 项目的 `ezqc_qctable.csv` 快照重建对比。
+- 真实 `easyqc_CCNPPEKI` 项目的 `easyqc_qctable.csv` 快照重建对比。
 - 合成多模块、多评分者、多受试者评分聚合。
 - CLI 参数解析和直达 QC 页面。
 - Freeview、MRIcroGL、wb_view 等外部查看器命令。
@@ -111,7 +111,7 @@ easyqc_<PROJECT>/
 - 真实大表格 GUI 点击和滚动。
 - 真实项目中的多个 QC 模块、多评分者 GUI 压力场景。
 - macOS / Windows 跨平台真实点击。
-- 旧版/新版 `settings_*.json`、评分 JSON、`ezqc_qctable.csv` 的逐项输出对比。
+- 旧版/新版 `settings_*.json`、评分 JSON、`easyqc_qctable.csv` 的逐项输出对比。
 
 ---
 
@@ -146,13 +146,13 @@ easyqc_<PROJECT>/
 1. 复制备份原项目目录，例如 `easyqc_CCNPPEKI_backup_YYYYMMDD/`。
 2. 启动新版 GUI，确认主窗口可打开、可关闭。
 3. 导入或切换到目标项目。
-4. 打开 `ezqc_all` 和聚合表格，确认行列数量合理。
+4. 打开 `easyqc_all` 和聚合表格，确认行列数量合理。
 5. 新建一个临时变量，分别测试路径、文件或文本导入。
 6. 打开一个已评分受试者，确认旧评分能恢复。
 7. 修改一项评分或备注，关闭后重新打开，确认保存和旧文件清理正常。
 8. 打开表格右键菜单和 QC 页面右键菜单。
 9. 测试常用外部查看器命令。
-10. 提取 QC 结果，检查 `ezqc_qctable.csv`。
+10. 提取 QC 结果，检查 `easyqc_qctable.csv`。
 
 详细人工测试表见仓库根目录的 `Manual_Test_Checklist.md`。
 

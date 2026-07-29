@@ -60,7 +60,7 @@ The main area is the existing grouped filter editor:
 - it displays the exact matching count before confirmation.
 
 After the user applies the deletion draft, EasyQC resolves it to stable import
-draft positions or exact `ezqcid` values and asks for a final confirmation:
+draft positions or exact `easyqcid` values and asks for a final confirmation:
 
 ```text
 将删除 128 行。
@@ -74,10 +74,10 @@ nothing.
 
 - QC List Import removes the resolved positions from its detached draft and
   rebuilds the preview once.
-- Pre-QC passes the exact resolved `ezqcid` tuple through the existing
+- Pre-QC passes the exact resolved `easyqcid` tuple through the existing
   background mutation controller to `ConfigurationService.delete_subject_rows`.
 - Core reloads and validates the authoritative list, atomically replaces
-  `Table/ezqc_all.csv`, and publishes `SUBJECTS_CHANGED` only after success.
+  `Table/easyqc_all.csv`, and publishes `SUBJECTS_CHANGED` only after success.
 - Historical rating files are neither enumerated nor modified.
 
 The old multi-selection requirement and selection-enabled state are removed.
@@ -91,8 +91,8 @@ cell. Multiple columns may be checked and deleted in one operation.
 
 - The list shows the table's complete source schema, not only visible columns.
 - Search narrows the list without changing checked items.
-- In Pre-QC, `ezqcid` remains visible but disabled and marked protected.
-- In QC List Import, `ezqcid` may be checked; the existing write validation
+- In Pre-QC, `easyqcid` remains visible but disabled and marked protected.
+- In QC List Import, `easyqcid` may be checked; the existing write validation
   then prevents writing until a valid identity column is restored.
 - No selection is an inline error.
 - Confirmation lists the exact column count and names.
@@ -108,7 +108,7 @@ The current radio pair becomes one explicit `写入方式` control with three
 values. A second contextual `冲突处理` control is visible only when that mode
 has a conflict decision.
 
-### 1. 按 `ezqcid` 合并列
+### 1. 按 `easyqcid` 合并列
 
 New columns are added by identity. Incoming identities not currently present
 remain allowed, preserving the current outer-merge behavior.
@@ -132,14 +132,14 @@ are valid update values.
 The incoming and existing tables must contain the same column set. Column order
 may differ and is normalized to the existing order.
 
-When an incoming `ezqcid` already exists:
+When an incoming `easyqcid` already exists:
 
 - `去除重复` (default): retain the existing row and skip the incoming duplicate.
 - `用导入行替换`: replace the complete existing row at its current position
   with the incoming row.
 
 New identities are appended in incoming order. Existing list order remains
-stable. Duplicate `ezqcid` values inside the import draft itself are rejected
+stable. Duplicate `easyqcid` values inside the import draft itself are rejected
 because no deterministic winner was selected by the user.
 
 ### 3. 替换现有名单
@@ -210,7 +210,7 @@ strict legacy policies, but the Qt import page uses the new explicit contract.
 2. An empty or zero-match row-deletion draft cannot write.
 3. Delete columns opens a searchable multi-column checklist and does not
    depend on the current cell.
-4. Pre-QC protects `ezqcid`; import drafts may delete it.
+4. Pre-QC protects `easyqcid`; import drafts may delete it.
 5. Replace mode atomically replaces only the authoritative list.
 6. Append + deduplicate keeps existing duplicates and appends only new rows.
 7. Append + replace updates complete duplicate rows in place and appends new

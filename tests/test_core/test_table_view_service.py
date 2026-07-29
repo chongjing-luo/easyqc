@@ -17,7 +17,7 @@ from models.table_view_state import (
 def _source() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002", "SUB003", "SUB004"],
+            "easyqcid": ["SUB001", "SUB002", "SUB003", "SUB004"],
             "age": [29, 31, 27, 31],
             "site": ["A", "B", "A", None],
             "passed": [True, False, True, False],
@@ -30,11 +30,11 @@ def _result_frame(service: TableViewService, result) -> pd.DataFrame:
     return service.get_window(result, offset=0, limit=max(1, result.matched_total)).dataframe
 
 
-def test_default_state_places_ezqcid_first_without_mutating_source_order() -> None:
+def test_default_state_places_easyqcid_first_without_mutating_source_order() -> None:
     source = pd.DataFrame(
         {
             "site": ["A", "B"],
-            "ezqcid": ["SUB001", "SUB002"],
+            "easyqcid": ["SUB001", "SUB002"],
             "age": [29, 31],
         }
     )
@@ -50,16 +50,16 @@ def test_default_state_places_ezqcid_first_without_mutating_source_order() -> No
         columns=state.columns.visible_columns,
     )
 
-    assert state.columns.order == ("ezqcid", "site", "age")
-    assert state.columns.pinned == ("ezqcid",)
-    assert tuple(window.dataframe.columns) == ("ezqcid", "site", "age")
+    assert state.columns.order == ("easyqcid", "site", "age")
+    assert state.columns.pinned == ("easyqcid",)
+    assert tuple(window.dataframe.columns) == ("easyqcid", "site", "age")
     assert tuple(source.columns) == original_columns
 
 
 def test_apply_filters_complete_source_before_taking_render_window() -> None:
     source = pd.DataFrame(
         {
-            "ezqcid": [f"SUB{i:05d}" for i in range(10_001)],
+            "easyqcid": [f"SUB{i:05d}" for i in range(10_001)],
             "marker": ["target" if i == 9_000 else "other" for i in range(10_001)],
         }
     )
@@ -73,7 +73,7 @@ def test_apply_filters_complete_source_before_taking_render_window() -> None:
 
     assert result.source_total == 10_001
     assert result.matched_total == 1
-    assert window.dataframe["ezqcid"].tolist() == ["SUB09000"]
+    assert window.dataframe["easyqcid"].tolist() == ["SUB09000"]
 
 
 def test_type_aware_filters_and_missing_operators() -> None:
@@ -88,7 +88,7 @@ def test_type_aware_filters_and_missing_operators() -> None:
 
     result = service.apply_state(state)
 
-    assert _result_frame(service, result)["ezqcid"].tolist() == ["SUB002"]
+    assert _result_frame(service, result)["easyqcid"].tolist() == ["SUB002"]
 
 
 def test_between_contains_membership_and_missing_are_supported() -> None:
@@ -101,7 +101,7 @@ def test_between_contains_membership_and_missing_are_supported() -> None:
     )
     contains = service.apply_state(
         service.default_state().with_conditions(
-            (FilterCondition(column="ezqcid", operator="contains", value="003"),)
+            (FilterCondition(column="easyqcid", operator="contains", value="003"),)
         )
     )
     membership = service.apply_state(
@@ -115,10 +115,10 @@ def test_between_contains_membership_and_missing_are_supported() -> None:
         )
     )
 
-    assert _result_frame(service, between)["ezqcid"].tolist() == ["SUB001", "SUB002", "SUB004"]
-    assert _result_frame(service, contains)["ezqcid"].tolist() == ["SUB003"]
-    assert _result_frame(service, membership)["ezqcid"].tolist() == ["SUB001", "SUB003"]
-    assert _result_frame(service, missing)["ezqcid"].tolist() == ["SUB004"]
+    assert _result_frame(service, between)["easyqcid"].tolist() == ["SUB001", "SUB002", "SUB004"]
+    assert _result_frame(service, contains)["easyqcid"].tolist() == ["SUB003"]
+    assert _result_frame(service, membership)["easyqcid"].tolist() == ["SUB001", "SUB003"]
+    assert _result_frame(service, missing)["easyqcid"].tolist() == ["SUB004"]
 
 
 def test_sort_is_stable_and_window_preserves_source_positions() -> None:
@@ -131,14 +131,14 @@ def test_sort_is_stable_and_window_preserves_source_positions() -> None:
     window = service.get_window(result, offset=1, limit=2)
 
     assert result.source_positions.tolist() == [2, 0, 1, 3]
-    assert window.dataframe["ezqcid"].tolist() == ["SUB001", "SUB002"]
+    assert window.dataframe["easyqcid"].tolist() == ["SUB001", "SUB002"]
     assert window.source_positions == (0, 1)
 
 
 def test_position_result_matches_full_frame_oracle_with_non_range_index_and_nulls() -> None:
     source = pd.DataFrame(
         {
-            "ezqcid": ["S0", "S1", "S2", "S3", "S4", "S5"],
+            "easyqcid": ["S0", "S1", "S2", "S3", "S4", "S5"],
             "site": ["B", None, "A", "B", None, "B"],
             "score": [2.0, 1.0, 3.0, 2.0, 0.0, 2.0],
             "payload": [f"payload-{index}" for index in range(6)],
@@ -177,19 +177,19 @@ def test_window_materializes_only_requested_columns_and_is_mutation_isolated() -
         result,
         offset=1,
         limit=2,
-        columns=("ezqcid", "score"),
+        columns=("easyqcid", "score"),
     )
 
-    assert window.dataframe.columns.tolist() == ["ezqcid", "score"]
-    assert window.dataframe["ezqcid"].tolist() == ["SUB002", "SUB003"]
-    window.dataframe.loc[0, "ezqcid"] = "MUTATED"
-    fresh = service.get_window(result, offset=1, limit=2, columns=("ezqcid",))
-    assert fresh.dataframe["ezqcid"].tolist() == ["SUB002", "SUB003"]
+    assert window.dataframe.columns.tolist() == ["easyqcid", "score"]
+    assert window.dataframe["easyqcid"].tolist() == ["SUB002", "SUB003"]
+    window.dataframe.loc[0, "easyqcid"] = "MUTATED"
+    fresh = service.get_window(result, offset=1, limit=2, columns=("easyqcid",))
+    assert fresh.dataframe["easyqcid"].tolist() == ["SUB002", "SUB003"]
 
     with pytest.raises(TableViewError, match="列不存在"):
         service.get_window(result, 0, 2, columns=("missing",))
     with pytest.raises(TableViewError, match="不能重复"):
-        service.get_window(result, 0, 2, columns=("ezqcid", "ezqcid"))
+        service.get_window(result, 0, 2, columns=("easyqcid", "easyqcid"))
 
 
 def test_result_position_lookup_and_identity_search_use_ordered_source_positions() -> None:
@@ -221,18 +221,18 @@ def test_invalid_column_or_operator_fails_loud_without_partial_result() -> None:
         )
 
 
-def test_qc_identity_requires_nonblank_unique_ezqcid() -> None:
+def test_qc_identity_requires_nonblank_unique_easyqcid() -> None:
     valid = TableViewService(_source())
     valid_result = valid.apply_state(valid.default_state())
     assert valid.validate_qc_identity(valid_result, 1) == "SUB002"
 
-    duplicate_source = pd.DataFrame({"ezqcid": ["SUB001", "SUB001"]})
+    duplicate_source = pd.DataFrame({"easyqcid": ["SUB001", "SUB001"]})
     duplicate_service = TableViewService(duplicate_source)
     duplicate_result = duplicate_service.apply_state(duplicate_service.default_state())
     with pytest.raises(QcIdentityError, match="不唯一"):
         duplicate_service.validate_qc_identity(duplicate_result, 0)
 
-    blank_source = pd.DataFrame({"ezqcid": ["  "]})
+    blank_source = pd.DataFrame({"easyqcid": ["  "]})
     blank_service = TableViewService(blank_source)
     blank_result = blank_service.apply_state(blank_service.default_state())
     with pytest.raises(QcIdentityError, match="为空"):
@@ -255,7 +255,7 @@ def test_batch_qc_identity_validation_preserves_order_and_errors() -> None:
     )
 
     duplicate_service = TableViewService(
-        pd.DataFrame({"ezqcid": ["SUB001", "SUB001"]})
+        pd.DataFrame({"easyqcid": ["SUB001", "SUB001"]})
     )
     duplicate_result = duplicate_service.apply_state(
         duplicate_service.default_state()
@@ -263,7 +263,7 @@ def test_batch_qc_identity_validation_preserves_order_and_errors() -> None:
     with pytest.raises(QcIdentityError, match="不唯一"):
         duplicate_service.validate_qc_identities(duplicate_result)
 
-    blank_service = TableViewService(pd.DataFrame({"ezqcid": ["SUB001", " "]}))
+    blank_service = TableViewService(pd.DataFrame({"easyqcid": ["SUB001", " "]}))
     blank_result = blank_service.apply_state(blank_service.default_state())
     with pytest.raises(QcIdentityError, match="为空"):
         blank_service.validate_qc_identities(blank_result)
@@ -271,7 +271,7 @@ def test_batch_qc_identity_validation_preserves_order_and_errors() -> None:
     alternate_service = TableViewService(
         pd.DataFrame(
             {
-                "ezqcid": ["SUB001", "SUB002"],
+                "easyqcid": ["SUB001", "SUB002"],
                 "image_id": [" IMG001 ", "IMG002"],
             }
         )
@@ -303,19 +303,19 @@ def test_source_dataframe_is_not_mutated_by_view_operations() -> None:
     pd.testing.assert_frame_equal(source, original)
 
 
-def test_ezqcid_layout_must_remain_visible_first_and_pinned() -> None:
+def test_easyqcid_layout_must_remain_visible_first_and_pinned() -> None:
     service = TableViewService(_source())
     default = service.default_state()
 
     for columns in (
-        replace(default.columns, hidden=("ezqcid",)),
+        replace(default.columns, hidden=("easyqcid",)),
         replace(default.columns, pinned=()),
         ColumnViewState(
-            order=("age", "ezqcid", "site", "passed", "score"),
-            pinned=("ezqcid",),
+            order=("age", "easyqcid", "site", "passed", "score"),
+            pinned=("easyqcid",),
         ),
     ):
-        with pytest.raises(TableViewError, match="ezqcid"):
+        with pytest.raises(TableViewError, match="easyqcid"):
             service.apply_state(replace(default, columns=columns))
 
 
@@ -360,7 +360,7 @@ def test_grouped_filters_apply_join_within_and_across_groups(
 
     result = service.apply_state(state)
 
-    assert _result_frame(service, result)["ezqcid"].tolist() == expected
+    assert _result_frame(service, result)["easyqcid"].tolist() == expected
 
 
 def test_grouped_filters_preserve_null_disabled_and_stable_sort_semantics() -> None:
@@ -394,7 +394,7 @@ def test_grouped_filters_preserve_null_disabled_and_stable_sort_semantics() -> N
     result = service.apply_state(state)
 
     assert result.source_positions.tolist() == [2, 0, 3]
-    assert _result_frame(service, result)["ezqcid"].tolist() == [
+    assert _result_frame(service, result)["easyqcid"].tolist() == [
         "SUB003",
         "SUB001",
         "SUB004",

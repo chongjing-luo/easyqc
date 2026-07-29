@@ -183,7 +183,7 @@ def test_legacy_module_migration_publishes_only_a_complete_directory(
         "2": _module("FuncQC").to_legacy_dict(),
     }
 
-    records = repository.migrate_legacy(legacy)
+    records = repository.initialize_settings(legacy)
 
     assert [record.module.name for record in records] == ["AnatQC", "FuncQC"]
     assert len(list(repository.root.glob("*.json"))) == 2
@@ -197,7 +197,7 @@ def test_legacy_module_migration_publishes_only_a_complete_directory(
         assert payload["scope"] == "project"
 
     # Existing per-module storage is authoritative and migration is idempotent.
-    assert repository.migrate_legacy({"1": _module("Ignored").to_legacy_dict()}) == records
+    assert repository.initialize_settings({"1": _module("Ignored").to_legacy_dict()}) == records
 
 
 def test_template_to_project_to_view_command_first_throughput(tmp_path) -> None:
@@ -214,7 +214,7 @@ def test_template_to_project_to_view_command_first_throughput(tmp_path) -> None:
     configuration.create_project("SAMPLE", tmp_path)
     configuration.replace_subjects(
         pd.DataFrame(
-            {"ezqcid": ["ROW001"], "image_file": ["row001.nii.gz"]}
+            {"easyqcid": ["ROW001"], "image_file": ["row001.nii.gz"]}
         ),
         notify=False,
     )
@@ -252,7 +252,7 @@ def test_template_constant_can_match_list_but_copy_to_project_is_blocked(
     configuration = ConfigurationService(project_service, TableService())
     configuration.create_project("SAMPLE", tmp_path)
     configuration.replace_subjects(
-        pd.DataFrame({"ezqcid": ["ROW001"], "site": ["project-row"]}),
+        pd.DataFrame({"easyqcid": ["ROW001"], "site": ["project-row"]}),
         notify=False,
     )
 

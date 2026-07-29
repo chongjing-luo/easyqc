@@ -124,7 +124,7 @@ class QCModule:
     name: str
     label: str
     rater: str | None = None
-    ezqcid: str | None = None
+    easyqcid: str | None = None
     watch_mode: bool = False
     scores: dict[str, Score] = field(default_factory=dict)
     tags: dict[str, Tag] = field(default_factory=dict)
@@ -145,7 +145,7 @@ class QCModule:
             name=data["name"],
             label=data.get("label", data["name"]),
             rater=data.get("rater"),
-            ezqcid=data.get("ezqcid"),
+            easyqcid=data.get("easyqcid"),
             watch_mode=bool(data.get("watch_mode", False)),
             scores={
                 str(key): Score.from_legacy_dict(str(key), value)
@@ -174,7 +174,7 @@ class QCModule:
             "name": self.name,
             "label": self.label,
             "rater": self.rater,
-            "ezqcid": self.ezqcid,
+            "easyqcid": self.easyqcid,
             "watch_mode": self.watch_mode,
             "tags": {key: tag.to_legacy_dict() for key, tag in self.tags.items()},
             "scores": {key: score.to_legacy_dict() for key, score in self.scores.items()},

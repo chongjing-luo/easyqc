@@ -50,7 +50,7 @@ def _module_payload(*, name="AnatQC", label=None, rater="rater1"):
         "name": name,
         "label": label or f"{name} label",
         "rater": rater,
-        "ezqcid": None,
+        "easyqcid": None,
         "watch_mode": False,
         "tags": {"1": {"label": "Motion", "value": False}},
         "scores": {
@@ -133,7 +133,7 @@ def _add_project(
     configuration = services.configuration_service
     configuration.create_project(name, tmp_path)
     columns = {
-        "ezqcid": ["SUB001", "SUB002", "SUB003"],
+        "easyqcid": ["SUB001", "SUB002", "SUB003"],
         "site": ["A", "B", "C"],
         "image": [f"/{prefix}one.nii", f"/{prefix}two.nii", f"/{prefix}three.nii"],
     }
@@ -141,7 +141,7 @@ def _add_project(
         columns = {
             "site": columns["site"],
             "image": columns["image"],
-            "ezqcid": columns["ezqcid"],
+            "easyqcid": columns["easyqcid"],
         }
     configuration.replace_subjects(pd.DataFrame(columns))
     configuration.save_module(
@@ -356,9 +356,9 @@ def test_runtime_language_switch_updates_seven_pages_and_preserves_context(
     assert table.apply_sort_rules((SortRule("site", ascending=False),))
     assert table.apply_column_state(
         ColumnViewState(
-            order=("ezqcid", "site", "image"),
+            order=("easyqcid", "site", "image"),
             hidden=("image",),
-            pinned=("ezqcid",),
+            pinned=("easyqcid",),
         )
     )
     assert table.set_page_size(1)
@@ -535,7 +535,7 @@ def test_cross_project_navigation_page_owns_installation_execution_setting(
     replacement_services = build_app_services(tmp_path / "other-projects.json")
     replacement = QtMainWindow(
         replacement_services,
-        source=pd.DataFrame(columns=["ezqcid"]),
+        source=pd.DataFrame(columns=["easyqcid"]),
         language=language,
         settings=QSettings(
             str(tmp_path / "shell-setting.ini"),
@@ -561,7 +561,7 @@ def test_single_language_button_toggles_without_losing_page_or_draft(
     window.navigation.setCurrentRow(window.qc_list_import_page_index)
     selected_page = window.workspace_stack.currentWidget()
     draft = pd.DataFrame(
-        {"ezqcid": ["DRAFT001", "DRAFT002"], "site": ["A", "B"]}
+        {"easyqcid": ["DRAFT001", "DRAFT002"], "site": ["A", "B"]}
     )
     window.config_workspace.subjects_tab._install_draft(draft)
 
@@ -663,7 +663,7 @@ def test_results_navigation_owns_direct_shared_results_page(qtbot, tmp_path) -> 
     assert window.findChild(QLabel, "qcResultsTitle") is None
 
 
-def test_non_first_ezqcid_project_loads_and_module_launch_click_responds(
+def test_non_first_easyqcid_project_loads_and_module_launch_click_responds(
     qtbot,
     tmp_path,
 ) -> None:
@@ -680,7 +680,7 @@ def test_non_first_ezqcid_project_loads_and_module_launch_click_responds(
     qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
 
     assert window.current_context.project_name == "SAMPLE"
-    assert window.table_workspace.applied_state.columns.order[0] == "ezqcid"
+    assert window.table_workspace.applied_state.columns.order[0] == "easyqcid"
     window.navigation.setCurrentRow(window.modules_page_index)
     qtbot.mouseClick(
         window.config_workspace.module_start_buttons["AnatQC"],
@@ -852,7 +852,7 @@ def test_row_context_menus_cover_pre_qc_results_and_active_qc_queue(
     )
     assert window.qc_workspace.active_row_context_menu is not None
     assert (
-        window.qc_workspace.active_row_context_menu.context.ezqcid
+        window.qc_workspace.active_row_context_menu.context.easyqcid
         == "SUB002"
     )
 
@@ -929,7 +929,7 @@ def test_row_record_action_starts_toggleable_read_only_and_dirty_draft_blocks_re
     ].trigger()
 
     assert window.qc_controller is current_controller
-    assert window.active_workflow.current_ezqcid == "SUB001"
+    assert window.active_workflow.current_easyqcid == "SUB001"
     assert "请先保存或放弃" in window.shell_error_label.text()
 
 
@@ -1726,7 +1726,7 @@ def test_qc_filter_prepares_hidden_candidate_before_save_then_swaps_and_refreshe
     assert replacement.isVisible()
     assert window.qc_controller is replacement
     assert window.qc_workspace.workflow.subject_ids == ("SUB002", "SUB003")
-    assert window.qc_workspace.workflow.current_ezqcid == "SUB002"
+    assert window.qc_workspace.workflow.current_easyqcid == "SUB002"
     assert "2 条" in window.qc_workspace.filter_button.toolTip()
     assert services.configuration_service.modules()[0].qc_filter == (
         filter_expression_to_json_object(expression)
@@ -1764,7 +1764,7 @@ def test_qc_filter_dialog_profiles_prepare_off_thread_and_cancel_writes_nothing(
     assert all(thread != gui_thread for thread in prepare_threads)
     assert prepared_columns[-1] == tuple(window.current_context.subjects.columns)
     assert tuple(profile.name for profile in dialog.editor._profiles) == (
-        "ezqcid",
+        "easyqcid",
         "site",
         "image",
     )
@@ -1814,7 +1814,7 @@ def test_qc_filter_persistence_failure_preserves_then_success_retains_identity(
     )
 
     assert window.qc_controller is old_controller
-    assert window.qc_workspace.workflow.current_ezqcid == "SUB002"
+    assert window.qc_workspace.workflow.current_easyqcid == "SUB002"
     assert services.configuration_service.modules()[0].qc_filter is None
     assert "disk unavailable" in window.qc_workspace.error_text
     assert dialog.isVisible()
@@ -1833,7 +1833,7 @@ def test_qc_filter_persistence_failure_preserves_then_success_retains_identity(
     )
 
     assert window.qc_workspace.workflow.subject_ids == ("SUB002", "SUB003")
-    assert window.qc_workspace.workflow.current_ezqcid == "SUB002"
+    assert window.qc_workspace.workflow.current_easyqcid == "SUB002"
     assert close_calls == [True]
 
 
@@ -1869,7 +1869,7 @@ def test_qc_filter_expected_identity_mismatch_preserves_live_controller_and_sett
 
     assert window.qc_controller is old_controller
     assert window.qc_workspace.workflow is old_workflow
-    assert window.qc_workspace.workflow.current_ezqcid == "SUB001"
+    assert window.qc_workspace.workflow.current_easyqcid == "SUB001"
     assert services.configuration_service.modules()[0].qc_filter is None
     assert "matches changed" in window.qc_workspace.error_text
     assert dialog.isVisible()
@@ -2008,7 +2008,7 @@ def test_saved_filter_launch_then_qc_clear_restores_complete_queue(qtbot, tmp_pa
     )
 
     assert window.qc_workspace.workflow.subject_ids == ("SUB002", "SUB003")
-    assert window.qc_workspace.workflow.current_ezqcid == "SUB002"
+    assert window.qc_workspace.workflow.current_easyqcid == "SUB002"
     assert "2 条" in window.qc_workspace.filter_button.toolTip()
 
     filtered_controller = window.qc_controller
@@ -2029,7 +2029,7 @@ def test_saved_filter_launch_then_qc_clear_restores_complete_queue(qtbot, tmp_pa
         "SUB002",
         "SUB003",
     )
-    assert window.qc_workspace.workflow.current_ezqcid == "SUB002"
+    assert window.qc_workspace.workflow.current_easyqcid == "SUB002"
     assert services.configuration_service.modules()[0].qc_filter == (
         filter_expression_to_json_object(FilterExpression())
     )
@@ -2155,7 +2155,7 @@ def test_rating_save_refreshes_table_and_preserves_view_state_and_qc_session(
         max(1, window.table_workspace.result.matched_total),
     ).dataframe
     assert "AnatQC.rater1.score1" in result_frame.columns
-    row = result_frame.set_index("ezqcid").loc["SUB001"]
+    row = result_frame.set_index("easyqcid").loc["SUB001"]
     assert row["AnatQC.rater1.score1"] == "Good"
     assert window.table_workspace.find_identity_exact("SUB001")
     results_frame = window.results_workspace.service.get_window(
@@ -2163,7 +2163,7 @@ def test_rating_save_refreshes_table_and_preserves_view_state_and_qc_session(
         0,
         max(1, window.results_workspace.result.matched_total),
     ).dataframe
-    assert results_frame.set_index("ezqcid").loc["SUB001", "AnatQC.rater1.score1"] == "Good"
+    assert results_frame.set_index("easyqcid").loc["SUB001", "AnatQC.rater1.score1"] == "Good"
 
 
 def test_initial_project_materialization_runs_without_blocking_qt(
@@ -2219,10 +2219,10 @@ def test_pre_qc_row_and_column_deletion_persists_without_touching_rating_files(
     rating_path.write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "name": "AnatQC",
                 "rater": "rater1",
-                "ezqcid": "SUB001",
+                "easyqcid": "SUB001",
                 "scores": {},
                 "tags": {},
                 "notes": None,
@@ -2246,11 +2246,11 @@ def test_pre_qc_row_and_column_deletion_persists_without_touching_rating_files(
     rows_dialog.editor.set_expression(_site_filter("A", operator="=="))
     qtbot.mouseClick(rows_dialog.delete_button, Qt.LeftButton)
     qtbot.waitUntil(
-        lambda: window.current_context.subjects["ezqcid"].tolist()
+        lambda: window.current_context.subjects["easyqcid"].tolist()
         == ["SUB002", "SUB003"],
         timeout=5000,
     )
-    assert configuration.subjects()["ezqcid"].tolist() == ["SUB002", "SUB003"]
+    assert configuration.subjects()["easyqcid"].tolist() == ["SUB002", "SUB003"]
     assert rating_path.read_bytes() == rating_before
 
     columns_dialog = workspace.open_delete_columns_dialog()
@@ -2259,10 +2259,10 @@ def test_pre_qc_row_and_column_deletion_persists_without_touching_rating_files(
     qtbot.mouseClick(columns_dialog.delete_button, Qt.LeftButton)
     qtbot.waitUntil(
         lambda: window.current_context.subjects.columns.tolist()
-        == ["ezqcid", "image"],
+        == ["easyqcid", "image"],
         timeout=5000,
     )
-    assert configuration.subjects().columns.tolist() == ["ezqcid", "image"]
+    assert configuration.subjects().columns.tolist() == ["easyqcid", "image"]
     assert rating_path.read_bytes() == rating_before
     assert window.results_workspace.delete_rows_action is None
     assert window.results_workspace.delete_columns_action is None

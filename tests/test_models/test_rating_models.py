@@ -7,14 +7,14 @@ from models.qcmodule import QCModule
 from models.rating import Rating
 
 
-def test_rating_round_trip_preserves_legacy_payload_shape(fixtures_dir: Path) -> None:
+def test_rating_round_trip_preserves_module_payload_shape(fixtures_dir: Path) -> None:
     legacy = json.loads(
         (
             fixtures_dir
             / "sample_ratings"
             / "example"
             / "rater1"
-            / "example._.SUB001._.rater1._.Good._.True.json"
+            / "example-rater1-SUB001.json"
         ).read_text(encoding="utf-8")
     )
 
@@ -46,7 +46,7 @@ def test_rating_rejects_an_untyped_legacy_module() -> None:
     rating = Rating(
         module_name="example",
         rater="r1",
-        ezqcid="SUB001",
+        easyqcid="SUB001",
         scores={},
         tags={},
     )

@@ -405,7 +405,7 @@ def validate_template_columns(code: str, available_columns: set[str]) -> list[st
     NOT in ``available_columns`` (sorted, unique). Detects a module code that
     references a removed/renamed subject column BEFORE viewer launch fails.
 
-    ``available_columns`` should be the union of ezqc_all columns and constants
+    ``available_columns`` should be the union of easyqc_all columns and constants
     keys — i.e. everything generate_code would inject as template variables.
     Shell constructs ($TMP, $(mktemp)) are ignored (only ${var}/{var}/$var with
     identifier names are considered placeholders).

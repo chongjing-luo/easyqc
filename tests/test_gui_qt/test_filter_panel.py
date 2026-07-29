@@ -11,7 +11,7 @@ from models.table_view_state import FilterCondition
 def _profiles():
     source = pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002"],
+            "easyqcid": ["SUB001", "SUB002"],
             "age": [29, 31],
             "passed": [True, False],
             "visit": pd.to_datetime(["2026-01-01", "2026-02-01"]),
@@ -42,7 +42,7 @@ def test_filter_panel_round_trips_multiple_draft_conditions(qtbot):
     qtbot.addWidget(panel)
     conditions = (
         FilterCondition("passed", "==", True, condition_id="filter-1"),
-        FilterCondition("ezqcid", "contains", "002", condition_id="filter-2"),
+        FilterCondition("easyqcid", "contains", "002", condition_id="filter-2"),
     )
 
     panel.set_conditions(conditions)

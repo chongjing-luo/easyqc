@@ -7,12 +7,12 @@ def test_read_list_supports_text_and_csv(tmp_path) -> None:
     text_file = tmp_path / "subjects.txt"
     text_file.write_text("SUB001\nSUB002\n", encoding="utf-8")
     csv_file = tmp_path / "subjects.csv"
-    csv_file.write_text("ezqcid\nSUB001\nSUB002\n", encoding="utf-8")
+    csv_file.write_text("easyqcid\nSUB001\nSUB002\n", encoding="utf-8")
 
     dm = DataManager()
 
     assert dm.read_list(str(text_file))["path"].tolist() == ["SUB001", "SUB002"]
-    assert dm.read_list(str(csv_file))["ezqcid"].tolist() == ["SUB001", "SUB002"]
+    assert dm.read_list(str(csv_file))["easyqcid"].tolist() == ["SUB001", "SUB002"]
 
 
 def test_get_list_returns_one_column_for_directory_children(tmp_path) -> None:
@@ -44,23 +44,23 @@ def test_set_varname_batch_handles_missing_varname_without_raising() -> None:
 
     result = DataManager().set_varname_batch(df, varname="missing", batch="batch1")
 
-    assert "ezqcid" not in result.columns
-    assert result["ezqcbatch"].tolist() == ["batch1", "batch1"]
+    assert "easyqcid" not in result.columns
+    assert result["easyqcbatch"].tolist() == ["batch1", "batch1"]
 
 
-def test_set_varname_batch_adds_ezqcid_and_batch() -> None:
+def test_set_varname_batch_adds_easyqcid_and_batch() -> None:
     df = pd.DataFrame({"subject": ["SUB001", "SUB002"]})
 
     result = DataManager().set_varname_batch(df, varname="subject", batch="batch1")
 
-    assert result["ezqcid"].tolist() == ["SUB001", "SUB002"]
-    assert result["ezqcbatch"].tolist() == ["batch1", "batch1"]
+    assert result["easyqcid"].tolist() == ["SUB001", "SUB002"]
+    assert result["easyqcbatch"].tolist() == ["batch1", "batch1"]
 
 
 def test_transform_table_uses_structured_operations() -> None:
     df = pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002"],
+            "easyqcid": ["SUB001", "SUB002"],
             "age": [29, 31],
             "score": [3, 2],
         }
@@ -71,8 +71,8 @@ def test_transform_table_uses_structured_operations() -> None:
         [
             {"operation": "derive_column", "name": "qc_pass", "expression": "score >= 3"},
             {"operation": "filter_rows", "conditions": [{"column": "qc_pass", "operator": "==", "value": True}]},
-            {"operation": "select_columns", "columns": ["ezqcid", "qc_pass"]},
+            {"operation": "select_columns", "columns": ["easyqcid", "qc_pass"]},
         ],
     )
 
-    assert result.to_dict("records") == [{"ezqcid": "SUB001", "qc_pass": True}]
+    assert result.to_dict("records") == [{"easyqcid": "SUB001", "qc_pass": True}]

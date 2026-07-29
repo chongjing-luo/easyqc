@@ -68,7 +68,7 @@ def _workspace(qtbot, tmp_path, *, module_launcher=None):
         TableService(),
     )
     config.create_project("SAMPLE", tmp_path)
-    config.replace_subjects(pd.DataFrame({"ezqcid": ["SUB001", "SUB002"], "site": ["A", "B"]}))
+    config.replace_subjects(pd.DataFrame({"easyqcid": ["SUB001", "SUB002"], "site": ["A", "B"]}))
     workspace = (
         QtProjectConfigWorkspace(config)
         if module_launcher is None
@@ -201,7 +201,7 @@ def test_initial_configuration_snapshot_loads_without_blocking_qt(
     )
     config.create_project("SAMPLE", tmp_path)
     config.replace_subjects(
-        pd.DataFrame({"ezqcid": ["SUB001", "SUB002"], "site": ["A", "B"]})
+        pd.DataFrame({"easyqcid": ["SUB001", "SUB002"], "site": ["A", "B"]})
     )
     real_snapshot = config.snapshot
     started = Event()
@@ -415,7 +415,7 @@ def test_module_filter_section_prepares_complete_list_profiles_off_gui_thread(
     config.replace_subjects(
         pd.DataFrame(
             {
-                "ezqcid": ["SUB001", "SUB002", "SUB003"],
+                "easyqcid": ["SUB001", "SUB002", "SUB003"],
                 "site": ["A", "B", "A"],
             }
         ),
@@ -465,7 +465,7 @@ def test_module_filter_section_prepares_complete_list_profiles_off_gui_thread(
     )
     assert workspace.module_filter_summary.text() == "已筛选：2 条"
     assert tuple(profile.name for profile in workspace._module_filter_profiles) == (
-        "ezqcid",
+        "easyqcid",
         "site",
     )
 
@@ -706,11 +706,11 @@ def test_unsupported_legacy_module_filter_is_visible_replaceable_and_clearable(
     )
     config.create_project("SAMPLE", tmp_path)
     config.replace_subjects(
-        pd.DataFrame({"ezqcid": ["SUB001", "SUB002"], "site": ["A", "B"]}),
+        pd.DataFrame({"easyqcid": ["SUB001", "SUB002"], "site": ["A", "B"]}),
         notify=False,
     )
     module = config.modules()[0]
-    module.select_filter = "SELECT ezqcid FROM df"
+    module.select_filter = "SELECT easyqcid FROM df"
     config.save_module(module, original_name="example")
     workspace = QtProjectConfigWorkspace(config)
     qtbot.addWidget(workspace)
@@ -759,7 +759,7 @@ def test_stale_module_filter_preview_cannot_replace_new_selection_summary(
     )
     config.create_project("SAMPLE", tmp_path)
     config.replace_subjects(
-        pd.DataFrame({"ezqcid": ["SUB001", "SUB002"], "site": ["A", "B"]}),
+        pd.DataFrame({"easyqcid": ["SUB001", "SUB002"], "site": ["A", "B"]}),
         notify=False,
     )
     config.save_module_filter("example", _expression(), notify=False)
@@ -934,7 +934,7 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
     assert workspace.module_code.font().family() == QFontDatabase.systemFont(
         QFontDatabase.SystemFont.FixedFont
     ).family()
-    assert "ezqcid" in workspace.module_code.placeholderText()
+    assert "easyqcid" in workspace.module_code.placeholderText()
     editor_layout = workspace.module_editor_scroll.widget().layout()
     assert editor_layout.indexOf(workspace.module_viewer_section) > editor_layout.indexOf(
         workspace.module_row_actions_toolbar
@@ -944,7 +944,7 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
     )
 
     workspace.module_code.setPlainText(
-        "viewer --input {image} --title {ezqcid} " + "--very-long-option value " * 30
+        "viewer --input {image} --title {easyqcid} " + "--very-long-option value " * 30
     )
     qtbot.waitUntil(
         lambda: workspace.module_code.horizontalScrollBar().maximum() > 0,
@@ -1230,7 +1230,7 @@ def test_project_workspace_copies_editable_constant_and_module_templates(
     )
     config.create_project("SAMPLE", tmp_path)
     config.replace_subjects(
-        pd.DataFrame({"ezqcid": ["SUB001"], "image": ["/data/1.nii.gz"]})
+        pd.DataFrame({"easyqcid": ["SUB001"], "image": ["/data/1.nii.gz"]})
     )
     language = LanguageController(
         settings=QSettings(
@@ -1297,7 +1297,7 @@ def test_project_template_copy_dialog_keeps_conflict_visible(
     )
     config.create_project("SAMPLE", tmp_path)
     config.replace_subjects(
-        pd.DataFrame({"ezqcid": ["SUB001"], "site": ["A"]})
+        pd.DataFrame({"easyqcid": ["SUB001"], "site": ["A"]})
     )
     language = LanguageController(
         settings=QSettings(

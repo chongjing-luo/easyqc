@@ -22,7 +22,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TK_TARGETS = (
     "tests/test_gui",
     "tests/test_characterization",
-    "tests/test_integration/test_ccnppeki_compat_fixture.py",
 )
 QT_TARGETS = (
     "tests/test_gui_qt",

@@ -8,7 +8,7 @@ from core.table_transform import TableTransformEngine, TableTransformError, lega
 def _df() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002", "SUB003"],
+            "easyqcid": ["SUB001", "SUB002", "SUB003"],
             "age": [29, 31, 27],
             "sex": ["F", "M", "F"],
             "score": [3, 2, 5],
@@ -18,9 +18,9 @@ def _df() -> pd.DataFrame:
 
 
 def test_select_columns_supports_reorder_and_include_rest() -> None:
-    result = TableTransformEngine().select_columns(_df(), ["sex", "ezqcid"], include_rest=True)
+    result = TableTransformEngine().select_columns(_df(), ["sex", "easyqcid"], include_rest=True)
 
-    assert list(result.columns) == ["sex", "ezqcid", "age", "score", "motion"]
+    assert list(result.columns) == ["sex", "easyqcid", "age", "score", "motion"]
 
 
 def test_filter_rows_supports_structured_conditions() -> None:
@@ -32,7 +32,7 @@ def test_filter_rows_supports_structured_conditions() -> None:
         ],
     )
 
-    assert result["ezqcid"].tolist() == ["SUB001"]
+    assert result["easyqcid"].tolist() == ["SUB001"]
 
 
 def test_filter_rows_supports_expression_condition() -> None:
@@ -41,7 +41,7 @@ def test_filter_rows_supports_expression_condition() -> None:
         [{"expression": "(age >= 29) and (sex in ['F', 'M']) and (motion < 0.2)"}],
     )
 
-    assert result["ezqcid"].tolist() == ["SUB001"]
+    assert result["easyqcid"].tolist() == ["SUB001"]
 
 
 def test_sort_rows_supports_multiple_keys() -> None:
@@ -53,7 +53,7 @@ def test_sort_rows_supports_multiple_keys() -> None:
         ],
     )
 
-    assert result["ezqcid"].tolist() == ["SUB003", "SUB001", "SUB002"]
+    assert result["easyqcid"].tolist() == ["SUB003", "SUB001", "SUB002"]
 
 
 def test_derive_column_uses_restricted_expression_parser() -> None:
@@ -84,26 +84,26 @@ def test_expression_parser_rejects_arbitrary_python() -> None:
 
 
 def test_merge_tables_validates_how_and_keys() -> None:
-    left = _df()[["ezqcid", "age"]]
-    right = pd.DataFrame({"ezqcid": ["SUB001", "SUB003"], "group": ["A", "B"]})
+    left = _df()[["easyqcid", "age"]]
+    right = pd.DataFrame({"easyqcid": ["SUB001", "SUB003"], "group": ["A", "B"]})
 
-    result = TableTransformEngine().merge_tables(left, right, on=["ezqcid"], how="left")
+    result = TableTransformEngine().merge_tables(left, right, on=["easyqcid"], how="left")
 
     assert result.loc[0, "group"] == "A"
     assert pd.isna(result.loc[1, "group"])
     assert result.loc[2, "group"] == "B"
     with pytest.raises(TableTransformError):
-        TableTransformEngine().merge_tables(left, right, on=["ezqcid"], how="cross")
+        TableTransformEngine().merge_tables(left, right, on=["easyqcid"], how="cross")
 
 
 def test_aggregate_flattens_columns_and_allows_whitelisted_functions() -> None:
     result = TableTransformEngine().aggregate(
         _df(),
         group_by=["sex"],
-        metrics={"score": ["mean", "max"], "ezqcid": ["count"]},
+        metrics={"score": ["mean", "max"], "easyqcid": ["count"]},
     )
 
-    assert list(result.columns) == ["sex", "score_mean", "score_max", "ezqcid_count"]
+    assert list(result.columns) == ["sex", "score_mean", "score_max", "easyqcid_count"]
     assert result.loc[result["sex"] == "F", "score_max"].iloc[0] == 5
     with pytest.raises(TableTransformError):
         TableTransformEngine().aggregate(_df(), group_by=["sex"], metrics={"score": ["std"]})
@@ -116,22 +116,22 @@ def test_apply_runs_structured_operations_in_order() -> None:
             {"operation": "derive_column", "name": "qc_pass", "expression": "score >= 3"},
             {"operation": "filter_rows", "conditions": [{"column": "qc_pass", "operator": "==", "value": True}]},
             {"operation": "sort_rows", "sort_keys": [{"column": "score", "ascending": False}]},
-            {"operation": "select_columns", "columns": ["ezqcid", "qc_pass"]},
+            {"operation": "select_columns", "columns": ["easyqcid", "qc_pass"]},
         ],
     )
 
     assert result.to_dict("records") == [
-        {"ezqcid": "SUB003", "qc_pass": True},
-        {"ezqcid": "SUB001", "qc_pass": True},
+        {"easyqcid": "SUB003", "qc_pass": True},
+        {"easyqcid": "SUB001", "qc_pass": True},
     ]
 
 
 def test_apply_supports_merge_operation() -> None:
-    right = pd.DataFrame({"ezqcid": ["SUB001", "SUB003"], "site": ["A", "B"]})
+    right = pd.DataFrame({"easyqcid": ["SUB001", "SUB003"], "site": ["A", "B"]})
 
     result = TableTransformEngine().apply(
-        _df()[["ezqcid", "age"]],
-        [{"operation": "merge_tables", "right": right, "on": ["ezqcid"], "how": "left"}],
+        _df()[["easyqcid", "age"]],
+        [{"operation": "merge_tables", "right": right, "on": ["easyqcid"], "how": "left"}],
     )
 
     assert result.loc[0, "site"] == "A"
@@ -158,7 +158,7 @@ def test_legacy_select_filter_converts_simple_where_conditions() -> None:
         }
     ]
     result = TableTransformEngine().apply(_df(), operations)
-    assert result["ezqcid"].tolist() == ["SUB001", "SUB003"]
+    assert result["easyqcid"].tolist() == ["SUB001", "SUB003"]
 
 
 def test_legacy_select_filter_converts_select_all_to_noop() -> None:
@@ -169,6 +169,6 @@ def test_legacy_select_filter_rejects_complex_sql_shapes() -> None:
     with pytest.raises(TableTransformError):
         legacy_select_filter_to_operations("SELECT * FROM df; SELECT * FROM df")
     with pytest.raises(TableTransformError):
-        legacy_select_filter_to_operations("SELECT ezqcid FROM df")
+        legacy_select_filter_to_operations("SELECT easyqcid FROM df")
     with pytest.raises(TableTransformError):
         legacy_select_filter_to_operations("SELECT * FROM df WHERE sex = 'F' OR score >= 3")

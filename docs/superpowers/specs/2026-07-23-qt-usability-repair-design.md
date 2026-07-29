@@ -10,7 +10,7 @@ This repair covers six connected usability defects in the Qt product shell:
 2. make every QC launch produce visible success or failure feedback;
 3. increase primary-navigation font size and row separation;
 4. render toolbar actions as recognisable native bordered controls;
-5. keep the frozen `ezqcid` surface aligned with the remaining columns;
+5. keep the frozen `easyqcid` surface aligned with the remaining columns;
 6. add a one-time derived-column operation that persists the generated values.
 
 The repair does not alter the tkinter rollback adapter, rating JSON, module
@@ -22,7 +22,7 @@ new derived-column action at runtime.
 ### A. One table without a frozen identity column
 
 This gives one native horizontal and vertical scrollbar and is the smallest
-implementation. It removes the approved always-visible `ezqcid` behavior, so it
+implementation. It removes the approved always-visible `easyqcid` behavior, so it
 is rejected.
 
 ### B. A custom frozen-table subclass with an overlaid identity viewport
@@ -72,7 +72,7 @@ frame. No global theme, forced Qt style or broad stylesheet is introduced.
 The frozen and main views retain one shared model, selection model, row heights
 and vertical scroll mode. Their internal scrollbars are hidden. One external
 horizontal bar spans the full table width and controls only the horizontally
-scrollable main columns while `ezqcid` stays fixed. One external vertical bar
+scrollable main columns while `easyqcid` stays fixed. One external vertical bar
 controls both views. Range, page step, single step and value are synchronised
 after model resets, column changes, resizes and style/font changes.
 
@@ -89,9 +89,9 @@ focused dialog contains:
 
 Expressions use the existing restricted `ExpressionParser` through
 `TableTransformEngine`; `eval` and SQL remain forbidden. The target name must be
-new, non-empty and different from `ezqcid` and existing constants. Preview does
+new, non-empty and different from `easyqcid` and existing constants. Preview does
 not write data. Confirmation recalculates against the current full
-`ezqc_all.csv`, validates the complete result, atomically replaces that CSV via
+`easyqc_all.csv`, validates the complete result, atomically replaces that CSV via
 `ConfigurationService`, publishes `SUBJECTS_CHANGED`, and refreshes both the
 pre-QC list and results context.
 
@@ -99,7 +99,7 @@ The generated values are ordinary CSV values. The expression is not stored and
 future source-column edits do not recalculate the new column.
 
 The QC-results table does not expose this write action because
-`ezqc_qctable.csv` is derived from ratings and can be rebuilt; writing an
+`easyqc_qctable.csv` is derived from ratings and can be rebuilt; writing an
 untracked column there would be misleading and non-durable.
 
 ## Failure behavior

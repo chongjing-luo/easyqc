@@ -36,7 +36,7 @@ context-owned persistence. Formula text, AST, template state and intermediates
 SHALL remain ephemeral.
 
 Existing columns SHALL NOT be overwritten. Only a current import draft without
-`ezqcid` MAY create that identity column; authoritative tables SHALL retain
+`easyqcid` MAY create that identity column; authoritative tables SHALL retain
 existing identity validation.
 
 ## Performance contract

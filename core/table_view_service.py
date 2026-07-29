@@ -61,9 +61,9 @@ class TableViewService:
         self._distinct_value_limit = distinct_value_limit
         self._profiles = self._profile_columns()
         self._profile_by_name = {profile.name: profile for profile in self._profiles}
-        self._ezqcid_identities = self._normalized_source_identities("ezqcid")
+        self._easyqcid_identities = self._normalized_source_identities("easyqcid")
         self._identity_positions = self._build_identity_positions(
-            self._ezqcid_identities
+            self._easyqcid_identities
         )
         self._identity_counts = {
             identity: 1 if isinstance(positions, int) else len(positions)
@@ -80,7 +80,7 @@ class TableViewService:
 
     def default_state(self, page_size: int = 200) -> TableViewState:
         source_order = tuple(str(column) for column in self._source.columns)
-        pinned = ("ezqcid",) if "ezqcid" in source_order else ()
+        pinned = ("easyqcid",) if "easyqcid" in source_order else ()
         order = pinned + tuple(
             column for column in source_order if column not in pinned
         )
@@ -181,7 +181,7 @@ class TableViewService:
         self,
         result: TableViewResult,
         identity: str,
-        id_column: str = "ezqcid",
+        id_column: str = "easyqcid",
     ) -> int | None:
         """Return the first applied-result position matching one normalized identity."""
 
@@ -191,7 +191,7 @@ class TableViewService:
         query = self._normalize_identity(identity)
         if not query or not result.matched_total:
             return None
-        if id_column != "ezqcid":
+        if id_column != "easyqcid":
             values = self._source[id_column].iloc[result.source_positions].map(
                 self._normalize_identity
             )
@@ -224,13 +224,13 @@ class TableViewService:
         hidden_pinned = sorted(set(state.columns.hidden) & set(state.columns.pinned))
         if hidden_pinned:
             raise TableViewError(f"固定列不能隐藏: {hidden_pinned}")
-        if "ezqcid" in columns:
-            if "ezqcid" not in state.columns.pinned:
-                raise TableViewError("ezqcid 必须保持固定")
-            if "ezqcid" in state.columns.hidden:
-                raise TableViewError("ezqcid 不能隐藏")
-            if not state.columns.order or state.columns.order[0] != "ezqcid":
-                raise TableViewError("ezqcid 必须保持为第一列")
+        if "easyqcid" in columns:
+            if "easyqcid" not in state.columns.pinned:
+                raise TableViewError("easyqcid 必须保持固定")
+            if "easyqcid" in state.columns.hidden:
+                raise TableViewError("easyqcid 不能隐藏")
+            if not state.columns.order or state.columns.order[0] != "easyqcid":
+                raise TableViewError("easyqcid 必须保持为第一列")
         if state.density not in {"compact", "comfortable"}:
             raise TableViewError(f"不支持的表格密度: {state.density}")
         if state.page_size <= 0:
@@ -264,7 +264,7 @@ class TableViewService:
         self,
         result: TableViewResult,
         result_position: int,
-        id_column: str = "ezqcid",
+        id_column: str = "easyqcid",
     ) -> str:
         self._validate_result(result)
         if id_column not in self._source.columns:
@@ -273,8 +273,8 @@ class TableViewService:
             raise QcIdentityError("所选记录位置已失效，请重新选择")
         source_position = int(result.source_positions[result_position])
         identity = (
-            self._ezqcid_identities[source_position]
-            if id_column == "ezqcid"
+            self._easyqcid_identities[source_position]
+            if id_column == "easyqcid"
             else self._normalize_identity(
                 self._source[id_column].iloc[source_position]
             )
@@ -283,7 +283,7 @@ class TableViewService:
             raise QcIdentityError(f"所选记录的 {id_column} 为空，无法打开 QC")
         identity_count = (
             self._identity_counts.get(identity, 0)
-            if id_column == "ezqcid"
+            if id_column == "easyqcid"
             else sum(
                 self._normalize_identity(value) == identity
                 for value in self._source[id_column]
@@ -296,7 +296,7 @@ class TableViewService:
     def validate_qc_identities(
         self,
         result: TableViewResult,
-        id_column: str = "ezqcid",
+        id_column: str = "easyqcid",
     ) -> tuple[str, ...]:
         """Return all result identities after one batch contract check.
 
@@ -310,8 +310,8 @@ class TableViewService:
             raise QcIdentityError(f"表格缺少 QC 身份列 '{id_column}'")
 
         source_identities = (
-            self._ezqcid_identities
-            if id_column == "ezqcid"
+            self._easyqcid_identities
+            if id_column == "easyqcid"
             else self._normalized_source_identities(id_column)
         )
         identities = tuple(
@@ -324,7 +324,7 @@ class TableViewService:
 
         counts = (
             self._identity_counts
-            if id_column == "ezqcid"
+            if id_column == "easyqcid"
             else Counter(
                 identity
                 for identity in source_identities
@@ -370,7 +370,7 @@ class TableViewService:
 
     @staticmethod
     def _column_kind(column: str, series: pd.Series) -> ColumnKind:
-        if column == "ezqcid":
+        if column == "easyqcid":
             return ColumnKind.TEXT
         if ptypes.is_bool_dtype(series.dtype):
             return ColumnKind.BOOLEAN

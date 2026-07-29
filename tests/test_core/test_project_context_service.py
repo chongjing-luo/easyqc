@@ -26,7 +26,7 @@ def _module_payload(*, name: str = "AnatQC", rater: str | None = "rater1") -> di
         "name": name,
         "label": f"{name} label",
         "rater": rater,
-        "ezqcid": None,
+        "easyqcid": None,
         "watch_mode": False,
         "tags": {"1": {"label": "Motion", "value": False}},
         "scores": {
@@ -52,7 +52,7 @@ def _module_payload(*, name: str = "AnatQC", rater: str | None = "rater1") -> di
 def _subjects(prefix: str = "") -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002", "SUB003"],
+            "easyqcid": ["SUB001", "SUB002", "SUB003"],
             "site": ["A", "B", "C"],
             "image": [f"/{prefix}one.nii", f"/{prefix}two.nii", f"/{prefix}three.nii"],
         }
@@ -132,7 +132,7 @@ def test_last_project_snapshot_prepares_subjects_ratings_and_table_service(tmp_p
     assert snapshot.project_name == "SAMPLE"
     assert snapshot.project_path == project.path.resolve()
     assert snapshot.context_revision == 1
-    assert tuple(snapshot.subjects["ezqcid"]) == ("SUB001", "SUB002", "SUB003")
+    assert tuple(snapshot.subjects["easyqcid"]) == ("SUB001", "SUB002", "SUB003")
     assert [module.name for module in snapshot.modules] == ["AnatQC"]
     assert "AnatQC.rater1.score1" in {
         profile.name for profile in snapshot.table_view_service.profiles
@@ -157,12 +157,12 @@ def test_qc_factory_uses_snapshot_order_directory_and_emits_rating_event(tmp_pat
     workflow = services.project_context_service.create_qc_workflow(
         snapshot,
         module_name="AnatQC",
-        initial_ezqcid="SUB003",
+        initial_easyqcid="SUB003",
         navigation_ids=("SUB003", "SUB001"),
     )
 
     assert workflow.subject_ids == ("SUB003", "SUB001")
-    assert workflow.current_ezqcid == "SUB003"
+    assert workflow.current_easyqcid == "SUB003"
     workflow.set_score("1", "Fair")
     saved = workflow.save()
     assert saved.parent == project.rating_dir / "AnatQC" / "rater1"
@@ -173,7 +173,7 @@ def test_qc_factory_uses_snapshot_order_directory_and_emits_rating_event(tmp_pat
         "project_path": str(project.path.resolve()),
         "module_name": "AnatQC",
         "rater": "rater1",
-        "ezqcid": "SUB003",
+        "easyqcid": "SUB003",
         "path": str(saved),
     }
 
@@ -197,7 +197,7 @@ def test_qc_factory_projects_existing_score_and_tag_summaries_for_exact_queue(
     workflow = services.project_context_service.create_qc_workflow(
         snapshot,
         module_name="AnatQC",
-        initial_ezqcid="SUB002",
+        initial_easyqcid="SUB002",
         navigation_ids=("SUB002", "SUB001"),
     )
 
@@ -226,7 +226,7 @@ def test_qc_factory_rejects_unsafe_navigation_queue(
         services.project_context_service.create_qc_workflow(
             snapshot,
             module_name="AnatQC",
-            initial_ezqcid="SUB001",
+            initial_easyqcid="SUB001",
             navigation_ids=navigation_ids,
         )
 
@@ -243,7 +243,7 @@ def test_qc_factory_rejects_snapshot_after_project_switch_even_for_same_id(tmp_p
         services.project_context_service.create_qc_workflow(
             alpha,
             module_name="AnatQC",
-            initial_ezqcid="SUB001",
+            initial_easyqcid="SUB001",
             navigation_ids=("SUB001",),
         )
 
@@ -323,12 +323,12 @@ def test_qc_factory_uses_module_queue_by_default_and_preserves_explicit_queue(
     filtered = services.project_context_service.create_qc_workflow(
         snapshot,
         module_name="AnatQC",
-        initial_ezqcid="SUB003",
+        initial_easyqcid="SUB003",
     )
     transitional = services.project_context_service.create_qc_workflow(
         snapshot,
         module_name="AnatQC",
-        initial_ezqcid="SUB001",
+        initial_easyqcid="SUB001",
         navigation_ids=("SUB001", "SUB002"),
     )
 
@@ -356,7 +356,7 @@ def test_zero_match_filter_can_save_and_resolve_but_default_launch_rejects(
         services.project_context_service.create_qc_workflow(
             snapshot,
             module_name="AnatQC",
-            initial_ezqcid="SUB001",
+            initial_easyqcid="SUB001",
         )
 
 
@@ -507,7 +507,7 @@ def test_qc_row_context_and_record_workflow_use_the_snapshot_rating_index(
     record = context.records[0]
     workflow = services.project_context_service.create_qc_record_workflow(
         indexed_snapshot,
-        ezqcid=record.ezqcid,
+        easyqcid=record.easyqcid,
         module_name=record.module_name,
         rater=record.rater,
     )
@@ -560,13 +560,13 @@ def test_historical_record_workflow_uses_saved_schema_complete_queue_and_ratings
 
     workflow = services.project_context_service.create_qc_record_workflow(
         snapshot,
-        ezqcid=record.ezqcid,
+        easyqcid=record.easyqcid,
         module_name=record.module_name,
         rater=record.rater,
     )
 
     assert workflow.subject_ids == ("SUB001", "SUB003")
-    assert workflow.current_ezqcid == "SUB001"
+    assert workflow.current_easyqcid == "SUB001"
     assert workflow.initial_read_only
     assert not workflow.watch_mode
     assert workflow.read_only_reason == ""
@@ -620,7 +620,7 @@ def test_historical_record_remains_available_after_module_is_removed(
     )
     workflow = services.project_context_service.create_qc_record_workflow(
         snapshot,
-        ezqcid="SUB001",
+        easyqcid="SUB001",
         module_name="AnatQC",
         rater="rater1",
     )
@@ -652,7 +652,7 @@ def test_qc_row_context_and_record_factory_reject_stale_or_unknown_facts(
     with pytest.raises(ProjectContextError, match="not found"):
         services.project_context_service.create_qc_record_workflow(
             current,
-            ezqcid="SUB001",
+            easyqcid="SUB001",
             module_name="AnatQC",
             rater="missing",
         )

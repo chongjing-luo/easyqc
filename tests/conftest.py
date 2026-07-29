@@ -186,22 +186,27 @@ def fixtures_dir(easyqc_root: Path) -> Path:
 
 @pytest.fixture
 def sample_project_dir(tmp_path: Path, fixtures_dir: Path) -> Path:
-    project_dir = tmp_path / "easyqc_SAMPLE"
-    table_dir = project_dir / "Table"
-    rating_dir = project_dir / "RatingFiles" / "example" / "rater1"
+    from core.project_service import ProjectService
 
-    table_dir.mkdir(parents=True)
+    project = ProjectService(tmp_path / "_fixture_projects.json").create(
+        "SAMPLE",
+        tmp_path,
+    )
+    project_dir = project.path
+    table_dir = project.table_dir
+    rating_dir = project.rating_dir / "example" / "rater1"
+
     rating_dir.mkdir(parents=True)
 
     shutil.copy2(fixtures_dir / "sample_settings.json", project_dir / "settings_SAMPLE.json")
-    shutil.copy2(fixtures_dir / "sample_ezqc_all.csv", table_dir / "ezqc_all.csv")
+    shutil.copy2(fixtures_dir / "sample_easyqc_all.csv", table_dir / "easyqc_all.csv")
 
     source_rating = (
         fixtures_dir
         / "sample_ratings"
         / "example"
         / "rater1"
-        / "example._.SUB001._.rater1._.Good._.True.json"
+        / "example-rater1-SUB001.json"
     )
     shutil.copy2(source_rating, rating_dir / source_rating.name)
 

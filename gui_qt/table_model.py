@@ -19,7 +19,7 @@ class QtTableRowReference:
 
     result_position: int
     source_position: int
-    ezqcid: str
+    easyqcid: str
 
 
 class QtTableModel(QAbstractTableModel):
@@ -106,14 +106,14 @@ class QtTableModel(QAbstractTableModel):
     def row_reference(self, row: int) -> QtTableRowReference:
         if row < 0 or row >= self.rowCount():
             raise IndexError("table row is outside the current window")
-        ezqcid = ""
-        if "ezqcid" in self._frame.columns:
-            value = self._frame.iloc[row]["ezqcid"]
-            ezqcid = "" if pd.isna(value) else str(value).strip()
+        easyqcid = ""
+        if "easyqcid" in self._frame.columns:
+            value = self._frame.iloc[row]["easyqcid"]
+            easyqcid = "" if pd.isna(value) else str(value).strip()
         return QtTableRowReference(
             result_position=self._offset + row,
             source_position=self._source_positions[row],
-            ezqcid=ezqcid,
+            easyqcid=easyqcid,
         )
 
     def snapshot(self) -> pd.DataFrame:

@@ -183,14 +183,14 @@ class DerivedColumnDialog(QDialog):
         parsed: ParsedFormula,
         evaluation: FormulaEvaluation,
     ) -> None:
-        has_identity = "ezqcid" in self._preview_source.columns
+        has_identity = "easyqcid" in self._preview_source.columns
         referenced = [
             column
             for column in parsed.referenced_columns
-            if not (has_identity and column == "ezqcid")
+            if not (has_identity and column == "easyqcid")
         ]
         headers = [
-            "ezqcid" if has_identity else "行",
+            "easyqcid" if has_identity else "行",
             *referenced,
             request.name,
             "错误",
@@ -201,7 +201,7 @@ class DerivedColumnDialog(QDialog):
         if has_identity:
             self.preview_table.horizontalHeaderItem(0).setData(
                 Qt.ItemDataRole.UserRole,
-                "ezqcid",
+                "easyqcid",
             )
         for column_index, column in enumerate(referenced, start=1):
             self.preview_table.horizontalHeaderItem(column_index).setData(
@@ -221,7 +221,7 @@ class DerivedColumnDialog(QDialog):
 
         for row in range(len(self._preview_source)):
             identity = (
-                self._preview_source.iloc[row]["ezqcid"]
+                self._preview_source.iloc[row]["easyqcid"]
                 if has_identity
                 else row + 1
             )

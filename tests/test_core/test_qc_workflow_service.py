@@ -21,7 +21,7 @@ def _module(*, rater: str | None = "rater1", watch_mode: bool = False) -> dict:
         "name": "AnatQC",
         "label": "Anatomical image quality",
         "rater": rater,
-        "ezqcid": None,
+        "easyqcid": None,
         "watch_mode": watch_mode,
         "tags": {"1": {"label": "Motion artifact", "value": False}},
         "scores": {
@@ -47,7 +47,7 @@ def _module(*, rater: str | None = "rater1", watch_mode: bool = False) -> dict:
 def _subjects() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002", "SUB003"],
+            "easyqcid": ["SUB001", "SUB002", "SUB003"],
             "image": ["/data/1.nii.gz", "/data/2.nii.gz", "/data/3.nii.gz"],
         }
     )
@@ -113,7 +113,7 @@ def test_queue_summary_combines_seeded_rows_with_live_draft_and_committed_save(
     # Once selected, the live rating-file load is authoritative over the
     # earlier detached aggregate snapshot.
     assert workflow.queue_summary("SUB002") == ("", "")
-    with pytest.raises(QcIdentityError, match="Unknown QC ezqcid"):
+    with pytest.raises(QcIdentityError, match="Unknown QC easyqcid"):
         workflow.queue_summary("FOREIGN")
 
 
@@ -132,7 +132,7 @@ def test_viewer_plan_launch_navigation_and_close_use_code_executor(tmp_path) -> 
     assert executor.started == [(plan.commands, True, None)]
     assert workflow.navigate_to("SUB002")
     assert executor.close_calls == 1
-    assert workflow.current_ezqcid == "SUB002"
+    assert workflow.current_easyqcid == "SUB002"
 
     workflow.close()
     assert executor.close_calls == 2
@@ -216,7 +216,7 @@ def test_save_preserves_full_module_payload_and_schema_version(tmp_path) -> None
     path = workflow.save()
     payload = json.loads(path.read_text(encoding="utf-8"))
 
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["name"] == "AnatQC"
     assert payload["label"] == "Anatomical image quality"
     assert payload["button"] == {"help": "Open SOP"}
@@ -231,7 +231,7 @@ def test_failed_save_does_not_advance_or_delete_previous_rating(monkeypatch, tmp
     workflow.set_score("1", "Good")
     target = tmp_path / "RatingFiles" / "AnatQC" / "rater1"
     target.mkdir(parents=True)
-    old = target / "AnatQC._.SUB001._.rater1._.Old._.False.json"
+    old = target / "unrelated-sentinel.json"
     old.write_text("{}", encoding="utf-8")
 
     def fail_save(*_args, **_kwargs):
@@ -242,42 +242,19 @@ def test_failed_save_does_not_advance_or_delete_previous_rating(monkeypatch, tmp
     with pytest.raises(OSError, match="atomic write failed"):
         workflow.save_and_move(1)
     assert workflow.current_index == 0
-    assert workflow.current_ezqcid == "SUB001"
+    assert workflow.current_easyqcid == "SUB001"
     assert old.exists()
-
-
-def test_duplicate_rating_files_force_visible_read_only_state(tmp_path) -> None:
-    target = tmp_path / "RatingFiles" / "AnatQC" / "rater1"
-    target.mkdir(parents=True)
-    first = _module()
-    first.update({"ezqcid": "SUB001", "rater": "rater1"})
-    second = json.loads(json.dumps(first))
-    second["scores"]["1"]["value"] = "Good"
-    (target / "AnatQC._.SUB001._.rater1._.A._.False.json").write_text(
-        json.dumps(first), encoding="utf-8"
-    )
-    (target / "AnatQC._.SUB001._.rater1._.B._.False.json").write_text(
-        json.dumps(second), encoding="utf-8"
-    )
-
-    workflow = _workflow(tmp_path)
-
-    assert workflow.watch_mode
-    assert "multiple" in workflow.read_only_reason.lower()
-    with pytest.raises(QcReadOnlyError):
-        workflow.set_notes("must remain read-only")
-    with pytest.raises(QcReadOnlyError):
-        workflow.save()
 
 
 def test_schema_drift_forces_read_only_but_keeps_saved_rating_visible(tmp_path) -> None:
     target = tmp_path / "RatingFiles" / "AnatQC" / "rater1"
     target.mkdir(parents=True)
     saved = _module()
-    saved.update({"ezqcid": "SUB001", "rater": "rater1"})
+    saved.update({"easyqcid": "SUB001", "rater": "rater1"})
+    saved["schema_version"] = 3
     saved["scores"]["1"]["num_"] = "Reject,Accept"
     saved["scores"]["1"]["value"] = "Accept"
-    (target / "AnatQC._.SUB001._.rater1._.Accept._.False.json").write_text(
+    (target / "AnatQC-rater1-SUB001.json").write_text(
         json.dumps(saved), encoding="utf-8"
     )
 
@@ -296,10 +273,11 @@ def test_schema_drift_reason_clears_after_successful_case_navigation(tmp_path) -
     target = tmp_path / "RatingFiles" / "AnatQC" / "rater1"
     target.mkdir(parents=True)
     saved = _module()
-    saved.update({"ezqcid": "SUB001", "rater": "rater1"})
+    saved.update({"easyqcid": "SUB001", "rater": "rater1"})
+    saved["schema_version"] = 3
     saved["scores"]["1"]["num_"] = "Reject,Accept"
     saved["scores"]["1"]["value"] = "Accept"
-    (target / "AnatQC._.SUB001._.rater1._.Accept._.False.json").write_text(
+    (target / "AnatQC-rater1-SUB001.json").write_text(
         json.dumps(saved), encoding="utf-8"
     )
 
@@ -316,34 +294,15 @@ def test_schema_drift_reason_clears_after_successful_case_navigation(tmp_path) -
     assert workflow.dirty
 
 
-def test_duplicate_rating_reason_clears_after_successful_case_navigation(tmp_path) -> None:
-    target = tmp_path / "RatingFiles" / "AnatQC" / "rater1"
-    target.mkdir(parents=True)
-    saved = _module()
-    saved.update({"ezqcid": "SUB001", "rater": "rater1"})
-    for suffix in ("A", "B"):
-        (target / f"AnatQC._.SUB001._.rater1._.{suffix}._.False.json").write_text(
-            json.dumps(saved), encoding="utf-8"
-        )
-
-    workflow = _workflow(tmp_path)
-    assert workflow.watch_mode
-    assert "multiple" in workflow.read_only_reason.lower()
-
-    assert workflow.navigate_to("SUB002")
-
-    assert not workflow.watch_mode
-    assert workflow.read_only_reason == ""
-
-
 def test_session_watch_reason_survives_case_reason_clear(tmp_path) -> None:
     target = tmp_path / "RatingFiles" / "AnatQC" / "rater1"
     target.mkdir(parents=True)
     saved = _module(watch_mode=True)
-    saved.update({"ezqcid": "SUB001", "rater": "rater1"})
+    saved.update({"easyqcid": "SUB001", "rater": "rater1"})
+    saved["schema_version"] = 3
     saved["scores"]["1"]["num_"] = "Reject,Accept"
     saved["scores"]["1"]["value"] = "Accept"
-    (target / "AnatQC._.SUB001._.rater1._.Accept._.False.json").write_text(
+    (target / "AnatQC-rater1-SUB001.json").write_text(
         json.dumps(saved), encoding="utf-8"
     )
 
@@ -375,11 +334,12 @@ def test_failed_target_load_restores_prior_case_draft_and_reasons(
     target = tmp_path / "RatingFiles" / "AnatQC" / "rater1"
     target.mkdir(parents=True)
     saved = _module()
-    saved.update({"ezqcid": "SUB002", "rater": "rater1"})
-    for suffix in ("A", "B"):
-        (target / f"AnatQC._.SUB002._.rater1._.{suffix}._.False.json").write_text(
-            json.dumps(saved), encoding="utf-8"
-        )
+    saved.update({"easyqcid": "SUB002", "rater": "rater1"})
+    saved["schema_version"] = 3
+    (target / "AnatQC-rater1-SUB002.json").write_text(
+        json.dumps(saved),
+        encoding="utf-8",
+    )
     rating_files_before = {
         path.name: path.read_bytes() for path in sorted(target.glob("*.json"))
     }
@@ -389,7 +349,7 @@ def test_failed_target_load_restores_prior_case_draft_and_reasons(
 
     monkeypatch.setattr(
         RatingService,
-        "load_legacy_rating_file",
+        "load_rating_payload",
         staticmethod(fail_target_load),
     )
 
@@ -397,7 +357,7 @@ def test_failed_target_load_restores_prior_case_draft_and_reasons(
         workflow.navigate_to("SUB002", discard_changes=True)
 
     assert workflow.current_index == 0
-    assert workflow.current_ezqcid == "SUB001"
+    assert workflow.current_easyqcid == "SUB001"
     assert workflow.current_module == before
     assert workflow.current_module.scores["1"].value == "Good"
     assert workflow.current_module.notes == "draft remains"
@@ -414,7 +374,7 @@ def test_failed_target_load_restores_prior_case_draft_and_reasons(
     [(["SUB001", "SUB001"]), (["SUB001", "  "])],
 )
 def test_session_rejects_duplicate_or_blank_qc_identity(tmp_path, identities) -> None:
-    source = pd.DataFrame({"ezqcid": identities, "image": ["a", "b"]})
+    source = pd.DataFrame({"easyqcid": identities, "image": ["a", "b"]})
 
     with pytest.raises(QcIdentityError):
         QcWorkflowService(
@@ -431,7 +391,7 @@ def test_unsaved_draft_blocks_plain_navigation(tmp_path) -> None:
 
     with pytest.raises(QcSessionError, match="unsaved"):
         workflow.navigate_to("SUB002")
-    assert workflow.current_ezqcid == "SUB001"
+    assert workflow.current_easyqcid == "SUB001"
 
 
 def test_closed_workflow_rejects_late_mutation_and_save(tmp_path) -> None:

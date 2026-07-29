@@ -108,10 +108,15 @@ class ProjectService:
         candidate_settings = FileUtils.safe_json_load(project.settings_path)
         if not isinstance(candidate_settings, dict):
             raise ValueError(f"项目设置必须是对象: {project.settings_path}")
+        if candidate_settings.get("schema_version") != 3:
+            raise ValueError(
+                f"项目设置必须使用 schema_version 3: {project.settings_path}"
+            )
         repository = self._module_repository(project)
-        if repository.root.exists():
-            records = self._strict_project_module_records(repository)
-            candidate_settings["qcmodule"] = repository.legacy_mapping(records)
+        if not repository.root.is_dir():
+            raise ValueError(f"schema-v3 项目缺少模块目录: {repository.root}")
+        records = self._strict_project_module_records(repository)
+        candidate_settings["qcmodule"] = repository.settings_mapping(records)
         return PreparedProjectLoad(project=project, settings=deepcopy(candidate_settings))
 
     def commit_load(
@@ -129,19 +134,8 @@ class ProjectService:
             raise ValueError("Prepared project is no longer registered")
         repository = self._module_repository(prepared.project)
         accepted_settings = deepcopy(prepared.settings)
-        if repository.root.exists():
-            module_records = self._strict_project_module_records(repository)
-        else:
-            modules = accepted_settings.get("qcmodule")
-            if not isinstance(modules, dict):
-                raise ValueError("qcmodule must be an object")
-            try:
-                module_records = repository.migrate_legacy(modules)
-            except ModuleRepositoryError as exc:
-                raise ValueError(
-                    f"项目模块迁移失败 {repository.root}: {exc}"
-                ) from exc
-        accepted_settings["qcmodule"] = repository.legacy_mapping(module_records)
+        module_records = self._strict_project_module_records(repository)
+        accepted_settings["qcmodule"] = repository.settings_mapping(module_records)
         with self._state_lock:
             registered = self.registry.projects.get(prepared.project.name)
             if registered is None or registered.path != prepared.project.path:
@@ -323,7 +317,7 @@ class ProjectService:
         """Update module CONFIG fields.
 
         Only durable module configuration keys are sanctioned here. Rating /
-        runtime / view state (ezqcid, notes, time, code_exe, scores values, tags
+        runtime / view state (easyqcid, notes, time, code_exe, scores values, tags
         values, button, showing) is NOT module config — it is per-subject rating
         state or GUI view state and must go through RatingService / the QC page
         controller. Routing it here would persist transient state into the
@@ -436,12 +430,12 @@ class ProjectService:
         self._notify("modules_changed")
 
     def export_module(self, module_name: str, path) -> None:
-        """Write a sanitized module copy (rater/ezqcid=None) to path."""
+        """Write a sanitized module copy (rater/easyqcid=None) to path."""
         idx = self._module_index_by_name(module_name)
         module = self._settings["qcmodule"][idx]
         export_copy = deepcopy(module)
         export_copy["rater"] = None
-        export_copy["ezqcid"] = None
+        export_copy["easyqcid"] = None
         FileUtils.safe_json_save(path, export_copy)
 
     def commit_settings(
@@ -515,7 +509,7 @@ class ProjectService:
                         "Project settings changed on disk before commit"
                     )
                 if repository.root.exists():
-                    disk_modules = repository.legacy_mapping(
+                    disk_modules = repository.settings_mapping(
                         self._strict_project_module_records(repository)
                     )
                     if disk_modules != expected.settings.get("qcmodule"):
@@ -567,12 +561,12 @@ class ProjectService:
         if not isinstance(modules, dict):
             raise ValueError("qcmodule must be an object")
         try:
-            published = repository._replace_legacy_unlocked(modules)
+            published = repository._replace_settings_unlocked(modules)
         except ModuleRepositoryError as exc:
             raise ValueError(
                 f"项目模块写入失败 {repository.root}: {exc}"
             ) from exc
-        self._settings["qcmodule"] = repository.legacy_mapping(published)
+        self._settings["qcmodule"] = repository.settings_mapping(published)
         try:
             FileUtils.safe_json_save(
                 current.settings_path,
@@ -607,12 +601,10 @@ class ProjectService:
 
     @staticmethod
     def _ensure_schema_version(payload: dict[str, Any]) -> None:
-        """Stamp the current schema version onto an outbound payload, but never
-        downgrade an existing higher version (forward-compat). Legacy v0 files
-        lack the key entirely; they get versioned on first explicit save."""
+        """Require the only storage schema implemented by this application."""
         current = payload.get("schema_version")
-        if not isinstance(current, int) or current < 1:
-            payload["schema_version"] = 1
+        if current != 3:
+            raise ValueError("项目设置必须使用 schema_version 3")
 
     def add_observer(self, callback: Callable[[str], None]) -> None:
         """[DEPRECATED] Legacy string observer. Bridged to the typed EventBus
@@ -630,13 +622,10 @@ class ProjectService:
     def new_settings(self) -> dict[str, Any]:
         """Seed settings for a freshly-created project.
 
-        Uses ``schema_version`` (the unified key) instead of the legacy divergent
-        ``version`` key (F-SET-9). Version 1 is the stable schema after the P0
-        data-safety wave; absence of the key in a loaded file means legacy v0
-        (read-only normalization on load, write only on explicit save — P0-E).
+        Schema version 3 is the only accepted settings contract.
         """
         return {
-            "schema_version": 1,
+            "schema_version": 3,
             "constants": {},
             "variables": {},
             "var_select_filter": None,

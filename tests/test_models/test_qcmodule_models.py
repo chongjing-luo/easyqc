@@ -39,7 +39,7 @@ def test_qcmodule_accepts_missing_optional_legacy_fields() -> None:
 # The 16-key legacy schema was verified against real easyqc_CCNPPEKI settings
 # and rating JSON. qc_filter is the one optional structured extension.
 _ALL_MODULE_KEYS = {
-    "name", "label", "rater", "ezqcid", "watch_mode", "interper", "code",
+    "name", "label", "rater", "easyqcid", "watch_mode", "interper", "code",
     "code_exe", "tags", "scores", "notes", "time", "control", "showing",
     "select_filter", "qc_filter", "button",
 }
@@ -51,7 +51,7 @@ def _sixteen_key_legacy_module() -> dict:
         "name": "AnatRestAll",
         "label": "Anatomical + Rest QC",
         "rater": "zhuyan",
-        "ezqcid": "CCNPPEK0001_01_anat",
+        "easyqcid": "CCNPPEK0001_01_anat",
         "watch_mode": False,
         "interper": "shell",
         "code": "freeview ${subjects_dir}/${subid}/anat/${subid}_anat.nii.gz",

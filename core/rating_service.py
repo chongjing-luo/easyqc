@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from bisect import bisect_left
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-import threading
 from typing import Any
 
 import pandas as pd
@@ -26,31 +24,22 @@ from utils.file_utils import FileUtils
 
 
 def _load_rating_file(path: Path) -> Rating:
-    return Rating.from_legacy_dict(FileUtils.safe_json_load(path))
+    payload = FileUtils.safe_json_load(path)
+    if not isinstance(payload, dict):
+        raise ValueError("rating JSON must contain one object")
+    if payload.get("schema_version") != 3:
+        raise ValueError("rating JSON must use schema_version 3")
+    if "easyqcid" not in payload:
+        raise ValueError("schema-v3 rating JSON requires easyqcid")
+    return Rating.from_legacy_dict(payload)
 
 
 def _rating_identity(rating: Rating) -> RatingIdentity:
     return RatingIdentity(
         module_name=rating.module_name,
         rater=rating.rater,
-        ezqcid=rating.ezqcid,
+        easyqcid=rating.easyqcid,
     )
-
-
-def _validate_legacy_rating_filename(
-    filename: str,
-    identity: RatingIdentity,
-) -> None:
-    if not filename.endswith(".json"):
-        raise RatingFilenameError(filename, "must end with the exact suffix '.json'")
-    expected_prefix = (
-        f"{identity.module_name}._.{identity.ezqcid}._.{identity.rater}._."
-)
-    if not filename.startswith(expected_prefix):
-        raise RatingFilenameError(
-            filename,
-            "legacy basename does not match the complete JSON body identity prefix",
-        )
 
 
 class RatingServiceError(RuntimeError):
@@ -74,18 +63,6 @@ class RatingIdentityConflictError(RatingServiceError):
         super().__init__(f"Refusing to overwrite rating {path}: {reason}")
 
 
-class RatingLegacyConflictError(RatingServiceError):
-    """A legacy snapshot must be explicitly migrated before a v2 save."""
-
-    def __init__(self, identity: RatingIdentity, paths: list[Path]) -> None:
-        self.identity = identity
-        self.paths = tuple(paths)
-        super().__init__(
-            "Legacy rating requires explicit migration before canonical save: "
-            + ", ".join(str(path) for path in paths)
-        )
-
-
 @dataclass(frozen=True)
 class RatingScanIssue:
     path: Path
@@ -98,7 +75,6 @@ class RatingScanRecord:
     rating: Rating
     path: Path
     identity: RatingIdentity
-    filename_format: str
 
 
 @dataclass
@@ -132,12 +108,7 @@ class LoadedRatingsState:
 
 
 class RatingRaterDirectoryIndex:
-    """Refreshable filename index for one interactive module/rater session.
-
-    Canonical records are found by their deterministic path. Legacy prefix
-    lookup becomes ``O(log n)`` after one directory scan. A metadata change
-    rebuilds the index, so files created outside this session are not hidden.
-    """
+    """Constant-time canonical lookup for one interactive module/rater session."""
 
     def __init__(
         self,
@@ -150,10 +121,6 @@ class RatingRaterDirectoryIndex:
         self.target_dir = Path(target_dir)
         self.module_name = module_name
         self.rater = rater
-        self._legacy_names: tuple[str, ...] = ()
-        self._legacy_paths: tuple[Path, ...] = ()
-        self._signature: tuple[int, int, int, int] | None = None
-        self._guard = threading.RLock()
 
     @classmethod
     def build(
@@ -163,110 +130,24 @@ class RatingRaterDirectoryIndex:
         module_name: str,
         rater: str,
     ) -> "RatingRaterDirectoryIndex":
-        index = cls(
+        return cls(
             target_dir,
             module_name=module_name,
             rater=rater,
         )
-        index._rebuild()
-        return index
 
-    def _directory_signature(self) -> tuple[int, int, int, int] | None:
-        try:
-            metadata = self.target_dir.stat()
-        except FileNotFoundError:
-            return None
-        if not self.target_dir.is_dir():
-            raise RatingServiceError(
-                f"rating rater path is not a directory: {self.target_dir}"
-            )
-        return (
-            int(metadata.st_dev),
-            int(metadata.st_ino),
-            int(metadata.st_mtime_ns),
-            int(metadata.st_ctime_ns),
-        )
+    def _identity(self, easyqcid: str) -> RatingIdentity:
+        return RatingIdentity(self.module_name, self.rater, easyqcid)
 
-    def _scan_legacy_paths(self) -> tuple[tuple[str, ...], tuple[Path, ...]]:
-        if not self.target_dir.exists():
-            return (), ()
-        prefix = f"{self.module_name}._."
-        candidates: list[tuple[str, Path]] = []
-        try:
-            with os.scandir(self.target_dir) as entries:
-                for entry in entries:
-                    path = self.target_dir / entry.name
-                    if (
-                        entry.is_file()
-                        and entry.name.startswith(prefix)
-                        and path.suffix.casefold() == ".json"
-                    ):
-                        candidates.append((entry.name, path))
-        except OSError as exc:
-            raise RatingServiceError(
-                f"cannot index rating directory {self.target_dir}: {exc}"
-            ) from exc
-        candidates.sort(key=lambda item: item[0])
-        return (
-            tuple(name for name, _ in candidates),
-            tuple(path for _, path in candidates),
-        )
-
-    def _rebuild(self) -> None:
-        with self._guard:
-            for _attempt in range(3):
-                before = self._directory_signature()
-                names, paths = self._scan_legacy_paths()
-                after = self._directory_signature()
-                if before == after:
-                    self._legacy_names = names
-                    self._legacy_paths = paths
-                    self._signature = after
-                    return
-            raise RatingServiceError(
-                "rating directory changed repeatedly while its legacy index "
-                f"was being built: {self.target_dir}"
-            )
-
-    def _refresh_if_changed(self) -> None:
-        with self._guard:
-            if self._directory_signature() != self._signature:
-                self._rebuild()
-
-    def _identity(self, ezqcid: str) -> RatingIdentity:
-        return RatingIdentity(self.module_name, self.rater, ezqcid)
-
-    def legacy_files(self, ezqcid: str) -> list[Path]:
-        identity = self._identity(ezqcid)
-        self._refresh_if_changed()
-        prefix = (
-            f"{identity.module_name}._.{identity.ezqcid}._."
-            f"{identity.rater}._."
-        )
-        with self._guard:
-            position = bisect_left(self._legacy_names, prefix)
-            matches: list[Path] = []
-            while (
-                position < len(self._legacy_names)
-                and self._legacy_names[position].startswith(prefix)
-            ):
-                matches.append(self._legacy_paths[position])
-                position += 1
-            return matches
-
-    def find(self, ezqcid: str) -> list[Path]:
-        identity = self._identity(ezqcid)
-        matches = self.legacy_files(identity.ezqcid)
+    def find(self, easyqcid: str) -> list[Path]:
+        identity = self._identity(easyqcid)
         canonical = self.target_dir / build_rating_filename(identity)
-        if canonical.is_file():
-            matches.append(canonical)
-        return RatingService._validated_matching_paths(matches)
+        if not canonical.exists():
+            return []
+        return RatingService._validated_matching_paths([canonical])
 
     def note_canonical_write(self) -> None:
-        """Record the known metadata change after this session saves."""
-
-        with self._guard:
-            self._signature = self._directory_signature()
+        """Canonical lookups are path-derived and need no mutable index update."""
 
     def owns(self, target_dir: Path, identity: RatingIdentity) -> bool:
         return (
@@ -320,10 +201,7 @@ class RatingService:
         try:
             canonical_identity = parse_rating_filename(path.name)
         except RatingFilenameError as exc:
-            canonical_identity = None
-            canonical_error = exc
-            if not path.name.endswith(".json"):
-                return None, RatingScanIssue(path, "filename", str(exc))
+            return None, RatingScanIssue(path, "filename", str(exc))
 
         try:
             rating = _load_rating_file(path)
@@ -335,23 +213,7 @@ class RatingService:
         except RatingIdentityError as exc:
             return None, RatingScanIssue(path, "body_identity", str(exc))
 
-        if canonical_identity is None:
-            try:
-                _validate_legacy_rating_filename(path.name, body_identity)
-            except RatingFilenameError:
-                return None, RatingScanIssue(
-                    path,
-                    "path_identity_mismatch",
-                    (
-                        "legacy filename does not match the complete JSON body "
-                        f"identity ({canonical_error})"
-                    ),
-                )
-            path_identity = body_identity
-            filename_format = "legacy"
-        else:
-            path_identity = canonical_identity
-            filename_format = "canonical"
+        path_identity = canonical_identity
 
         if (
             path.parent.parent.name != path_identity.module_name
@@ -374,7 +236,6 @@ class RatingService:
                 rating=rating,
                 path=path,
                 identity=path_identity,
-                filename_format=filename_format,
             ),
             None,
         )
@@ -406,28 +267,10 @@ class RatingService:
         ).rating
 
     @staticmethod
-    def _legacy_files_for_identity(
-        target_dir: Path,
-        identity: RatingIdentity,
-    ) -> list[Path]:
-        prefix = (
-            f"{identity.module_name}._.{identity.ezqcid}._.{identity.rater}._."
-        )
-        if not target_dir.exists():
-            return []
-        return sorted(
-            path
-            for path in target_dir.iterdir()
-            if path.is_file()
-            and path.name.startswith(prefix)
-            and path.suffix.casefold() == ".json"
-        )
-
-    @staticmethod
     def find_rating_files_in_rater_dir(
         target_dir: Path,
         module_name: str,
-        ezqcid: str,
+        easyqcid: str,
         rater: str,
     ) -> list[Path]:
         index = RatingRaterDirectoryIndex.build(
@@ -435,7 +278,7 @@ class RatingService:
             module_name=module_name,
             rater=rater,
         )
-        return index.find(ezqcid)
+        return index.find(easyqcid)
 
     @staticmethod
     def _validated_matching_paths(matches: list[Path]) -> list[Path]:
@@ -456,7 +299,7 @@ class RatingService:
         return [record.path for record in records]
 
     @staticmethod
-    def load_legacy_rating_file(path: Path) -> dict[str, Any]:
+    def load_rating_payload(path: Path) -> dict[str, Any]:
         return RatingService._validated_record(path).rating.to_legacy_dict()
 
     @staticmethod
@@ -512,10 +355,6 @@ class RatingService:
 
         if not target_path.parent.exists():
             return
-        legacy_prefix = (
-            f"{identity.module_name}._.{identity.ezqcid}._."
-            f"{identity.rater}._."
-        )
         try:
             entries = tuple(target_path.parent.iterdir())
         except OSError as exc:
@@ -525,15 +364,11 @@ class RatingService:
         for candidate in entries:
             if not candidate.is_file() or candidate.suffix.casefold() != ".json":
                 continue
-            canonical_collision = (
+            collision = (
                 candidate.name != target_path.name
                 and candidate.name.casefold() == target_path.name.casefold()
             )
-            legacy_collision = (
-                not candidate.name.startswith(legacy_prefix)
-                and candidate.name.casefold().startswith(legacy_prefix.casefold())
-            )
-            if canonical_collision or legacy_collision:
+            if collision:
                 raise RatingIdentityConflictError(
                     target_path,
                     identity,
@@ -544,17 +379,17 @@ class RatingService:
     def save_rating(
         self,
         rating: Rating,
-        legacy_module: QCModule | dict[str, Any] | None = None,
+        module_snapshot: QCModule | dict[str, Any] | None = None,
     ) -> Path:
         identity = _rating_identity(rating)
         target_path = canonical_rating_path(self.project.rating_dir, identity)
-        return self._save_rating_to_path(target_path, identity, rating, legacy_module)
+        return self._save_rating_to_path(target_path, identity, rating, module_snapshot)
 
     @staticmethod
     def save_rating_to_rater_dir(
         target_dir: Path,
         rating: Rating,
-        legacy_module: QCModule | dict[str, Any] | None = None,
+        module_snapshot: QCModule | dict[str, Any] | None = None,
         *,
         directory_index: RatingRaterDirectoryIndex | None = None,
     ) -> Path:
@@ -571,7 +406,7 @@ class RatingService:
             target_path,
             identity,
             rating,
-            legacy_module,
+            module_snapshot,
             directory_index,
         )
 
@@ -580,23 +415,18 @@ class RatingService:
         target_path: Path,
         identity: RatingIdentity,
         rating: Rating,
-        legacy_module: QCModule | dict[str, Any] | None,
+        module_snapshot: QCModule | dict[str, Any] | None,
         directory_index: RatingRaterDirectoryIndex | None = None,
     ) -> Path:
-        if legacy_module is None and rating.legacy_payload is None:
-            raise ValueError("保存评分 JSON 需要完整 legacy qcmodule payload")
+        if module_snapshot is None and rating.module_payload is None:
+            raise ValueError("保存评分 JSON 需要完整质控模块快照")
 
-        payload = rating.to_legacy_dict(legacy_module)
-        payload["schema_version"] = 2
+        payload = rating.to_legacy_dict(module_snapshot)
+        payload["schema_version"] = 3
 
         with rating_write_lock(target_path):
             RatingService._reject_casefold_write_conflicts(target_path, identity)
-            if directory_index is None:
-                legacy_files = RatingService._legacy_files_for_identity(
-                    target_path.parent,
-                    identity,
-                )
-            else:
+            if directory_index is not None:
                 if not directory_index.owns(target_path.parent, identity):
                     raise RatingIdentityConflictError(
                         target_path,
@@ -604,9 +434,6 @@ class RatingService:
                         None,
                         "rating directory index does not own the target identity",
                     )
-                legacy_files = directory_index.legacy_files(identity.ezqcid)
-            if legacy_files:
-                raise RatingLegacyConflictError(identity, legacy_files)
 
             if target_path.exists():
                 try:
@@ -638,7 +465,7 @@ class RatingService:
         by_identity: dict[RatingIdentity, list[RatingScanRecord]] = {}
         module_casefold: dict[str, RatingScanRecord] = {}
         rater_casefold: dict[tuple[str, str], RatingScanRecord] = {}
-        ezqcid_casefold: dict[str, RatingScanRecord] = {}
+        easyqcid_casefold: dict[str, RatingScanRecord] = {}
 
         for path in self.scan_rating_files():
             record, issue = self._scan_one(
@@ -669,11 +496,11 @@ class RatingService:
                 collision_fields.append("rater")
                 collision_paths.add(prior_rater.path)
 
-            ezqcid_key = identity.ezqcid.casefold()
-            prior_ezqcid = ezqcid_casefold.setdefault(ezqcid_key, record)
-            if prior_ezqcid.identity.ezqcid != identity.ezqcid:
-                collision_fields.append("ezqcid")
-                collision_paths.add(prior_ezqcid.path)
+            easyqcid_key = identity.easyqcid.casefold()
+            prior_easyqcid = easyqcid_casefold.setdefault(easyqcid_key, record)
+            if prior_easyqcid.identity.easyqcid != identity.easyqcid:
+                collision_fields.append("easyqcid")
+                collision_paths.add(prior_easyqcid.path)
 
             if collision_fields:
                 all_paths = sorted({record.path, *collision_paths})
@@ -697,7 +524,7 @@ class RatingService:
                         "duplicate_identity",
                         (
                             "duplicate rating identity "
-                            f"{identity.module_name}/{identity.rater}/{identity.ezqcid}: "
+                            f"{identity.module_name}/{identity.rater}/{identity.easyqcid}: "
                             + ", ".join(str(item.path) for item in duplicate_records)
                         ),
                     )
@@ -714,8 +541,8 @@ class RatingService:
             raise RatingScanError(result)
         return [(record.rating, record.path) for record in result.records]
 
-    def load_legacy_state(self, subjects: pd.DataFrame) -> LoadedRatingsState:
-        """Load ratings in the shape expected by the legacy GUI state."""
+    def load_state(self, subjects: pd.DataFrame) -> LoadedRatingsState:
+        """Load current ratings and their derived table state."""
         records = self.load_all_rating_records()
         ratings = [rating for rating, _ in records]
         original_table = self.rating_records_to_long_dataframe(records)
@@ -731,8 +558,8 @@ class RatingService:
     def build_rating_dict(self, ratings: list[Rating]) -> dict[str, dict[str, dict[str, Any]]]:
         rating_dict: dict[str, dict[str, dict[str, Any]]] = {}
         for rating in ratings:
-            rating_dict.setdefault(rating.ezqcid, {})
-            rating_dict[rating.ezqcid][f"{rating.module_name}-{rating.rater}"] = rating.to_legacy_dict()
+            rating_dict.setdefault(rating.easyqcid, {})
+            rating_dict[rating.easyqcid][f"{rating.module_name}-{rating.rater}"] = rating.to_legacy_dict()
         return rating_dict
 
     def aggregate_to_wide(self, ratings: list[Rating], subjects: pd.DataFrame) -> pd.DataFrame:
@@ -751,7 +578,7 @@ class RatingService:
         if long_df.empty:
             return pd.DataFrame()
 
-        dup_keys = ["ezqcid", "module_name", "rater"]
+        dup_keys = ["easyqcid", "module_name", "rater"]
         duplicates = long_df[long_df.duplicated(subset=dup_keys, keep=False)]
         if not duplicates.empty:
             offenders = (
@@ -761,18 +588,18 @@ class RatingService:
                 .tolist()
             )
             raise ValueError(
-                f"重复的评分身份(ezqcid/module/rater),F-RAT-3 不变量被破坏: {offenders[:5]}"
+                f"重复的评分身份(easyqcid/module/rater),F-RAT-3 不变量被破坏: {offenders[:5]}"
             )
 
-        wide = long_df.pivot_table(index="ezqcid", columns=["module_name", "rater"], aggfunc="first").reset_index()
+        wide = long_df.pivot_table(index="easyqcid", columns=["module_name", "rater"], aggfunc="first").reset_index()
         new_columns = []
         for col in wide.columns:
-            if col == "ezqcid" or (isinstance(col, tuple) and col[0] == "ezqcid"):
-                new_columns.append("ezqcid")
+            if col == "easyqcid" or (isinstance(col, tuple) and col[0] == "easyqcid"):
+                new_columns.append("easyqcid")
             else:
                 new_columns.append(f"{col[1]}.{col[2]}.{col[0]}")
         wide.columns = new_columns
-        wide["ezqcid"] = wide["ezqcid"].astype(str)
+        wide["easyqcid"] = wide["easyqcid"].astype(str)
         return wide
 
     def merge_subjects_with_rating_wide(self, rating_wide: pd.DataFrame, subjects: pd.DataFrame) -> pd.DataFrame:
@@ -780,28 +607,28 @@ class RatingService:
             return subjects.copy()
 
         subjects = subjects.copy()
-        if "ezqcid" in subjects.columns:
-            subjects["ezqcid"] = subjects["ezqcid"].astype(str)
-        if "ezqcid" in rating_wide.columns:
+        if "easyqcid" in subjects.columns:
+            subjects["easyqcid"] = subjects["easyqcid"].astype(str)
+        if "easyqcid" in rating_wide.columns:
             rating_wide = rating_wide.copy()
-            rating_wide["ezqcid"] = rating_wide["ezqcid"].astype(str)
+            rating_wide["easyqcid"] = rating_wide["easyqcid"].astype(str)
 
-        result = pd.merge(subjects, rating_wide, on="ezqcid", how="left")
+        result = pd.merge(subjects, rating_wide, on="easyqcid", how="left")
         result = result.drop(columns=[col for col in result.columns if ".code" in col or ".code_exe" in col])
 
-        score_cols = [col for col in result.columns if re.search(r"\.score\d+$", col) and col != "ezqcid"]
-        tag_cols = [col for col in result.columns if re.search(r"\.tag\d+$", col) and col != "ezqcid"]
-        notes_cols = [col for col in result.columns if re.search(r"\.notes\d+$", col) and col != "ezqcid"]
+        score_cols = [col for col in result.columns if re.search(r"\.score\d+$", col) and col != "easyqcid"]
+        tag_cols = [col for col in result.columns if re.search(r"\.tag\d+$", col) and col != "easyqcid"]
+        notes_cols = [col for col in result.columns if re.search(r"\.notes\d+$", col) and col != "easyqcid"]
         other_cols = [
             col
             for col in result.columns
-            if col != "ezqcid"
+            if col != "easyqcid"
             and not re.search(r"\.score\d+$", col)
             and not re.search(r"\.tag\d+$", col)
             and not re.search(r"\.notes\d+$", col)
         ]
 
-        return result[["ezqcid"] + score_cols + tag_cols + notes_cols + other_cols]
+        return result[["easyqcid"] + score_cols + tag_cols + notes_cols + other_cols]
 
     def _rating_to_flat_record(self, rating: Rating, path: Path | None = None) -> dict[str, Any]:
         """Flatten one rating without allocating an intermediate DataFrame."""
@@ -855,7 +682,6 @@ class RatingService:
 __all__ = [
     "LoadedRatingsState",
     "RatingIdentityConflictError",
-    "RatingLegacyConflictError",
     "RatingRaterDirectoryIndex",
     "RatingScanError",
     "RatingScanIssue",

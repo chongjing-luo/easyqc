@@ -27,26 +27,26 @@ def _service(tmp_path) -> ConfigurationService:
         "非ASCII",
     ],
 )
-def test_qc_list_rejects_invalid_ezqcid_without_cleaning_or_coercion(
+def test_qc_list_rejects_invalid_easyqcid_without_cleaning_or_coercion(
     invalid,
     tmp_path,
 ) -> None:
     service = _service(tmp_path)
     service.replace_subjects(
-        pd.DataFrame({"ezqcid": ["001", "NA"], "site": ["A", "B"]})
+        pd.DataFrame({"easyqcid": ["001", "NA"], "site": ["A", "B"]})
     )
     project = service.current_project
     assert project is not None
     table_path = service.table_service.table_path(project, TABLE_ALL)
     before = table_path.read_bytes()
 
-    with pytest.raises(ConfigurationError, match="ezqcid"):
+    with pytest.raises(ConfigurationError, match="easyqcid"):
         service.replace_subjects(
-            pd.DataFrame({"ezqcid": ["VALID", invalid]})
+            pd.DataFrame({"easyqcid": ["VALID", invalid]})
         )
 
     assert table_path.read_bytes() == before
-    assert service.subjects()["ezqcid"].tolist() == ["001", "NA"]
+    assert service.subjects()["easyqcid"].tolist() == ["001", "NA"]
 
 
 def test_qc_list_rejects_case_only_identity_collision_before_write(
@@ -56,7 +56,7 @@ def test_qc_list_rejects_case_only_identity_collision_before_write(
 
     with pytest.raises(ConfigurationError, match="case"):
         service.replace_subjects(
-            pd.DataFrame({"ezqcid": ["SUB001", "sub001"]})
+            pd.DataFrame({"easyqcid": ["SUB001", "sub001"]})
         )
 
     project = service.current_project
@@ -67,10 +67,10 @@ def test_qc_list_rejects_case_only_identity_collision_before_write(
 def test_qc_list_preserves_exact_valid_identifiers(tmp_path) -> None:
     service = _service(tmp_path)
     service.replace_subjects(
-        pd.DataFrame({"ezqcid": ["001", "NA", "01-A", "A.B_C"]})
+        pd.DataFrame({"easyqcid": ["001", "NA", "01-A", "A.B_C"]})
     )
 
-    assert service.subjects()["ezqcid"].tolist() == [
+    assert service.subjects()["easyqcid"].tolist() == [
         "001",
         "NA",
         "01-A",

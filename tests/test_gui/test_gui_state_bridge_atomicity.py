@@ -112,12 +112,12 @@ def test_tk_master_list_rejects_invalid_candidate_without_memory_mutation(
     tmp_path,
 ) -> None:
     bridge, _ = _bridge(tmp_path)
-    original = pd.DataFrame({"ezqcid": ["001", "NA"], "site": ["A", "B"]})
+    original = pd.DataFrame({"easyqcid": ["001", "NA"], "site": ["A", "B"]})
     bridge.set_all_variable_table(original)
 
     with pytest.raises(ConfigurationError, match="case"):
         bridge.set_all_variable_table(
-            pd.DataFrame({"ezqcid": ["SUB001", "sub001"]})
+            pd.DataFrame({"easyqcid": ["SUB001", "sub001"]})
         )
 
     pd.testing.assert_frame_equal(bridge.all_variable_table(), original)
@@ -127,12 +127,12 @@ def test_tk_row_merge_rejects_duplicate_identity_without_memory_mutation(
     tmp_path,
 ) -> None:
     bridge, _ = _bridge(tmp_path)
-    original = pd.DataFrame({"ezqcid": ["SUB001"], "site": ["A"]})
+    original = pd.DataFrame({"easyqcid": ["SUB001"], "site": ["A"]})
     bridge.set_all_variable_table(original)
 
-    with pytest.raises(ConfigurationError, match="重复 ezqcid"):
+    with pytest.raises(ConfigurationError, match="重复 easyqcid"):
         bridge.merge_all_variables_as_rows(
-            pd.DataFrame({"ezqcid": ["SUB001"], "site": ["B"]})
+            pd.DataFrame({"easyqcid": ["SUB001"], "site": ["B"]})
         )
 
     pd.testing.assert_frame_equal(bridge.all_variable_table(), original)

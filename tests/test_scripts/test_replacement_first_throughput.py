@@ -239,13 +239,13 @@ def test_integrated_command_emits_rereadable_bound_authority(
     assert table["source_rows"] == 6
     assert table["matched_rows"] == 3
     assert table["page_size"] == 2
-    assert table["first_window_ezqcids"] == ["SUB001", "SUB003"]
-    assert table["target_ezqcid"] == "SUB005"
+    assert table["first_window_easyqcids"] == ["SUB001", "SUB003"]
+    assert table["target_easyqcid"] == "SUB005"
     assert table["target_result_position"] == 2
     assert table["target_source_position"] == 4
     assert table["target_page_offset"] == 2
-    assert table["target_window_ezqcids"] == ["SUB005"]
-    assert table["qc_callback_ezqcids"] == ["SUB005"]
+    assert table["target_window_easyqcids"] == ["SUB005"]
+    assert table["qc_callback_easyqcids"] == ["SUB005"]
 
     report_sha256 = hashlib.sha256(report_path.read_bytes()).hexdigest()
     assert run.tests[0].report_path == "reports/integrated-seam-report.json"

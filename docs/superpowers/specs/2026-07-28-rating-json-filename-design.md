@@ -8,7 +8,7 @@ Architecture:
 ## Goal
 
 Store one latest atomic rating snapshot for each exact
-`(module_name, rater, ezqcid)` while retaining enough identity in the directory,
+`(module_name, rater, easyqcid)` while retaining enough identity in the directory,
 filename and JSON body to detect misplaced files and recover them safely.
 
 ## Identifier policy
@@ -18,17 +18,17 @@ The three values are ASCII internal IDs:
 ```regex
 module_name = ^[A-Za-z0-9_]+$
 rater       = ^[A-Za-z0-9_]+$
-ezqcid      = ^[A-Za-z0-9_.-]+$
+easyqcid      = ^[A-Za-z0-9_.-]+$
 ```
 
 - Module and rater IDs permit underscore and forbid hyphen.
-- `ezqcid` permits underscore, period and hyphen.
-- Module/rater are at most 32 ASCII characters; `ezqcid` is at most 128.
+- `easyqcid` permits underscore, period and hyphen.
+- Module/rater are at most 32 ASCII characters; `easyqcid` is at most 128.
 - Blank, path-separator, case-colliding and non-portable values fail before
-  filesystem mutation; `ezqcid` values `.` and `..` are rejected.
+  filesystem mutation; `easyqcid` values `.` and `..` are rejected.
 - Module/rater directory names must not equal Windows reserved device names.
 - The internal rater sentinel `__observation_no_rater__` is reserved.
-- Module names are case-insensitively unique within a project, `ezqcid` values
+- Module names are case-insensitively unique within a project, `easyqcid` values
   within the master list, and raters within a module. Original case is
   preserved, but case-only alternatives cannot coexist.
 - Validation checks final-component, unique atomic-temporary-component and
@@ -39,7 +39,7 @@ ezqcid      = ^[A-Za-z0-9_.-]+$
 
 ```text
 RatingFiles/<module_name>/<rater>/
-  <module_name>-<rater>-<ezqcid>.json
+  <module_name>-<rater>-<easyqcid>.json
 ```
 
 Example:
@@ -50,7 +50,7 @@ RatingFiles/AnatAll/lcj/
 ```
 
 The parser removes exactly one final `.json` and uses `split("-", 2)`.
-Additional hyphens therefore remain part of `ezqcid`.
+Additional hyphens therefore remain part of `easyqcid`.
 
 Repeating module and rater in the filename is intentional safety redundancy.
 If two module/rater directories are accidentally mixed, their files remain
@@ -59,13 +59,13 @@ distinct.
 ## Current-snapshot and identity lifecycle
 
 - One project contains at most one current file for an exact
-  `(module_name, rater, ezqcid)`.
+  `(module_name, rater, easyqcid)`.
 - Changing scores, tags, notes, time or commands overwrites the same final path.
 - Changing rater creates another rating identity.
 - A module internal name with existing ratings is not ordinarily renameable;
   its display label remains editable.
 - A removed module name remains reserved while its ratings exist.
-- Existing module, rater and `ezqcid` IDs cannot be reassigned to a different
+- Existing module, rater and `easyqcid` IDs cannot be reassigned to a different
   logical module/person/record without explicit migration.
 - Save-event history is out of scope.
 
@@ -73,7 +73,7 @@ distinct.
 
 1. Validate all identity values.
 2. Construct the exact target path without a glob.
-3. If it exists, load it and compare JSON `name/rater/ezqcid` with the requested
+3. If it exists, load it and compare JSON `name/rater/easyqcid` with the requested
    identity.
 4. Refuse to overwrite any identity mismatch.
 5. Serialize the complete legacy-compatible module snapshot with
@@ -101,7 +101,7 @@ moving anything.
 
 Every identity-producing entry point uses the same policy: module
 create/import/template copy/project load, GUI/CLI rater input, QC-list
-import/load, rating save and recovery. CSV ingestion reads `ezqcid` as text from
+import/load, rating save and recovery. CSV ingestion reads `easyqcid` as text from
 the start; it cannot let pandas infer `001` as numeric `1` and then stringify
 the already-lost value.
 
@@ -110,7 +110,7 @@ the already-lost value.
 Legacy filenames remain readable:
 
 ```text
-<module>._.<ezqcid>._.<rater>._.<score1>._.<tag1>.json
+<module>._.<easyqcid>._.<rater>._.<score1>._.<tag1>.json
 ```
 
 New saves write only the canonical form. Migration is scan/plan/apply:
@@ -148,7 +148,7 @@ path readable by the old program, so cutover retains a verified rollback backup.
 Synthetic tests cover:
 
 - accepted/rejected character sets, lengths, reserved names and case scope;
-- hyphenated `ezqcid` round-trip and leading-zero preservation from CSV;
+- hyphenated `easyqcid` round-trip and leading-zero preservation from CSV;
 - two modules/two raters mixed into one directory without filename collision;
 - exact-identity re-save to one path;
 - body-identity conflict refusing overwrite;

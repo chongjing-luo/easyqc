@@ -33,7 +33,7 @@ class QcRowContextMenu(QMenu):
             raise TypeError("QcRowContextMenu callbacks must be callable")
         self.context = context
         self.setObjectName("qcRowContextMenu")
-        self.setAccessibleName(f"质控操作：{context.ezqcid}")
+        self.setAccessibleName(f"质控操作：{context.easyqcid}")
 
         self.modules_menu = self.addMenu("质控模块")
         self.modules_menu.setObjectName("qcRowModulesMenu")

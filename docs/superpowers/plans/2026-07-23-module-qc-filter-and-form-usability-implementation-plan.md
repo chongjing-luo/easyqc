@@ -97,7 +97,7 @@ row order.
 
 - [ ] Two modules can persist different filters without modifying each other's
       payload or unrelated module fields.
-- [ ] Empty filter yields every `ezqcid` in complete-list order; grouped filters
+- [ ] Empty filter yields every `easyqcid` in complete-list order; grouped filters
       yield exactly the `TableViewService` source-position matches.
 - [ ] Invalid/zero-match launch reports a clear error; persistence failure
       leaves settings and the current project context unchanged.

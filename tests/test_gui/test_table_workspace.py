@@ -24,7 +24,7 @@ def tk_root():
 def source_frame() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002", "SUB003", "SUB004", "SUB005"],
+            "easyqcid": ["SUB001", "SUB002", "SUB003", "SUB004", "SUB005"],
             "site": ["A", "B", "A", "B", "A"],
             "score": [3.0, 1.0, 2.0, 4.0, None],
             "approved": [True, False, True, False, True],
@@ -229,7 +229,7 @@ def test_high_cardinality_membership_uses_literal_value_picker_not_query_syntax(
 ) -> None:
     frame = pd.DataFrame(
         {
-            "ezqcid": [f"SUB{i:03d}" for i in range(101)],
+            "easyqcid": [f"SUB{i:03d}" for i in range(101)],
             "score": list(range(101)),
         }
     )
@@ -237,7 +237,7 @@ def test_high_cardinality_membership_uses_literal_value_picker_not_query_syntax(
     workspace.window.update()
     workspace.begin_filter_edit()
     row = workspace.filter_rows[0]
-    row.column_var.set("ezqcid")
+    row.column_var.set("easyqcid")
     row.refresh_for_column()
 
     assert "in" in row.operator_codes
@@ -274,7 +274,7 @@ def test_selected_source_position_is_retained_outside_view_without_auto_select(
 def test_duplicate_identity_blocks_callback_with_specific_inline_error(tk_root) -> None:
     calls = []
     frame = pd.DataFrame(
-        {"ezqcid": ["DUP", "DUP", "OK"], "score": [1, 2, 3]}
+        {"easyqcid": ["DUP", "DUP", "OK"], "score": [1, 2, 3]}
     )
     workspace = TableWorkspace(tk_root, frame, on_open_qc=lambda *args: calls.append(args))
     workspace.window.update()
@@ -292,7 +292,7 @@ def test_duplicate_identity_blocks_callback_with_specific_inline_error(tk_root) 
 def test_paging_and_exact_find_jump_to_correct_row_window_and_selection(tk_root) -> None:
     frame = pd.DataFrame(
         {
-            "ezqcid": [f"SUB{i:03d}" for i in range(25)],
+            "easyqcid": [f"SUB{i:03d}" for i in range(25)],
             "score": list(range(25)),
         }
     )
@@ -344,9 +344,9 @@ def test_columns_hide_reorder_reset_and_identity_column_cannot_be_hidden(
 
     assert workspace.set_column_visibility("site", False) is True
     assert "site" in workspace.applied_state.columns.hidden
-    assert workspace.set_column_visibility("ezqcid", False) is False
-    assert "ezqcid" not in workspace.applied_state.columns.hidden
-    assert "ezqcid" in workspace.action_error_var.get()
+    assert workspace.set_column_visibility("easyqcid", False) is False
+    assert "easyqcid" not in workspace.applied_state.columns.hidden
+    assert "easyqcid" in workspace.action_error_var.get()
 
     original_order = workspace.initial_state.columns.order
     assert workspace.move_column("score", -1) is True
@@ -375,8 +375,8 @@ def test_user_resized_column_width_survives_filter_rerender_and_one_step_undo(
 @pytest.mark.parametrize(
     ("frame", "expected_fragment"),
     [
-        (pd.DataFrame({"ezqcid": [None, "OK"], "score": [1, 2]}), "empty"),
-        (pd.DataFrame({"subject": ["A", "B"], "score": [1, 2]}), "ezqcid"),
+        (pd.DataFrame({"easyqcid": [None, "OK"], "score": [1, 2]}), "empty"),
+        (pd.DataFrame({"subject": ["A", "B"], "score": [1, 2]}), "easyqcid"),
     ],
 )
 def test_blank_or_missing_qc_identity_is_rejected_without_callback(
@@ -446,7 +446,7 @@ def test_keyboard_find_escape_and_return_activation_are_available(
     workspace = _workspace(
         tk_root,
         source_frame,
-        on_open_qc=lambda ezqcid, anchor: calls.append((ezqcid, anchor)),
+        on_open_qc=lambda easyqcid, anchor: calls.append((easyqcid, anchor)),
     )
     workspace.window.focus_force()
     workspace.window.event_generate("<Control-f>")
@@ -474,7 +474,7 @@ def test_right_click_selects_exact_row_and_uses_pointer_as_qc_menu_anchor(
     workspace = _workspace(
         tk_root,
         source_frame,
-        on_open_qc=lambda ezqcid, anchor: calls.append((ezqcid, anchor)),
+        on_open_qc=lambda easyqcid, anchor: calls.append((easyqcid, anchor)),
     )
     tree = workspace.table.main_tree
     first = tree.get_children()[0]

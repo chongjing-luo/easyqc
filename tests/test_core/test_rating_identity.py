@@ -12,7 +12,7 @@ from core.rating_identity import (
     build_rating_filename,
     canonical_rating_path,
     parse_rating_filename,
-    validate_ezqcid,
+    validate_easyqcid,
     validate_module_name,
     validate_rating_identity,
     validate_rater,
@@ -29,20 +29,20 @@ def test_rating_identity_accepts_approved_characters_and_max_lengths() -> None:
     assert identity == RatingIdentity(
         module_name="M" * 32,
         rater="r_1",
-        ezqcid="SUB.001-session_1-" + ("x" * 110),
+        easyqcid="SUB.001-session_1-" + ("x" * 110),
     )
-    assert len(identity.ezqcid) == 128
+    assert len(identity.easyqcid) == 128
 
 
 def test_public_field_validators_return_the_exact_string() -> None:
     assert validate_module_name("Anat_QC") == "Anat_QC"
     assert validate_rater("Rater_01") == "Rater_01"
-    assert validate_ezqcid("SUB.001-session-1") == "SUB.001-session-1"
+    assert validate_easyqcid("SUB.001-session-1") == "SUB.001-session-1"
 
 
 @pytest.mark.parametrize(
     "validator",
-    [validate_module_name, validate_rater, validate_ezqcid],
+    [validate_module_name, validate_rater, validate_easyqcid],
 )
 def test_public_field_validators_require_str_without_coercion(validator) -> None:
     with pytest.raises(RatingIdentityError):
@@ -50,7 +50,7 @@ def test_public_field_validators_require_str_without_coercion(validator) -> None
 
 
 @pytest.mark.parametrize(
-    ("field", "module_name", "rater", "ezqcid"),
+    ("field", "module_name", "rater", "easyqcid"),
     [
         ("module_name", "", "rater", "SUB001"),
         ("module_name", "Anat-All", "rater", "SUB001"),
@@ -60,22 +60,22 @@ def test_public_field_validators_require_str_without_coercion(validator) -> None
         ("rater", "AnatAll", "rater-one", "SUB001"),
         ("rater", "AnatAll", "rater.one", "SUB001"),
         ("rater", "AnatAll", "r" * 33, "SUB001"),
-        ("ezqcid", "AnatAll", "rater", ""),
-        ("ezqcid", "AnatAll", "rater", "SUB/001"),
-        ("ezqcid", "AnatAll", "rater", "SUB 001"),
-        ("ezqcid", "AnatAll", "rater", "x" * 129),
-        ("ezqcid", "AnatAll", "rater", "."),
-        ("ezqcid", "AnatAll", "rater", ".."),
+        ("easyqcid", "AnatAll", "rater", ""),
+        ("easyqcid", "AnatAll", "rater", "SUB/001"),
+        ("easyqcid", "AnatAll", "rater", "SUB 001"),
+        ("easyqcid", "AnatAll", "rater", "x" * 129),
+        ("easyqcid", "AnatAll", "rater", "."),
+        ("easyqcid", "AnatAll", "rater", ".."),
     ],
 )
 def test_rating_identity_rejects_invalid_identifiers(
     field: str,
     module_name: str,
     rater: str,
-    ezqcid: str,
+    easyqcid: str,
 ) -> None:
     with pytest.raises(RatingIdentityError) as exc_info:
-        RatingIdentity(module_name, rater, ezqcid)
+        RatingIdentity(module_name, rater, easyqcid)
 
     assert exc_info.value.field == field
 
@@ -92,7 +92,7 @@ def test_rating_identity_rejects_windows_device_names_case_insensitively(
     values = {
         "module_name": "AnatAll",
         "rater": "reviewer",
-        "ezqcid": "SUB001",
+        "easyqcid": "SUB001",
     }
     values[field] = reserved_name
 
@@ -111,7 +111,7 @@ def test_rating_identity_rejects_reserved_observation_rater_case_insensitively()
     assert "reserved" in exc_info.value.reason
 
 
-def test_filename_round_trip_preserves_hyphens_in_ezqcid() -> None:
+def test_filename_round_trip_preserves_hyphens_in_easyqcid() -> None:
     identity = RatingIdentity("AnatAll", "rater_1", "CCNPPEK0001_01-anat-v2")
 
     filename = build_rating_filename(identity)
@@ -123,7 +123,7 @@ def test_filename_round_trip_preserves_hyphens_in_ezqcid() -> None:
 def test_parser_removes_exactly_one_final_json_suffix() -> None:
     identity = parse_rating_filename("AnatAll-rater_1-SUB001.json.json")
 
-    assert identity.ezqcid == "SUB001.json"
+    assert identity.easyqcid == "SUB001.json"
 
 
 @pytest.mark.parametrize(

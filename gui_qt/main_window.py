@@ -160,18 +160,18 @@ class QtMainWindow(QMainWindow):
         initial_source = (
             source.copy(deep=True)
             if source is not None
-            else pd.DataFrame(columns=["ezqcid"])
+            else pd.DataFrame(columns=["easyqcid"])
         )
         self.current_context = ProjectContextSnapshot(
             project_names=tuple(services.project_service.list_all()),
             project_name="",
             project_path=None,
             context_revision=0,
-            subjects=pd.DataFrame(columns=["ezqcid"]),
+            subjects=pd.DataFrame(columns=["easyqcid"]),
             constants={},
             modules=(),
             ratings=(),
-            rating_positions_by_ezqcid=MappingProxyType({}),
+            rating_positions_by_easyqcid=MappingProxyType({}),
             table_view_service=TableViewService(initial_source),
         )
         self.qc_workspace: QtQcWorkspace | None = None
@@ -443,7 +443,7 @@ class QtMainWindow(QMainWindow):
                 if self._injected_preview
                 else self._subject_data_mutation_committed
             ),
-            protected_delete_columns=("ezqcid",),
+            protected_delete_columns=("easyqcid",),
             language=self.language,
             parent=self.pre_qc_list_page,
         )
@@ -1078,7 +1078,7 @@ class QtMainWindow(QMainWindow):
         identity_set = set(identities)
         if require_current_identity and current_identity not in identity_set:
             raise ProjectContextError(
-                f"QC row ezqcid is not in the module queue: {current_identity}"
+                f"QC row easyqcid is not in the module queue: {current_identity}"
             )
         initial = (
             current_identity
@@ -1088,7 +1088,7 @@ class QtMainWindow(QMainWindow):
         workflow = self.context_service.create_qc_workflow(
             candidate_snapshot,
             module_name=module_name,
-            initial_ezqcid=initial,
+            initial_easyqcid=initial,
             navigation_ids=identities,
         )
         return module_name, snapshot.context_revision, identities, workflow
@@ -1183,7 +1183,7 @@ class QtMainWindow(QMainWindow):
 
         snapshot = self.current_context
         module_name = self._active_module_name
-        current_identity = workflow.current_ezqcid
+        current_identity = workflow.current_easyqcid
         self._qc_filter_revision += 1
         revision = self._qc_filter_revision
         transaction = _QcFilterTransaction(
@@ -1414,7 +1414,7 @@ class QtMainWindow(QMainWindow):
         self,
         module_name: str,
         *,
-        initial_ezqcid: str | None = None,
+        initial_easyqcid: str | None = None,
     ) -> bool:
         """Install the exact requested module through the existing QC factory."""
 
@@ -1439,9 +1439,9 @@ class QtMainWindow(QMainWindow):
             return self._reject_qc_launch("另一项质控名单任务仍在运行")
         snapshot = self.current_context
         preferred_identity = (
-            str(initial_ezqcid).strip()
-            if initial_ezqcid is not None
-            else (workflow.current_ezqcid if workflow is not None else "")
+            str(initial_easyqcid).strip()
+            if initial_easyqcid is not None
+            else (workflow.current_easyqcid if workflow is not None else "")
         )
         self._qc_filter_revision += 1
         revision = self._qc_filter_revision
@@ -1458,7 +1458,7 @@ class QtMainWindow(QMainWindow):
                 snapshot,
                 requested,
                 preferred_identity,
-                require_current_identity=initial_ezqcid is not None,
+                require_current_identity=initial_easyqcid is not None,
             )
 
         self.qc_filter_task_controller.submit(revision, prepare_launch)
@@ -1502,7 +1502,7 @@ class QtMainWindow(QMainWindow):
             replacement = self.context_service.create_qc_workflow(
                 self.current_context,
                 module_name=module_name,
-                initial_ezqcid=identity,
+                initial_easyqcid=identity,
                 navigation_ids=navigation,
             )
         except Exception as exc:
@@ -1537,7 +1537,7 @@ class QtMainWindow(QMainWindow):
             return
         self.start_qc_module(
             entry.module_name,
-            initial_ezqcid=identity,
+            initial_easyqcid=identity,
         )
 
     def _open_qc_row_record(
@@ -1554,7 +1554,7 @@ class QtMainWindow(QMainWindow):
         try:
             replacement = self.context_service.create_qc_record_workflow(
                 self.current_context,
-                ezqcid=entry.ezqcid,
+                easyqcid=entry.easyqcid,
                 module_name=entry.module_name,
                 rater=entry.rater,
             )

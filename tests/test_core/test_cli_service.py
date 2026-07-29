@@ -28,7 +28,7 @@ def test_resolve_qcpage_launch_uses_project_service_and_cli_rater(sample_project
     assert context.module_index == "1"
     assert context.module_name == "example"
     assert context.rater == "cli_rater"
-    assert context.ezqcid == "SUB001"
+    assert context.easyqcid == "SUB001"
     assert context.module["rater"] == "cli_rater"
     assert context.module_rater_dir == sample_project_dir / "RatingFiles" / "example" / "cli_rater"
     assert context.available_modules == ["example"]

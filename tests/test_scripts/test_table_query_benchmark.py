@@ -46,7 +46,7 @@ def test_synthetic_table_has_mixed_schema_nulls_and_bounded_text() -> None:
 
     assert first.shape == (120, 16)
     assert tuple(first.columns[: len(METADATA_COLUMNS)]) == METADATA_COLUMNS
-    assert first["ezqcid"].is_unique
+    assert first["easyqcid"].is_unique
     assert first.equals(second)
     assert all(str(first[column].dtype) == "category" for column in ("group", "marker", "site", "cohort"))
     assert isinstance(first["flag"].dtype, pd.BooleanDtype)

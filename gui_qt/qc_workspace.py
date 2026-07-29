@@ -58,7 +58,7 @@ class _QcEditorScrollArea(QScrollArea):
 class QtQcQueueModel(QAbstractTableModel):
     """Virtual read-only projection of one ordered QC queue."""
 
-    HEADERS = ("序号", "ezqcid", "评分", "标签")
+    HEADERS = ("序号", "easyqcid", "评分", "标签")
 
     def __init__(
         self,
@@ -119,7 +119,7 @@ class QtQcQueueModel(QAbstractTableModel):
 
     def visible_row_for(self, identity: str) -> int | None:
         normalized = str(identity).strip()
-        if normalized == self.workflow.current_ezqcid:
+        if normalized == self.workflow.current_easyqcid:
             return self.workflow.current_index
         return next(
             (
@@ -137,7 +137,7 @@ class QtQcQueueModel(QAbstractTableModel):
         normalized = str(identity).strip()
         row = (
             self.workflow.current_index
-            if normalized == self.workflow.current_ezqcid
+            if normalized == self.workflow.current_easyqcid
             else self.visible_row_for(normalized)
         )
         if row is None:
@@ -149,7 +149,7 @@ class QtQcQueueModel(QAbstractTableModel):
         normalized = str(identity).strip()
         row = (
             self.workflow.current_index
-            if normalized == self.workflow.current_ezqcid
+            if normalized == self.workflow.current_easyqcid
             else self.visible_row_for(normalized)
         )
         if row is not None:
@@ -556,11 +556,11 @@ class QtQcWorkspace(QWidget):
             self.notes_edit.setReadOnly(read_only or self._filter_busy)
 
             previous_identity = self.queue_model.neighbor_identity(
-                self.workflow.current_ezqcid,
+                self.workflow.current_easyqcid,
                 -1,
             )
             next_identity = self.queue_model.neighbor_identity(
-                self.workflow.current_ezqcid,
+                self.workflow.current_easyqcid,
                 1,
             )
             self._set_action_enabled(
@@ -588,7 +588,7 @@ class QtQcWorkspace(QWidget):
                 self.filter_button,
                 not self._filter_busy,
             )
-            self.queue_model.refresh_identity(self.workflow.current_ezqcid)
+            self.queue_model.refresh_identity(self.workflow.current_easyqcid)
             current_row = self.queue_model.current_visible_row()
             if current_row is None:
                 self.queue_table.clearSelection()
@@ -628,7 +628,7 @@ class QtQcWorkspace(QWidget):
             self._refresh()
             return
         self._set_error("")
-        self.queue_model.refresh_identity(self.workflow.current_ezqcid)
+        self.queue_model.refresh_identity(self.workflow.current_easyqcid)
         self.draftStateChanged.emit(True)
 
     def _tag_changed(self, key: str, checked: bool) -> None:
@@ -644,7 +644,7 @@ class QtQcWorkspace(QWidget):
             self._refresh()
             return
         self._set_error("")
-        self.queue_model.refresh_identity(self.workflow.current_ezqcid)
+        self.queue_model.refresh_identity(self.workflow.current_easyqcid)
         self.draftStateChanged.emit(True)
 
     def _notes_changed(self) -> None:
@@ -673,7 +673,7 @@ class QtQcWorkspace(QWidget):
 
     def _save_next(self) -> None:
         next_identity = self.queue_model.neighbor_identity(
-            self.workflow.current_ezqcid,
+            self.workflow.current_easyqcid,
             1,
         )
         try:
@@ -690,7 +690,7 @@ class QtQcWorkspace(QWidget):
 
     def _navigate_visible(self, delta: int) -> None:
         identity = self.queue_model.neighbor_identity(
-            self.workflow.current_ezqcid,
+            self.workflow.current_easyqcid,
             delta,
         )
         if identity is not None:

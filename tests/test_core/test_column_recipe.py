@@ -23,7 +23,7 @@ def _step(
 def test_recipe_chains_path_text_and_another_column_without_code() -> None:
     source = pd.DataFrame(
         {
-            "ezqcid": ["ROW1", "ROW2"],
+            "easyqcid": ["ROW1", "ROW2"],
             "image_path": [
                 "/data/siteA/SUB001_T1.nii.gz",
                 r"C:\data\siteB\SUB002_T2.nii.gz",
@@ -53,7 +53,7 @@ def test_recipe_chains_path_text_and_another_column_without_code() -> None:
 def test_recipe_supports_general_text_cleanup_and_boundary_extraction() -> None:
     source = pd.DataFrame(
         {
-            "ezqcid": ["ROW1", "ROW2"],
+            "easyqcid": ["ROW1", "ROW2"],
             "label": ["  id[alpha]-visit  ", " id[beta]-visit "],
         }
     )
@@ -75,7 +75,7 @@ def test_recipe_supports_general_text_cleanup_and_boundary_extraction() -> None:
 def test_recipe_supports_numeric_columns_and_structured_conditions() -> None:
     source = pd.DataFrame(
         {
-            "ezqcid": ["ROW1", "ROW2", "ROW3"],
+            "easyqcid": ["ROW1", "ROW2", "ROW3"],
             "score_text": ["1.25", "2.75", "4"],
             "scale": [2, 2, 0.5],
             "motion": [0.1, 0.25, pd.NA],
@@ -115,7 +115,7 @@ def test_recipe_supports_numeric_columns_and_structured_conditions() -> None:
 def test_recipe_error_policy_is_explicit_and_step_specific() -> None:
     source = pd.DataFrame(
         {
-            "ezqcid": ["ROW1", "ROW2"],
+            "easyqcid": ["ROW1", "ROW2"],
             "label": ["site_SUB001", "SUB002"],
         }
     )
@@ -164,7 +164,7 @@ def test_recipe_error_policy_is_explicit_and_step_specific() -> None:
 def test_conditional_error_policy_handles_only_incompatible_rows() -> None:
     source = pd.DataFrame(
         {
-            "ezqcid": ["ROW1", "ROW2"],
+            "easyqcid": ["ROW1", "ROW2"],
             "mixed": pd.Series([3, "bad"], dtype=object),
         }
     )
@@ -225,11 +225,11 @@ def test_conditional_error_policy_handles_only_incompatible_rows() -> None:
     [
         (
             ColumnRecipe(
-                name="ezqcid",
+                name="easyqcid",
                 source_column="label",
                 steps=(),
             ),
-            "ezqcid",
+            "easyqcid",
         ),
         (
             ColumnRecipe(
@@ -253,7 +253,7 @@ def test_recipe_rejects_key_overwrite_unknown_columns_and_code_like_operations(
     recipe: ColumnRecipe,
     match: str,
 ) -> None:
-    source = pd.DataFrame({"ezqcid": ["ROW1"], "label": ["alpha"]})
+    source = pd.DataFrame({"easyqcid": ["ROW1"], "label": ["alpha"]})
 
     with pytest.raises(TableTransformError, match=match):
         TableTransformEngine().derive_column_from_recipe(source, recipe)
@@ -267,7 +267,7 @@ def test_recipe_value_rejects_callable_literals() -> None:
 def test_recipe_covers_text_slice_replace_and_length_operations() -> None:
     source = pd.DataFrame(
         {
-            "ezqcid": ["ROW1", "ROW2"],
+            "easyqcid": ["ROW1", "ROW2"],
             "label": ["  Prefix-Alpha-END  ", "  Prefix-Beta-END  "],
         }
     )
@@ -292,7 +292,7 @@ def test_recipe_covers_text_slice_replace_and_length_operations() -> None:
 def test_recipe_covers_literal_boundaries_and_path_text_conveniences() -> None:
     source = pd.DataFrame(
         {
-            "ezqcid": ["ROW1", "ROW2"],
+            "easyqcid": ["ROW1", "ROW2"],
             "path": ["/data/site/A/file.nii.gz", r"C:\data\site\B\scan.txt"],
             "token": ["site=A;visit=01", "site=B;visit=02"],
         }
@@ -350,7 +350,7 @@ def test_recipe_covers_literal_boundaries_and_path_text_conveniences() -> None:
 def test_recipe_covers_arithmetic_missing_fill_and_text_conditions() -> None:
     source = pd.DataFrame(
         {
-            "ezqcid": ["ROW1", "ROW2", "ROW3"],
+            "easyqcid": ["ROW1", "ROW2", "ROW3"],
             "value": [-2, 4, pd.NA],
             "fallback": [10, 20, 30],
             "label": ["QC-pass", "review", pd.NA],
@@ -401,7 +401,7 @@ def test_recipe_covers_arithmetic_missing_fill_and_text_conditions() -> None:
     ],
 )
 def test_recipe_rejects_unknown_and_missing_step_parameters(step: RecipeStep) -> None:
-    source = pd.DataFrame({"ezqcid": ["ROW1"], "label": ["alpha"]})
+    source = pd.DataFrame({"easyqcid": ["ROW1"], "label": ["alpha"]})
     recipe = ColumnRecipe(
         name="new_value",
         source_column="label",
@@ -416,7 +416,7 @@ def test_recipe_rejects_nested_values_and_unknown_column_references() -> None:
     with pytest.raises(TypeError, match="标量"):
         RecipeStep.create("append", value={"column": "label"})
 
-    source = pd.DataFrame({"ezqcid": ["ROW1"], "label": ["alpha"]})
+    source = pd.DataFrame({"easyqcid": ["ROW1"], "label": ["alpha"]})
     recipe = ColumnRecipe(
         name="new_value",
         source_column="label",
@@ -429,7 +429,7 @@ def test_recipe_rejects_nested_values_and_unknown_column_references() -> None:
 
 def test_recipe_division_by_zero_obeys_explicit_error_policy() -> None:
     source = pd.DataFrame(
-        {"ezqcid": ["ROW1", "ROW2"], "value": [4, 8], "divisor": [2, 0]}
+        {"easyqcid": ["ROW1", "ROW2"], "value": [4, 8], "divisor": [2, 0]}
     )
     failing = ColumnRecipe(
         name="quotient",
@@ -466,7 +466,7 @@ def test_recipe_division_by_zero_obeys_explicit_error_policy() -> None:
     ],
 )
 def test_recipe_supports_typed_fixed_initial_values(value, expected) -> None:
-    source = pd.DataFrame({"ezqcid": ["ROW1", "ROW2"]})
+    source = pd.DataFrame({"easyqcid": ["ROW1", "ROW2"]})
     recipe = ColumnRecipe(
         name="fixed_value",
         initial_value=RecipeValue.literal(value),
@@ -480,7 +480,7 @@ def test_recipe_supports_typed_fixed_initial_values(value, expected) -> None:
 
 
 def test_recipe_supports_blank_fixed_start_and_later_steps() -> None:
-    source = pd.DataFrame({"ezqcid": ["ROW1", "ROW2"]})
+    source = pd.DataFrame({"easyqcid": ["ROW1", "ROW2"]})
     blank = ColumnRecipe(
         name="blank_value",
         initial_value=RecipeValue.literal(None),
@@ -514,7 +514,7 @@ def test_recipe_can_create_missing_identity_but_never_replace_existing_identity(
         {"raw_id": ["SUB001", "SUB002"], "site": ["A", "B"]}
     )
     recipe = ColumnRecipe(
-        name="ezqcid",
+        name="easyqcid",
         source_column="raw_id",
         steps=(_step("trim"),),
     )
@@ -522,6 +522,6 @@ def test_recipe_can_create_missing_identity_but_never_replace_existing_identity(
 
     created = engine.derive_column_from_recipe(source_without_identity, recipe)
 
-    assert created["ezqcid"].tolist() == ["SUB001", "SUB002"]
+    assert created["easyqcid"].tolist() == ["SUB001", "SUB002"]
     with pytest.raises(TableTransformError, match="已存在"):
         engine.derive_column_from_recipe(created, recipe)

@@ -49,36 +49,22 @@ def test_project_create_publishes_one_file_per_module(tmp_path) -> None:
     assert len(list(repository.root.glob("*.json"))) == 1
 
 
-def test_project_load_migrates_legacy_modules_then_uses_files_as_authority(
+def test_project_load_rejects_schema_v3_project_without_module_directory(
     tmp_path,
 ) -> None:
     registry = tmp_path / "projects.json"
     creator = ProjectService(registry)
     project = creator.create("SAMPLE", tmp_path)
     shutil.rmtree(project.path / "modules")
-    settings = json.loads(project.settings_path.read_text(encoding="utf-8"))
-    settings["qcmodule"]["1"]["label"] = "Legacy label"
-    FileUtils.safe_json_save(project.settings_path, settings)
+    settings_before = project.settings_path.read_bytes()
 
-    migrated_service = ProjectService(registry)
-    migrated_service.load("SAMPLE")
+    loader = ProjectService(registry)
+    with pytest.raises(ValueError, match="缺少模块目录"):
+        loader.load("SAMPLE")
 
-    repository = ModuleRepository(project.path / "modules", scope="project")
-    migrated = repository.snapshot()
-    assert migrated.errors == ()
-    assert [record.module.label for record in migrated.records] == ["Legacy label"]
-
-    record = migrated.records[0]
-    record.module.label = "File authority"
-    repository.save(record)
-    stale_settings = json.loads(project.settings_path.read_text(encoding="utf-8"))
-    stale_settings["qcmodule"]["1"]["label"] = "Stale settings snapshot"
-    FileUtils.safe_json_save(project.settings_path, stale_settings)
-
-    reloaded = ProjectService(registry)
-    reloaded.load("SAMPLE")
-
-    assert reloaded.settings["qcmodule"]["1"]["label"] == "File authority"
+    assert loader.current_project is None
+    assert project.settings_path.read_bytes() == settings_before
+    assert not (project.path / "modules").exists()
 
 
 def test_project_settings_commit_updates_module_files_and_legacy_snapshot(
@@ -279,10 +265,10 @@ def test_project_service_update_module_rejects_runtime_keys(tmp_path) -> None:
     service = ProjectService(tmp_path / "projects.json")
     service.create("SAMPLE", tmp_path)
 
-    # ezqcid/code_exe/notes/time are per-subject rating runtime state
-    with pytest.raises(ValueError) as exc_ezqcid:
-        service.update_module("example", ezqcid="SUB001")
-    assert "ezqcid" in str(exc_ezqcid.value)
+    # easyqcid/code_exe/notes/time are per-subject rating runtime state
+    with pytest.raises(ValueError) as exc_easyqcid:
+        service.update_module("example", easyqcid="SUB001")
+    assert "easyqcid" in str(exc_easyqcid.value)
 
     with pytest.raises(ValueError) as exc_notes:
         service.update_module("example", notes="hello")
@@ -298,14 +284,12 @@ def test_project_service_update_module_rejects_runtime_keys(tmp_path) -> None:
 
 
 def test_project_service_new_settings_uses_schema_version_key(tmp_path) -> None:
-    """P0-E / F-SET-9: the seed schema must use ``schema_version`` (not the
-    divergent legacy ``version`` key). Current schema version is 1 (stable after
-    the P0 data-safety wave)."""
+    """The seed settings use the sole supported schema-v3 contract."""
     service = ProjectService(tmp_path / "projects.json")
     settings = service.new_settings()
 
-    assert settings["schema_version"] == 1
-    assert "version" not in settings  # the old divergent key is gone
+    assert settings["schema_version"] == 3
+    assert "version" not in settings
 
 
 def test_project_service_save_writes_schema_version(tmp_path) -> None:
@@ -315,18 +299,14 @@ def test_project_service_save_writes_schema_version(tmp_path) -> None:
     service.save()
 
     saved = json.loads(service.current.settings_path.read_text(encoding="utf-8"))
-    assert saved["schema_version"] == 1
+    assert saved["schema_version"] == 3
 
 
-def test_project_service_load_legacy_v0_does_not_write_back(tmp_path) -> None:
-    """P0-E / AC-11 / Open Decision #4: a legacy v0 settings file (no
-    schema_version) loads without error and is NOT modified on disk by the
-    read alone. Version is written only on explicit save."""
-    # craft a v0 project dir by hand (no schema_version key, no version key)
-    project_dir = tmp_path / "easyqc_LEGACY"
+def test_project_service_rejects_settings_without_schema_v3(tmp_path) -> None:
+    project_dir = tmp_path / "easyqc_OLD"
     (project_dir / "Table").mkdir(parents=True)
     (project_dir / "RatingFiles").mkdir()
-    legacy_settings = {
+    old_settings = {
         "constants": {}, "variables": {}, "var_select_filter": None,
         "select_filter": None,
         "qcmodule": {"1": {"name": "m", "label": "m", "rater": None,
@@ -335,33 +315,33 @@ def test_project_service_load_legacy_v0_does_not_write_back(tmp_path) -> None:
                            "interper": "shell", "control": False,
                            "showing": True, "select_filter": None, "button": {}}},
     }
-    settings_path = project_dir / "settings_LEGACY.json"
-    settings_path.write_text(json.dumps(legacy_settings), encoding="utf-8")
-    mtime_before = settings_path.stat().st_mtime_ns
+    settings_path = project_dir / "settings_OLD.json"
+    settings_path.write_text(json.dumps(old_settings), encoding="utf-8")
+    bytes_before = settings_path.read_bytes()
 
     registry_path = tmp_path / "projects.json"
     service = ProjectService(registry_path)
-    service.registry.projects["LEGACY"] = Project("LEGACY", project_dir)
+    service.registry.projects["OLD"] = Project("OLD", project_dir)
     service._save_registry()
 
-    # load only — must not raise, must not rewrite the file
-    service.load("LEGACY")
+    with pytest.raises(ValueError, match="schema_version 3"):
+        service.load("OLD")
 
-    assert settings_path.stat().st_mtime_ns == mtime_before, "load must not write back"
-    on_disk = json.loads(settings_path.read_text(encoding="utf-8"))
-    assert "schema_version" not in on_disk  # still v0 on disk
+    assert service.current_project is None
+    assert settings_path.read_bytes() == bytes_before
 
 
-def test_project_service_save_preserves_higher_schema_version(tmp_path) -> None:
-    """P0-E: forward-compat — a file already at a higher schema_version is not
-    downgraded when re-saved (leave room for future v2)."""
+def test_project_service_save_rejects_non_v3_schema(tmp_path) -> None:
     service = ProjectService(tmp_path / "projects.json")
     service.create("SAMPLE", tmp_path)
-    service._settings["schema_version"] = 2  # pretend a future version
-    service.save()
+    settings_path = service.current.settings_path
+    bytes_before = settings_path.read_bytes()
+    service._settings["schema_version"] = 4
 
-    saved = json.loads(service.current.settings_path.read_text(encoding="utf-8"))
-    assert saved["schema_version"] == 2
+    with pytest.raises(ValueError, match="schema_version 3"):
+        service.save()
+
+    assert settings_path.read_bytes() == bytes_before
 
 
 def test_project_service_observer_receives_events(tmp_path) -> None:
@@ -654,13 +634,13 @@ def test_project_service_insert_module_with_dict(tmp_path) -> None:
                 "scores": {}, "tags": {}, "code": None, "code_exe": None,
                 "notes": None, "time": None, "interper": "shell",
                 "control": False, "showing": True, "select_filter": None,
-                "button": {}, "watch_mode": False, "ezqcid": None}
+                "button": {}, "watch_mode": False, "easyqcid": None}
     service.insert_module(index=2, module=external)
     assert service.module_name_exists("imported")
 
 
 def test_project_service_export_module(tmp_path) -> None:
-    """export_module writes a sanitized copy (rater/ezqcid=None)."""
+    """export_module writes a sanitized copy (rater/easyqcid=None)."""
     import json
     service = ProjectService(tmp_path / "projects.json")
     service.create("SAMPLE", tmp_path)
@@ -670,7 +650,7 @@ def test_project_service_export_module(tmp_path) -> None:
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["name"] == "example"
     assert payload["rater"] is None  # sanitized
-    assert payload["ezqcid"] is None
+    assert payload["easyqcid"] is None
 
 
 def test_project_service_module_index_by_name_returns_none_if_absent(tmp_path) -> None:

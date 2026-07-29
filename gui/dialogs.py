@@ -36,9 +36,12 @@ _T = {
     "请先选择文件": {"zh": "请先选择文件", "en": "Please select a file first"},
     "请选择文件类型": {"zh": "请选择csv、excel、txt、list文件", "en": "Please select CSV/Excel/TXT/LIST"},
     "请输入文本":   {"zh": "请输入文本",   "en": "Please enter text"},
-    "已有ezqcid列": {"zh": "表格中已有ezqcid列，无需设置", "en": "ezqcid column already exists"},
-    "设置ezqcid列": {"zh": "请选择要设置为ezqcid的列:", "en": "Select column for ezqcid:"},
-    "已有ezqcbatch列": {"zh": "表格中已有ezqcbatch列，无需设置", "en": "ezqcbatch column already exists"},
+    "已有easyqcid列": {"zh": "表格中已有easyqcid列，无需设置", "en": "easyqcid column already exists"},
+    "设置easyqcid列": {"zh": "请选择要设置为easyqcid的列:", "en": "Select column for easyqcid:"},
+    "已有easyqcbatch列": {
+        "zh": "表格中已有 easyqcbatch 列，无需设置",
+        "en": "easyqcbatch column already exists",
+    },
     "设置批次:":    {"zh": "请设置批次: ", "en": "Set batch: "},
     "变量名不能为空": {"zh": "变量名不能为空", "en": "Variable name cannot be empty"},
     "批次不能为空": {"zh": "批次不能为空", "en": "Batch cannot be empty"},
@@ -385,15 +388,19 @@ class VariableDialog(DialogBase):
         batch_entry = None
 
         df = self.gui_state.new_variable_merge_source()
-        if "ezqcid" in df.columns:
-            ttk.Label(self.dialog2, text="表格中已有ezqcid列，无需设置", font=self.app.font_13).place(x=10, y=10)
+        if "easyqcid" in df.columns:
+            ttk.Label(self.dialog2, text="表格中已有easyqcid列，无需设置", font=self.app.font_13).place(x=10, y=10)
         else:
-            ttk.Label(self.dialog2, text="请选择要设置为ezqcid的列:", font=self.app.font_13).place(x=10, y=10)
+            ttk.Label(self.dialog2, text="请选择要设置为easyqcid的列:", font=self.app.font_13).place(x=10, y=10)
             column_combo = ttk.Combobox(self.dialog2, values=list(df.columns), font=self.app.font_12, state="readonly")
             column_combo.place(x=10, y=50)
 
-        if "ezqcbatch" in df.columns:
-            ttk.Label(self.dialog2, text="表格中已有ezqcbatch列，无需设置", font=self.app.font_13).place(x=10, y=90)
+        if "easyqcbatch" in df.columns:
+            ttk.Label(
+                self.dialog2,
+                text="表格中已有 easyqcbatch 列，无需设置",
+                font=self.app.font_13,
+            ).place(x=10, y=90)
         else:
             ttk.Label(self.dialog2, text="请设置批次:", font=self.app.font_13).place(x=10, y=90)
             batch_entry = ttk.Entry(self.dialog2, font=self.app.font_12)

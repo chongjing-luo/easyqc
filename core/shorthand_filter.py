@@ -3,7 +3,7 @@
 Lets users write simple expressions instead of verbose JSON:
   filter:  "age > 30 and sex == 'F'"     → filter_rows (expression condition)
   sort:    "score desc"                   → sort_rows
-  select:  "ezqcid, age, score"           → select_columns
+  select:  "easyqcid, age, score"           → select_columns
   derive:  "total = a + b"                → derive_column
   drop:    "motion, age"                  → drop_columns
   rename:  "motion -> motion_fd"          → rename_columns

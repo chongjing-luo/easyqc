@@ -38,7 +38,7 @@ ROUND(([age] - [baseline_age]) / 12, 1)
   filesystem, network, Shell, `eval` or `exec`.
 - Formula text and intermediate state are not saved; only the final ordinary
   column is materialized through existing persistence.
-- Existing columns remain immutable. Only an import draft lacking `ezqcid` may
+- Existing columns remain immutable. Only an import draft lacking `easyqcid` may
   create that identity column.
 
 ## Language and functions
@@ -81,7 +81,7 @@ preserves all draft state; only UI descriptions translate.
 - grammar/precedence/escaping/resource/security rejection tests;
 - operator/function/null/type/error tests;
 - quick-template equivalence tests;
-- import/Pre-QC/results source and `ezqcid` tests;
+- import/Pre-QC/results source and `easyqcid` tests;
 - stale worker and bilingual Qt tests;
 - 100,000-row ≤10-second and ≤4-GiB gate;
 - no-formula-persistence and full-suite/layering tests.

@@ -53,11 +53,11 @@ class TableView:
         self,
         parent,
         table_transform: TableTransformEngine | None = None,
-        on_ezqcid_right_click: Callable[[str, object], None] | None = None,
+        on_easyqcid_right_click: Callable[[str, object], None] | None = None,
     ):
         self.parent = parent
         self.table_transform = table_transform or TableTransformEngine(max_rows=5000, max_columns=200)
-        self.on_ezqcid_right_click = on_ezqcid_right_click
+        self.on_easyqcid_right_click = on_easyqcid_right_click
         self.window = None
         self.tree = None
 
@@ -84,7 +84,7 @@ class TableView:
         return self.window
 
     def populate_tree(self, df: pd.DataFrame) -> list[str]:
-        priority_cols = ["ezqcid", "ezqcbatch"]
+        priority_cols = ["easyqcid", "easyqcbatch"]
         existing_priority_cols = [col for col in priority_cols if col in df.columns]
         if existing_priority_cols:
             other_cols = [col for col in df.columns if col not in existing_priority_cols]
@@ -104,18 +104,18 @@ class TableView:
         return columns
 
     def bind_right_click(self, columns: list[str]) -> None:
-        if self.on_ezqcid_right_click is None or "ezqcid" not in columns:
+        if self.on_easyqcid_right_click is None or "easyqcid" not in columns:
             return
 
-        ezqcid_index = columns.index("ezqcid")
+        easyqcid_index = columns.index("easyqcid")
 
         def show_right_menu(event):
             item = self.tree.identify_row(event.y)
             if not item:
                 return
             values = self.tree.item(item, "values")
-            if ezqcid_index < len(values):
-                self.on_ezqcid_right_click(values[ezqcid_index], event)
+            if easyqcid_index < len(values):
+                self.on_easyqcid_right_click(values[easyqcid_index], event)
 
         self.tree.bind("<Button-3>", show_right_menu)
         self.tree.bind("<Button-2>", show_right_menu)
@@ -158,7 +158,7 @@ class TableTransformDialog:
 
     def default_template(self, df: pd.DataFrame | None = None) -> str:
         columns = list(df.columns) if df is not None else []
-        id_column = "ezqcid" if "ezqcid" in columns else (columns[0] if columns else "ezqcid")
+        id_column = "easyqcid" if "easyqcid" in columns else (columns[0] if columns else "easyqcid")
         numeric_columns = [
             column
             for column in columns
@@ -382,10 +382,10 @@ class TableTransformDialog:
         return filter_dialog
 
 
-def open_qc_subprocess(project: str, module_name: str, rater: str, ezqcid: str) -> subprocess.Popen:
+def open_qc_subprocess(project: str, module_name: str, rater: str, easyqcid: str) -> subprocess.Popen:
     project_root = Path(__file__).parent.parent
     return subprocess.Popen(
-        [sys.executable, str(project_root / "easyqc.py"), project, module_name, rater, ezqcid],
+        [sys.executable, str(project_root / "easyqc.py"), project, module_name, rater, easyqcid],
         shell=False,
     )
 

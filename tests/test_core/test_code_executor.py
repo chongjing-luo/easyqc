@@ -14,8 +14,8 @@ def test_parse_template_replaces_legacy_variable_syntaxes() -> None:
     executor = CodeExecutor()
 
     result = executor.parse_template(
-        "open $ezqcid ${image_path} {site}",
-        {"ezqcid": "SUB001", "image_path": "/tmp/sub001.nii.gz", "site": "BNU"},
+        "open $easyqcid ${image_path} {site}",
+        {"easyqcid": "SUB001", "image_path": "/tmp/sub001.nii.gz", "site": "BNU"},
     )
 
     assert result == "open SUB001 /tmp/sub001.nii.gz BNU"
@@ -283,7 +283,7 @@ def test_validate_template_columns_reports_missing_columns() -> None:
     from core.code_executor import validate_template_columns
 
     code = "freeview {subjects_dir}/{fsrecon_dir}/{missing_col}.nii ${hcp_dir}"
-    available = {"subjects_dir", "fsrecon_dir", "hcp_dir", "ezqcid"}
+    available = {"subjects_dir", "fsrecon_dir", "hcp_dir", "easyqcid"}
 
     missing = validate_template_columns(code, available)
 

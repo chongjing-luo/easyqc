@@ -21,7 +21,7 @@ def _window() -> RowWindow:
         dataframe=pd.DataFrame(
             {
                 "site": ["A", "B"],
-                "ezqcid": ["SUB010", "SUB011"],
+                "easyqcid": ["SUB010", "SUB011"],
                 "hidden_note": ["ignore", "ignore"],
                 "score": [3.5, None],
                 "comment": [None, "review"],
@@ -36,10 +36,10 @@ def _window() -> RowWindow:
 
 def _columns() -> ColumnViewState:
     return ColumnViewState(
-        order=("site", "ezqcid", "hidden_note", "score", "comment"),
+        order=("site", "easyqcid", "hidden_note", "score", "comment"),
         hidden=("hidden_note",),
-        widths=(("site", 260), ("ezqcid", 140), ("score", 260), ("comment", 260)),
-        pinned=("ezqcid",),
+        widths=(("site", 260), ("easyqcid", 140), ("score", 260), ("comment", 260)),
+        pinned=("easyqcid",),
     )
 
 
@@ -52,7 +52,7 @@ def test_render_window_splits_pinned_and_scrolling_columns_and_formats_missing(
     table.render_window(_window(), _columns())
     tk_root.update()
 
-    assert table.pinned_tree["columns"] == ("ezqcid",)
+    assert table.pinned_tree["columns"] == ("easyqcid",)
     assert table.main_tree["columns"] == ("site", "score", "comment")
     assert len(table.pinned_tree.get_children()) == 2
     assert len(table.main_tree.get_children()) == 2
@@ -124,7 +124,7 @@ def test_vertical_scrolling_stays_synchronized_between_frozen_and_main_trees(
     window = RowWindow(
         dataframe=pd.DataFrame(
             {
-                "ezqcid": [f"SUB{i:03d}" for i in range(rows)],
+                "easyqcid": [f"SUB{i:03d}" for i in range(rows)],
                 "score": list(range(rows)),
             }
         ),
@@ -137,7 +137,7 @@ def test_vertical_scrolling_stays_synchronized_between_frozen_and_main_trees(
     table.pack(fill=tk.BOTH, expand=True)
     table.render_window(
         window,
-        ColumnViewState(order=("ezqcid", "score"), pinned=("ezqcid",)),
+        ColumnViewState(order=("easyqcid", "score"), pinned=("easyqcid",)),
     )
     tk_root.update()
 
@@ -198,7 +198,7 @@ def test_render_and_keyboard_input_do_not_mutate_window_or_source_values(tk_root
 def test_render_rejects_inconsistent_window_metadata(tk_root) -> None:
     table = WindowedTable(tk_root)
     invalid = RowWindow(
-        dataframe=pd.DataFrame({"ezqcid": ["SUB001", "SUB002"]}),
+        dataframe=pd.DataFrame({"easyqcid": ["SUB001", "SUB002"]}),
         source_positions=(4,),
         offset=0,
         limit=2,
@@ -208,5 +208,5 @@ def test_render_rejects_inconsistent_window_metadata(tk_root) -> None:
     with pytest.raises(ValueError, match="source_positions"):
         table.render_window(
             invalid,
-            ColumnViewState(order=("ezqcid",), pinned=("ezqcid",)),
+            ColumnViewState(order=("easyqcid",), pinned=("easyqcid",)),
         )

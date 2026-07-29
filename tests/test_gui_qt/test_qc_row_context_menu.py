@@ -20,7 +20,7 @@ from tests.test_gui_qt.test_qt_table_workspace import _source
 
 def _context(identity: str) -> QcRowContext:
     return QcRowContext(
-        ezqcid=identity,
+        easyqcid=identity,
         modules=(
             QcModuleMenuEntry(
                 module_name="AnatQC",
@@ -36,7 +36,7 @@ def _context(identity: str) -> QcRowContext:
         ),
         records=(
             QcRecordMenuEntry(
-                ezqcid=identity,
+                easyqcid=identity,
                 module_name="AnatQC",
                 module_label="Saved anatomical quality",
                 rater="rater1",
@@ -56,7 +56,7 @@ def test_qc_row_context_detaches_mutable_input_sequences() -> None:
     ]
     records = [
         QcRecordMenuEntry(
-            ezqcid="SUB001",
+            easyqcid="SUB001",
             module_name="AnatQC",
             module_label="Anatomical quality",
             rater="rater1",
@@ -64,7 +64,7 @@ def test_qc_row_context_detaches_mutable_input_sequences() -> None:
     ]
 
     context = QcRowContext(
-        ezqcid="SUB001",
+        easyqcid="SUB001",
         modules=modules,
         records=records,
     )
@@ -111,7 +111,7 @@ def test_shared_qc_row_menu_renders_disabled_modules_and_typed_record_actions(
 
 def test_shared_qc_row_menu_has_explanatory_disabled_empty_actions(qtbot) -> None:
     menu = QcRowContextMenu(
-        QcRowContext(ezqcid="SUB001", modules=(), records=()),
+        QcRowContext(easyqcid="SUB001", modules=(), records=()),
         on_module=lambda _entry: None,
         on_record=lambda _entry: None,
     )

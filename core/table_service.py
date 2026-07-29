@@ -10,9 +10,9 @@ import pandas as pd
 from models.project import Project
 
 
-TABLE_ALL: Final = "ezqc_all"
-TABLE_QCTABLE: Final = "ezqc_qctable"
-TABLE_QCTABLE_FILTER: Final = "ezqc_qctable_filter"
+TABLE_ALL: Final = "easyqc_all"
+TABLE_QCTABLE: Final = "easyqc_qctable"
+TABLE_QCTABLE_FILTER: Final = "easyqc_qctable_filter"
 
 
 @dataclass
@@ -32,7 +32,7 @@ class TableService:
         return pd.read_csv(
             path,
             encoding="utf-8",
-            converters={"ezqcid": lambda value: value},
+            converters={"easyqcid": lambda value: value},
         )
 
     def save_table(
@@ -66,13 +66,13 @@ class TableService:
         if not project.table_dir.exists():
             return tables
 
-        for path in project.table_dir.glob("ezqc_*.csv"):
+        for path in project.table_dir.glob("easyqc_*.csv"):
             table = self.load_table(project, path.stem)
             if table is not None:
                 tables[path.stem] = table
         return tables
 
-    def load_legacy_state_tables(
+    def load_state_tables(
         self,
         project: Project,
         module_names: list[str] | tuple[str, ...] | None = None,
@@ -88,7 +88,7 @@ class TableService:
         }
 
         if project.table_dir.exists():
-            for path in sorted(project.table_dir.glob("ezqc_*.csv")):
+            for path in sorted(project.table_dir.glob("easyqc_*.csv")):
                 table_type = path.stem
                 if table_type in {TABLE_ALL, TABLE_QCTABLE, TABLE_QCTABLE_FILTER}:
                     continue
@@ -101,7 +101,7 @@ class TableService:
 
     @staticmethod
     def module_name_from_table_type(table_type: str) -> str:
-        return table_type.removeprefix("ezqc_")
+        return table_type.removeprefix("easyqc_")
 
 
 __all__ = [

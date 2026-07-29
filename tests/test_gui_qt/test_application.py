@@ -58,7 +58,7 @@ def test_get_or_create_qapplication_reuses_instance_without_overriding_host_them
 def test_preview_window_renders_injected_core_table_and_closes_cleanly(qtbot, tmp_path):
     services = build_app_services(tmp_path / "projects.json")
     source = pd.DataFrame(
-        {"ezqcid": ["SUB001", "SUB002"], "status": ["pending", "rated"]}
+        {"easyqcid": ["SUB001", "SUB002"], "status": ["pending", "rated"]}
     )
     original = source.copy(deep=True)
 
@@ -96,7 +96,7 @@ def test_product_preview_event_loop_exits_cleanly_offscreen(tmp_path, easyqc_roo
         from gui_qt.application import run_qt_preview
 
         services = build_app_services(Path(os.environ["EASYQC_TEST_REGISTRY"]))
-        source = pd.DataFrame({"ezqcid": ["SUB001"], "status": ["pending"]})
+        source = pd.DataFrame({"easyqcid": ["SUB001"], "status": ["pending"]})
         raise SystemExit(
             run_qt_preview(
                 ["easyqc-test"],
@@ -124,7 +124,7 @@ def test_empty_preview_explains_that_no_project_table_is_connected(qtbot, tmp_pa
     services = build_app_services(tmp_path / "projects.json")
     window = build_preview_window(
         services,
-        pd.DataFrame(columns=["ezqcid", "status"]),
+        pd.DataFrame(columns=["easyqcid", "status"]),
     )
     qtbot.addWidget(window)
 
@@ -347,7 +347,7 @@ def test_qt_event_loop_shows_startup_before_constructing_and_showing_main(
         application_module.run_qt_preview(
             ["easyqc-test"],
             object(),
-            pd.DataFrame({"ezqcid": ["A"]}),
+            pd.DataFrame({"easyqcid": ["A"]}),
             startup_minimum_ms=0,
         )
         == 0

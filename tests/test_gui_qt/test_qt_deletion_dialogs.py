@@ -37,7 +37,7 @@ def test_delete_rows_dialog_rejects_empty_filter_and_emits_complete_draft(
 ) -> None:
     profiles = TableViewService(
         pd.DataFrame(
-            {"ezqcid": ["SUB001", "SUB002"], "site": ["A", "B"]}
+            {"easyqcid": ["SUB001", "SUB002"], "site": ["A", "B"]}
         )
     ).profiles
     dialog = DeleteRowsDialog(profiles, FilterExpression())
@@ -70,15 +70,15 @@ def test_delete_columns_dialog_search_preserves_checks_and_protects_identity(
     qtbot,
 ) -> None:
     dialog = DeleteColumnsDialog(
-        ("ezqcid", "site", "age", "image_path"),
-        protected_columns=("ezqcid",),
+        ("easyqcid", "site", "age", "image_path"),
+        protected_columns=("easyqcid",),
     )
     qtbot.addWidget(dialog)
     emitted = []
     dialog.deleteRequested.connect(emitted.append)
     dialog.show()
 
-    identity = dialog.item_for_column("ezqcid")
+    identity = dialog.item_for_column("easyqcid")
     assert not bool(identity.flags() & Qt.ItemIsEnabled)
     assert "受保护" in identity.text()
 
@@ -103,12 +103,12 @@ def test_delete_columns_dialog_search_preserves_checks_and_protects_identity(
 
 
 def test_delete_columns_dialog_reset_and_cancel_are_transactional(qtbot) -> None:
-    dialog = DeleteColumnsDialog(("ezqcid", "site", "age"))
+    dialog = DeleteColumnsDialog(("easyqcid", "site", "age"))
     qtbot.addWidget(dialog)
     emitted = []
     dialog.deleteRequested.connect(emitted.append)
     dialog.show()
-    dialog.item_for_column("ezqcid").setCheckState(Qt.Checked)
+    dialog.item_for_column("easyqcid").setCheckState(Qt.Checked)
     dialog.item_for_column("age").setCheckState(Qt.Checked)
 
     qtbot.mouseClick(dialog.reset_button, Qt.LeftButton)

@@ -46,7 +46,7 @@ def _module(*, rater="rater1", watch_mode=False):
         "name": "AnatQC",
         "label": "Anatomical quality",
         "rater": rater,
-        "ezqcid": None,
+        "easyqcid": None,
         "watch_mode": watch_mode,
         "tags": {"1": {"label": "Motion", "value": False}},
         "scores": {
@@ -79,7 +79,7 @@ def _workflow(
     module=None,
     executor=None,
     subjects=None,
-    initial_ezqcid=None,
+    initial_easyqcid=None,
     initial_read_only=False,
 ):
     return QcWorkflowService(
@@ -87,11 +87,11 @@ def _workflow(
         subjects
         if subjects is not None
         else pd.DataFrame(
-            {"ezqcid": ["SUB001", "SUB002"], "image": ["one.nii", "two.nii"]}
+            {"easyqcid": ["SUB001", "SUB002"], "image": ["one.nii", "two.nii"]}
         ),
         rating_dir=_rating_dir(tmp_path),
         code_executor=executor or _FakeExecutor(),
-        initial_ezqcid=initial_ezqcid,
+        initial_easyqcid=initial_easyqcid,
         initial_read_only=initial_read_only,
     )
 
@@ -122,7 +122,7 @@ def test_compact_qc_controller_is_top_level_with_exact_table_and_action_order(
     assert [
         workspace.queue_model.headerData(column, Qt.Horizontal, Qt.DisplayRole)
         for column in range(workspace.queue_model.columnCount())
-    ] == ["序号", "ezqcid", "评分", "标签"]
+    ] == ["序号", "easyqcid", "评分", "标签"]
     assert workspace.queue_table.editTriggers() == QAbstractItemView.NoEditTriggers
     assert workspace.queue_table.selectionBehavior() == QAbstractItemView.SelectRows
     assert workspace.queue_table.verticalScrollBarPolicy() == Qt.ScrollBarAlwaysOn
@@ -233,7 +233,7 @@ def test_qc_controller_switches_language_without_losing_unsaved_rating(
         assert [
             workspace.queue_model.headerData(column, Qt.Horizontal, Qt.DisplayRole)
             for column in range(workspace.queue_model.columnCount())
-        ] == ["No.", "ezqcid", "Rating", "Tags"]
+        ] == ["No.", "easyqcid", "Rating", "Tags"]
         assert [control.text() for control in workspace.action_controls] == [
             "Read only",
             "Filter list",
@@ -298,10 +298,10 @@ def test_qc_queue_model_keeps_100k_prepared_queue_rows_virtual_without_local_fil
     identities = [f"QC-{index:06d}" for index in range(100_000)]
     workflow = _workflow(
         tmp_path,
-        initial_ezqcid=identities[-1],
+        initial_easyqcid=identities[-1],
         subjects=pd.DataFrame(
             {
-                "ezqcid": identities,
+                "easyqcid": identities,
                 "image": [f"image-{index}.nii" for index in range(100_000)],
             }
         ),
@@ -330,7 +330,7 @@ def test_queue_double_click_and_previous_stay_inside_prepared_workflow_queue(
     executor = _FakeExecutor()
     subjects = pd.DataFrame(
         {
-            "ezqcid": ["B-001", "B-002"],
+            "easyqcid": ["B-001", "B-002"],
             "image": ["b1.nii", "b2.nii"],
         }
     )
@@ -343,7 +343,7 @@ def test_queue_double_click_and_previous_stay_inside_prepared_workflow_queue(
 
     workspace.queue_table.doubleClicked.emit(workspace.queue_model.index(1, 1))
 
-    assert workspace.workflow.current_ezqcid == "B-002"
+    assert workspace.workflow.current_easyqcid == "B-002"
     assert executor.started[-1][0] == {0: "freeview b2.nii"}
 
     assert workspace.queue_model.rowCount() == 2
@@ -355,7 +355,7 @@ def test_queue_double_click_and_previous_stay_inside_prepared_workflow_queue(
         for row in range(2)
     ] == ["B-001", "B-002"]
     qtbot.mouseClick(workspace.previous_button, Qt.LeftButton)
-    assert workspace.workflow.current_ezqcid == "B-001"
+    assert workspace.workflow.current_easyqcid == "B-001"
     assert executor.started[-1][0] == {0: "freeview b1.nii"}
 
 
@@ -395,7 +395,7 @@ def test_dirty_draft_rejects_structured_filter_request_without_changing_queue(
 
     assert requests == []
     assert workspace.queue_model.rowCount() == 2
-    assert workspace.workflow.current_ezqcid == "SUB001"
+    assert workspace.workflow.current_easyqcid == "SUB001"
     assert workspace.workflow.dirty
     assert "请先保存" in workspace.error_text
 
@@ -408,7 +408,7 @@ def test_prepared_queue_save_next_stays_inside_workflow_identities(
     executor = _FakeExecutor()
     subjects = pd.DataFrame(
         {
-            "ezqcid": ["B-001", "B-002"],
+            "easyqcid": ["B-001", "B-002"],
             "image": ["b1.nii", "b2.nii"],
         }
     )
@@ -417,11 +417,11 @@ def test_prepared_queue_save_next_stays_inside_workflow_identities(
     )
     qtbot.addWidget(controller)
     workspace = controller.workspace
-    assert workspace.workflow.current_ezqcid == "B-001"
+    assert workspace.workflow.current_easyqcid == "B-001"
     qtbot.mouseClick(workspace.score_buttons["1"]["Good"], Qt.LeftButton)
     qtbot.mouseClick(workspace.save_next_button, Qt.LeftButton)
 
-    assert workspace.workflow.current_ezqcid == "B-002"
+    assert workspace.workflow.current_easyqcid == "B-002"
     assert list(_rating_dir(tmp_path).glob("AnatQC-rater1-B-001.json"))
     assert executor.started[-1][0] == {0: "freeview b2.nii"}
 
@@ -432,7 +432,7 @@ def test_prepared_queue_save_next_stays_inside_workflow_identities(
         lambda: (_ for _ in ()).throw(OSError("disk unavailable")),
     )
     qtbot.mouseClick(workspace.save_button, Qt.LeftButton)
-    assert workspace.workflow.current_ezqcid == "B-002"
+    assert workspace.workflow.current_easyqcid == "B-002"
     assert "disk unavailable" in workspace.error_text
 
 
@@ -558,7 +558,7 @@ def test_qt_qc_editor_saves_full_draft_then_advances(qtbot, tmp_path) -> None:
     workspace.notes_edit.setPlainText("Looks good")
     qtbot.mouseClick(workspace.save_next_button, Qt.LeftButton)
 
-    assert workflow.current_ezqcid == "SUB002"
+    assert workflow.current_easyqcid == "SUB002"
     assert list(_rating_dir(tmp_path).glob("AnatQC-rater1-SUB001.json"))
     assert workspace.queue_model.current_visible_row() == 1
     assert workspace.queue_table.currentIndex().row() == 1
@@ -581,7 +581,7 @@ def test_qt_failed_save_stays_on_current_subject_and_shows_error(qtbot, tmp_path
     monkeypatch.setattr(workflow, "save", fail)
     qtbot.mouseClick(workspace.save_next_button, Qt.LeftButton)
 
-    assert workflow.current_ezqcid == "SUB001"
+    assert workflow.current_easyqcid == "SUB001"
     assert workflow.dirty
     assert workspace.score_buttons["1"]["Good"].isChecked()
     assert "disk unavailable" in workspace.error_text
@@ -620,7 +620,7 @@ def test_qt_qc_workspace_resizes_with_long_text_and_keyboard_actions(
     module["tags"]["1"]["label"] = "需要人工复核的长标签_" + "复核" * 18
     subjects = pd.DataFrame(
         {
-            "ezqcid": ["SUBJECT_" + "A" * 20, "SUBJECT_" + "B" * 20],
+            "easyqcid": ["SUBJECT_" + "A" * 20, "SUBJECT_" + "B" * 20],
             "image": [
                 "/含 空格/中文路径/" + "深层目录/" * 12 + "one.nii",
                 "/含 空格/中文路径/" + "深层目录/" * 12 + "two.nii",
@@ -649,7 +649,7 @@ def test_qt_qc_workspace_resizes_with_long_text_and_keyboard_actions(
     assert workspace.queue_table.model().data(
         workspace.queue_table.model().index(0, 1),
         Qt.DisplayRole,
-    ) == subjects.iloc[0]["ezqcid"]
+    ) == subjects.iloc[0]["easyqcid"]
 
     actions = (
         workspace.previous_action,
@@ -682,7 +682,7 @@ def test_qc_layout_reserves_eight_rows_and_gives_added_height_to_queue(
 ) -> None:
     subjects = pd.DataFrame(
         {
-            "ezqcid": [f"SUB{index:03d}" for index in range(12)],
+            "easyqcid": [f"SUB{index:03d}" for index in range(12)],
             "image": [f"{index}.nii" for index in range(12)],
         }
     )
@@ -796,10 +796,11 @@ def test_qt_schema_drift_shows_reused_legacy_score_then_restores_editing(
     target = _rating_dir(tmp_path)
     target.mkdir(parents=True)
     saved = _module()
-    saved.update({"ezqcid": "SUB001", "rater": "rater1"})
+    saved.update({"easyqcid": "SUB001", "rater": "rater1"})
+    saved["schema_version"] = 3
     saved["scores"]["1"]["num_"] = "Reject,Accept"
     saved["scores"]["1"]["value"] = "Accept"
-    (target / "AnatQC._.SUB001._.rater1._.Accept._.False.json").write_text(
+    (target / "AnatQC-rater1-SUB001.json").write_text(
         json.dumps(saved), encoding="utf-8"
     )
 
@@ -848,10 +849,11 @@ def test_qt_module_watch_survives_schema_case_navigation(qtbot, tmp_path) -> Non
     target = _rating_dir(tmp_path)
     target.mkdir(parents=True)
     saved = _module(watch_mode=True)
-    saved.update({"ezqcid": "SUB001", "rater": "rater1"})
+    saved.update({"easyqcid": "SUB001", "rater": "rater1"})
+    saved["schema_version"] = 3
     saved["scores"]["1"]["num_"] = "Reject,Accept"
     saved["scores"]["1"]["value"] = "Accept"
-    (target / "AnatQC._.SUB001._.rater1._.Accept._.False.json").write_text(
+    (target / "AnatQC-rater1-SUB001.json").write_text(
         json.dumps(saved), encoding="utf-8"
     )
 

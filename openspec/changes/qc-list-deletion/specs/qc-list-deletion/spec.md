@@ -11,7 +11,7 @@ separately applies a valid draft.
 
 The system SHALL delete exact selected identities or exact selected ordinary
 columns from the authoritative Pre-QC list through validated atomic
-persistence. It SHALL reject deletion of `ezqcid`, missing targets and stale
+persistence. It SHALL reject deletion of `easyqcid`, missing targets and stale
 targets before publishing success.
 
 ## Rating-retention contract

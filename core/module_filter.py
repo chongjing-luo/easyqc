@@ -120,7 +120,7 @@ def _module_filter_columns(
     if not isinstance(expression, FilterExpression):
         return tuple(subjects.columns)
 
-    requested = ["ezqcid"]
+    requested = ["easyqcid"]
     for group in expression.groups:
         if not isinstance(group, FilterGroup):
             return tuple(subjects.columns)

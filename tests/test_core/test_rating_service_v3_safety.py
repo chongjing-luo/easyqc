@@ -1,3 +1,5 @@
+"""Strict schema-v3 rating safety tests."""
+
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -19,14 +21,14 @@ from models.rating import Rating
 def _rating(
     module_name: str = "AnatQC",
     rater: str = "rater_1",
-    ezqcid: str = "SUB001-session-1",
+    easyqcid: str = "SUB001-session-1",
 ) -> Rating:
     return Rating.from_legacy_dict(
         {
             "name": module_name,
             "label": "Anatomical QC",
             "rater": rater,
-            "ezqcid": ezqcid,
+            "easyqcid": easyqcid,
             "scores": {"1": {"label": "Overall", "value": "Good"}},
             "tags": {"1": {"label": "Review", "value": False}},
             "notes": None,
@@ -45,6 +47,12 @@ def _project(tmp_path: Path) -> Project:
     return Project("SYNTHETIC", tmp_path / "easyqc_SYNTHETIC")
 
 
+def _current_payload(rating: Rating) -> dict:
+    payload = rating.to_legacy_dict()
+    payload["schema_version"] = 3
+    return payload
+
+
 def test_save_holds_writer_lock_across_collision_guard_and_publish(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -58,7 +66,7 @@ def test_save_holds_writer_lock_across_collision_guard_and_publish(
     )
     target.parent.mkdir(parents=True)
     target.write_text(
-        json.dumps(rating.to_legacy_dict(), ensure_ascii=False),
+        json.dumps(_current_payload(rating), ensure_ascii=False),
         encoding="utf-8",
     )
     events: list[str] = []
@@ -72,29 +80,19 @@ def test_save_holds_writer_lock_across_collision_guard_and_publish(
         finally:
             events.append("lock_exit")
 
-    def guarded_legacy_lookup(*_args) -> list[Path]:
-        assert events == ["lock_enter"]
-        events.append("legacy_guard")
-        return []
-
     def guarded_load(path: Path) -> Rating:
         assert path == target
-        assert events == ["lock_enter", "legacy_guard"]
+        assert events == ["lock_enter"]
         events.append("body_guard")
         return rating
 
     def guarded_publish(path: Path, payload: dict) -> None:
         assert path == target
-        assert payload["schema_version"] == 2
-        assert events == ["lock_enter", "legacy_guard", "body_guard"]
+        assert payload["schema_version"] == 3
+        assert events == ["lock_enter", "body_guard"]
         events.append("publish")
 
     monkeypatch.setattr("core.rating_service.rating_write_lock", fake_writer_lock)
-    monkeypatch.setattr(
-        RatingService,
-        "_legacy_files_for_identity",
-        staticmethod(guarded_legacy_lookup),
-    )
     monkeypatch.setattr("core.rating_service._load_rating_file", guarded_load)
     monkeypatch.setattr(
         "core.rating_service.FileUtils.safe_json_save",
@@ -104,7 +102,6 @@ def test_save_holds_writer_lock_across_collision_guard_and_publish(
     assert service.save_rating(rating) == target
     assert events == [
         "lock_enter",
-        "legacy_guard",
         "body_guard",
         "publish",
         "lock_exit",
@@ -124,7 +121,7 @@ def test_find_rating_files_rejects_corrupt_candidate_instead_of_returning_it(
         RatingService.find_rating_files_in_rater_dir(
             target.parent,
             identity.module_name,
-            identity.ezqcid,
+            identity.easyqcid,
             identity.rater,
         )
 
@@ -134,81 +131,11 @@ def test_find_rating_files_rejects_corrupt_candidate_instead_of_returning_it(
     assert "Expecting property name" in str(exc_info.value)
 
 
-def test_load_legacy_rating_file_requires_path_body_identity_agreement(
-    tmp_path: Path,
-) -> None:
-    project = _project(tmp_path)
-    declared = _rating(ezqcid="OTHER")
-    requested_path = (
-        project.rating_dir
-        / "AnatQC"
-        / "rater_1"
-        / "AnatQC._.SUB001._.rater_1._.Good._.False.json"
-    )
-    requested_path.parent.mkdir(parents=True)
-    requested_path.write_text(
-        json.dumps(declared.to_legacy_dict(), ensure_ascii=False),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(RatingScanError) as exc_info:
-        RatingService.load_legacy_rating_file(requested_path)
-
-    assert exc_info.value.result.errors[0].path == requested_path
-    assert exc_info.value.result.errors[0].code == "path_identity_mismatch"
-
-
-def test_legacy_ezqcid_containing_delimiter_is_decoded_from_json_identity(
-    tmp_path: Path,
-) -> None:
-    project = _project(tmp_path)
-    declared = _rating(ezqcid="SUB._.001")
-    legacy_path = (
-        project.rating_dir
-        / "AnatQC"
-        / "rater_1"
-        / "AnatQC._.SUB._.001._.rater_1._.Good._.False.json"
-    )
-    legacy_path.parent.mkdir(parents=True)
-    legacy_path.write_text(
-        json.dumps(declared.to_legacy_dict(), ensure_ascii=False),
-        encoding="utf-8",
-    )
-
-    loaded = RatingService(project).load_rating(legacy_path)
-
-    assert loaded.ezqcid == "SUB._.001"
-
-
-def test_legacy_body_identity_must_match_the_complete_filename_prefix(
-    tmp_path: Path,
-) -> None:
-    project = _project(tmp_path)
-    declared = _rating(ezqcid="SUB._.001")
-    legacy_path = (
-        project.rating_dir
-        / "AnatQC"
-        / "rater_1"
-        / "AnatQC._.SUB._.001._.other_rater._.Good._.False.json"
-    )
-    legacy_path.parent.mkdir(parents=True)
-    legacy_path.write_text(
-        json.dumps(declared.to_legacy_dict(), ensure_ascii=False),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(RatingScanError) as exc_info:
-        RatingService(project).load_rating(legacy_path)
-
-    assert exc_info.value.result.errors[0].path == legacy_path
-    assert exc_info.value.result.errors[0].code == "path_identity_mismatch"
-
-
 def test_project_scan_rejects_rating_below_an_extra_directory_level(
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)
-    declared = _rating(ezqcid="SUB001")
+    declared = _rating(easyqcid="SUB001")
     nested_path = (
         project.rating_dir
         / "unexpected"
@@ -218,7 +145,7 @@ def test_project_scan_rejects_rating_below_an_extra_directory_level(
     )
     nested_path.parent.mkdir(parents=True)
     nested_path.write_text(
-        json.dumps(declared.to_legacy_dict(), ensure_ascii=False),
+        json.dumps(_current_payload(declared), ensure_ascii=False),
         encoding="utf-8",
     )
 
@@ -273,14 +200,14 @@ def test_save_rejects_case_variant_json_suffix_before_writing(
 ) -> None:
     project = _project(tmp_path)
     service = RatingService(project)
-    rating = _rating(ezqcid="SUB001")
+    rating = _rating(easyqcid="SUB001")
     canonical = canonical_rating_path(
         project.rating_dir,
         RatingIdentity("AnatQC", "rater_1", "SUB001"),
     )
     case_variant = canonical.with_suffix(".JSON")
     case_variant.parent.mkdir(parents=True)
-    original = json.dumps(rating.to_legacy_dict(), ensure_ascii=False)
+    original = json.dumps(_current_payload(rating), ensure_ascii=False)
     case_variant.write_text(original, encoding="utf-8")
 
     with pytest.raises(RatingIdentityConflictError):
@@ -296,12 +223,12 @@ def test_scan_reports_casefold_identity_collision(tmp_path: Path) -> None:
     upper_rating = _rating(
         module_name="AnatQC",
         rater="Rater_1",
-        ezqcid="SUB001",
+        easyqcid="SUB001",
     )
     lower_rating = _rating(
         module_name="anatqc",
         rater="rater_1",
-        ezqcid="sub001",
+        easyqcid="sub001",
     )
     upper = canonical_rating_path(
         project.rating_dir,
@@ -314,7 +241,7 @@ def test_scan_reports_casefold_identity_collision(tmp_path: Path) -> None:
     for path, rating in ((upper, upper_rating), (lower, lower_rating)):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-            json.dumps(rating.to_legacy_dict(), ensure_ascii=False),
+            json.dumps(_current_payload(rating), ensure_ascii=False),
             encoding="utf-8",
         )
 

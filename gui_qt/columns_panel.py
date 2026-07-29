@@ -132,12 +132,12 @@ class ColumnsPanel(QWidget):
                 "列不能同时隐藏和固定："
                 + ", ".join(sorted(hidden_pinned))
             )
-        if "ezqcid" in order and (
-            order[0] != "ezqcid"
-            or "ezqcid" not in pinned_set
-            or "ezqcid" in hidden_set
+        if "easyqcid" in order and (
+            order[0] != "easyqcid"
+            or "easyqcid" not in pinned_set
+            or "easyqcid" in hidden_set
         ):
-            raise ValueError("ezqcid 必须保持在第一列、可见且固定")
+            raise ValueError("easyqcid 必须保持在第一列、可见且固定")
         if set(order[: len(pinned_set)]) != pinned_set:
             raise ValueError("固定列必须组成连续的前置列区")
         self._widths = state.widths
@@ -223,8 +223,8 @@ class ColumnsPanel(QWidget):
         if row < 0 or delta not in {-1, 1}:
             return False
         column = str(self.list_widget.item(row).data(COLUMN_ROLE))
-        if column == "ezqcid":
-            self.set_error("ezqcid 必须保持为第一列")
+        if column == "easyqcid":
+            self.set_error("easyqcid 必须保持为第一列")
             return False
         target = self._target_row(row, delta)
         if target is None:
@@ -258,8 +258,8 @@ class ColumnsPanel(QWidget):
             return False
         item = self.list_widget.item(row)
         column = str(item.data(COLUMN_ROLE))
-        if column == "ezqcid":
-            self.set_error("ezqcid must remain pinned")
+        if column == "easyqcid":
+            self.set_error("easyqcid must remain pinned")
             return False
         item = self.list_widget.takeItem(row)
         self._configure_item(item, column, pinned=False)
@@ -275,7 +275,7 @@ class ColumnsPanel(QWidget):
     def _has_identity(self) -> bool:
         return bool(
             self.list_widget.count()
-            and self.list_widget.item(0).data(COLUMN_ROLE) == "ezqcid"
+            and self.list_widget.item(0).data(COLUMN_ROLE) == "easyqcid"
         )
 
     def _refresh_search(self, query: str) -> None:
@@ -300,13 +300,13 @@ class ColumnsPanel(QWidget):
         column = str(item.data(COLUMN_ROLE))
         pinned = bool(item.data(PINNED_ROLE))
         self.move_up_button.setEnabled(
-            column != "ezqcid" and self._target_row(row, -1) is not None
+            column != "easyqcid" and self._target_row(row, -1) is not None
         )
         self.move_down_button.setEnabled(
-            column != "ezqcid" and self._target_row(row, 1) is not None
+            column != "easyqcid" and self._target_row(row, 1) is not None
         )
         self.pin_button.setEnabled(not pinned)
-        self.unpin_button.setEnabled(pinned and column != "ezqcid")
+        self.unpin_button.setEnabled(pinned and column != "easyqcid")
 
 
 __all__ = ["ColumnsPanel"]

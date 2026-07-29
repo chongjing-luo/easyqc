@@ -31,24 +31,24 @@ def test_validate_safe_names_reject_path_traversal() -> None:
 
 
 def test_validate_transform_operation_checks_required_fields() -> None:
-    assert validate_transform_operation({"operation": "select_columns", "columns": ["ezqcid"]})
+    assert validate_transform_operation({"operation": "select_columns", "columns": ["easyqcid"]})
     assert validate_transform_operation(
         {"operation": "derive_column", "name": "qc_pass", "expression": "score >= 3"}
     )
     assert validate_transform_operation(
-        {"operation": "merge_tables", "right": object(), "on": ["ezqcid"], "how": "left"}
+        {"operation": "merge_tables", "right": object(), "on": ["easyqcid"], "how": "left"}
     )
     assert validate_transform_operation(
         {"operation": "aggregate", "group_by": ["site"], "metrics": {"score": ["mean"]}}
     )
 
     assert not validate_transform_operation({"operation": "select_columns"})
-    assert not validate_transform_operation({"operation": "select_columns", "columns": "ezqcid"})
+    assert not validate_transform_operation({"operation": "select_columns", "columns": "easyqcid"})
     assert not validate_transform_operation({"operation": "filter_rows", "conditions": ["bad"]})
     assert not validate_transform_operation({"operation": "sort_rows", "sort_keys": [{"ascending": True}]})
     assert not validate_transform_operation({"operation": "derive_column", "name": "qc_pass"})
     assert not validate_transform_operation({"operation": "rename_columns", "mapping": {"old": ""}})
-    assert not validate_transform_operation({"operation": "merge_tables", "on": ["ezqcid"], "how": "left"})
-    assert not validate_transform_operation({"operation": "merge_tables", "on": ["ezqcid"], "how": "cross"})
+    assert not validate_transform_operation({"operation": "merge_tables", "on": ["easyqcid"], "how": "left"})
+    assert not validate_transform_operation({"operation": "merge_tables", "on": ["easyqcid"], "how": "cross"})
     assert not validate_transform_operation({"operation": "aggregate", "group_by": ["site"], "metrics": {"score": "mean"}})
     assert not validate_transform_operation({"operation": "unknown"})

@@ -4,10 +4,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from core.rating_service import (
-    RatingLegacyConflictError,
-    RatingService,
-)
+from core.rating_service import RatingService
 from models.project import Project
 from models.qcmodule import QCModule
 from models.rating import Rating
@@ -17,10 +14,10 @@ def _project(project_dir: Path) -> Project:
     return Project("SAMPLE", project_dir)
 
 
-def _synthetic_legacy_rating(
+def _synthetic_rating(
     module_name: str,
     rater: str,
-    ezqcid: str,
+    easyqcid: str,
     score1: str,
     score2: str,
     tag1: bool,
@@ -30,7 +27,7 @@ def _synthetic_legacy_rating(
             "name": module_name,
             "label": module_name,
             "rater": rater,
-            "ezqcid": ezqcid,
+            "easyqcid": easyqcid,
             "scores": {
                 "1": {"label": "overall", "num": "1-5", "num_": "1,2,3,4,5", "value": score1},
                 "2": {"label": "artifact", "num": "1-3", "num_": "1,2,3", "value": score2},
@@ -38,7 +35,7 @@ def _synthetic_legacy_rating(
             "tags": {
                 "1": {"label": "needs_review", "value": tag1},
             },
-            "notes": f"{module_name}/{rater}/{ezqcid}",
+            "notes": f"{module_name}/{rater}/{easyqcid}",
             "code": "freeview $image",
             "code_exe": {"1": "freeview /tmp/example.nii.gz"},
             "interper": "shell",
@@ -65,7 +62,7 @@ def test_rating_service_rejects_mismatched_directory(tmp_path, fixtures_dir: Pat
         / "sample_ratings"
         / "example"
         / "rater1"
-        / "example._.SUB001._.rater1._.Good._.True.json"
+        / "example-rater1-SUB001.json"
     )
     target = bad_dir / source.name
     target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
@@ -84,11 +81,11 @@ def test_rating_service_loads_rating_and_builds_dict(sample_project_dir: Path) -
 
 def test_rating_service_aggregate_matches_legacy_wide_shape(sample_project_dir: Path) -> None:
     service = RatingService(_project(sample_project_dir))
-    subjects = pd.read_csv(sample_project_dir / "Table" / "ezqc_all.csv")
+    subjects = pd.read_csv(sample_project_dir / "Table" / "easyqc_all.csv")
 
     result = service.aggregate_to_wide(service.load_all_ratings(), subjects)
 
-    assert result.loc[0, "ezqcid"] == "SUB001"
+    assert result.loc[0, "easyqcid"] == "SUB001"
     assert result.loc[0, "example.rater1.score1"] == "Good"
     assert result.loc[0, "example.rater1.tag1"] is True
     assert "example.rater1.code" not in result.columns
@@ -100,21 +97,21 @@ def test_rating_service_handles_multi_module_multi_rater_synthetic_project(tmp_p
     subject_ids = [f"SUB{index:03d}" for index in range(30)]
     subjects = pd.DataFrame(
         {
-            "ezqcid": subject_ids,
+            "easyqcid": subject_ids,
             "site": [f"site{index % 3}" for index in range(len(subject_ids))],
         }
     )
     modules = ["Anat", "Rest", "Surface"]
     raters = ["r1", "r2", "r3"]
 
-    for subject_index, ezqcid in enumerate(subject_ids):
+    for subject_index, easyqcid in enumerate(subject_ids):
         for module_index, module_name in enumerate(modules):
             for rater_index, rater in enumerate(raters):
                 service.save_rating(
-                    _synthetic_legacy_rating(
+                    _synthetic_rating(
                         module_name,
                         rater,
-                        ezqcid,
+                        easyqcid,
                         score1=str((subject_index + module_index + rater_index) % 5 + 1),
                         score2=str(subject_index % 3 + 1),
                         tag1=(subject_index + module_index) % 2 == 0,
@@ -122,7 +119,7 @@ def test_rating_service_handles_multi_module_multi_rater_synthetic_project(tmp_p
                 )
 
     replacement = service.save_rating(
-        _synthetic_legacy_rating("Anat", "r1", "SUB000", score1="5", score2="3", tag1=True)
+        _synthetic_rating("Anat", "r1", "SUB000", score1="5", score2="3", tag1=True)
     )
 
     files_for_replaced_rating = list(
@@ -141,45 +138,33 @@ def test_rating_service_handles_multi_module_multi_rater_synthetic_project(tmp_p
         "Surface.r3.tag1",
     }.issubset(result.columns)
     assert not any(".code" in column or ".code_exe" in column for column in result.columns)
-    assert result.loc[result["ezqcid"] == "SUB000", "Anat.r1.score1"].iloc[0] == "5"
-    assert result.loc[result["ezqcid"] == "SUB010", "Rest.r2.score1"].iloc[0] == "3"
-    assert result.loc[result["ezqcid"] == "SUB010", "site"].iloc[0] == "site1"
+    assert result.loc[result["easyqcid"] == "SUB000", "Anat.r1.score1"].iloc[0] == "5"
+    assert result.loc[result["easyqcid"] == "SUB010", "Rest.r2.score1"].iloc[0] == "3"
+    assert result.loc[result["easyqcid"] == "SUB010", "site"].iloc[0] == "site1"
 
 
-def test_rating_service_loads_legacy_gui_state(sample_project_dir: Path) -> None:
+def test_rating_service_loads_current_gui_state(sample_project_dir: Path) -> None:
     service = RatingService(_project(sample_project_dir))
-    subjects = pd.read_csv(sample_project_dir / "Table" / "ezqc_all.csv")
+    subjects = pd.read_csv(sample_project_dir / "Table" / "easyqc_all.csv")
 
-    state = service.load_legacy_state(subjects)
+    state = service.load_state(subjects)
 
     assert len(state.ratings) == 1
     assert state.rating_dict["SUB001"]["example-rater1"]["scores"]["1"]["value"] == "Good"
-    assert state.qctable.loc[0, "ezqcid"] == "SUB001"
+    assert state.qctable.loc[0, "easyqcid"] == "SUB001"
     assert state.qctable.loc[0, "example.rater1.score1"] == "Good"
-    assert state.original_table.loc[0, "filename"].startswith("example._.SUB001")
+    assert state.original_table.loc[0, "filename"] == "example-rater1-SUB001.json"
     assert state.original_table.loc[0, "filepath"].endswith(".json")
-    assert state.original_wide_table.loc[0, "example.rater1.filename"].startswith("example._.SUB001")
+    assert (
+        state.original_wide_table.loc[0, "example.rater1.filename"]
+        == "example-rater1-SUB001.json"
+    )
 
 
-def test_rating_service_refuses_to_replace_legacy_file_implicitly(tmp_path, fixtures_dir: Path) -> None:
-    settings = json.loads((fixtures_dir / "sample_settings.json").read_text(encoding="utf-8"))
-    module = QCModule.from_legacy_dict(settings["qcmodule"]["1"])
-    rating = Rating.from_module(module)
-    project = Project("SAMPLE", tmp_path / "easyqc_SAMPLE")
-    service = RatingService(project)
-    old_dir = project.rating_dir / "example" / "rater1"
-    old_dir.mkdir(parents=True)
-    old_file = old_dir / "example._.SUB001._.rater1._.Old._.False.json"
-    old_file.write_text("{}", encoding="utf-8")
-
-    with pytest.raises(RatingLegacyConflictError):
-        service.save_rating(rating)
-
-    assert old_file.exists()
-    assert not (old_dir / "example-rater1-SUB001.json").exists()
-
-
-def test_rating_service_saved_json_is_readable_by_legacy_loader(tmp_path, fixtures_dir: Path) -> None:
+def test_rating_service_saved_json_is_readable_by_current_loader(
+    tmp_path,
+    fixtures_dir: Path,
+) -> None:
     settings = json.loads((fixtures_dir / "sample_settings.json").read_text(encoding="utf-8"))
     module = QCModule.from_legacy_dict(settings["qcmodule"]["1"])
     rating = Rating.from_module(module)
@@ -190,21 +175,21 @@ def test_rating_service_saved_json_is_readable_by_legacy_loader(tmp_path, fixtur
     # the Core persistence boundary rather than the pure model.
     reloaded = service.load_rating(saved_path)
     assert reloaded.module_name == "example"
-    # scores values are stored as raw strings in the legacy payload
-    score1 = reloaded.scores.get("1") or reloaded.legacy_payload.get("scores", {}).get("1", {})
+    # Score values remain raw strings in the full module snapshot.
+    score1 = reloaded.scores.get("1") or reloaded.module_payload.get("scores", {}).get("1", {})
     val = score1.get("value") if isinstance(score1, dict) else score1
     assert val == "Good"
 
 
-def test_merge_subjects_with_rating_wide_coerces_numeric_ezqcid_on_both_sides() -> None:
-    """BUG-4: subjects.ezqcid that pandas reads as integer (common for
+def test_merge_subjects_with_rating_wide_coerces_numeric_easyqcid_on_both_sides() -> None:
+    """BUG-4: subjects.easyqcid that pandas reads as integer (common for
     numeric-looking IDs like 1, 2, 3) must still join the str-typed rating
     side. Previously only the rating/wide side was str-coerced, so the left
     merge silently dropped all rating values to NaN."""
     service = RatingService(_project(Path("/tmp/nonexistent")))  # service unused for merge
     rating_wide = pd.DataFrame(
         {
-            "ezqcid": ["1", "2", "3"],  # str (rating side is always str)
+            "easyqcid": ["1", "2", "3"],  # str (rating side is always str)
             "Anat.r1.score1": ["Good", "Fair", "Poor"],
             "Anat.r1.tag1": [False, True, False],
         }
@@ -212,48 +197,48 @@ def test_merge_subjects_with_rating_wide_coerces_numeric_ezqcid_on_both_sides() 
     # subjects read from CSV with numeric IDs become int64 — the latent bug
     subjects = pd.DataFrame(
         {
-            "ezqcid": pd.array([1, 2, 3], dtype="int64"),
+            "easyqcid": pd.array([1, 2, 3], dtype="int64"),
             "site": ["a", "b", "c"],
         }
     )
 
     result = service.merge_subjects_with_rating_wide(rating_wide, subjects)
 
-    assert list(result["ezqcid"]) == ["1", "2", "3"]
+    assert list(result["easyqcid"]) == ["1", "2", "3"]
     assert list(result["Anat.r1.score1"]) == ["Good", "Fair", "Poor"]
     assert not result["Anat.r1.score1"].isna().any(), "rating values must not be NaN after join"
 
 
-def test_merge_subjects_with_rating_wide_result_ezqcid_is_string_typed() -> None:
-    """The merged result's ezqcid column must be string-typed (downstream
+def test_merge_subjects_with_rating_wide_result_easyqcid_is_string_typed() -> None:
+    """The merged result's easyqcid column must be string-typed (downstream
     consumers and re-merges rely on str identity)."""
     service = RatingService(_project(Path("/tmp/nonexistent")))
-    rating_wide = pd.DataFrame({"ezqcid": ["10", "20"], "M.r.score1": ["1", "2"]})
-    subjects = pd.DataFrame({"ezqcid": pd.array([10, 20], dtype="int64")})
+    rating_wide = pd.DataFrame({"easyqcid": ["10", "20"], "M.r.score1": ["1", "2"]})
+    subjects = pd.DataFrame({"easyqcid": pd.array([10, 20], dtype="int64")})
 
     result = service.merge_subjects_with_rating_wide(rating_wide, subjects)
 
-    assert result["ezqcid"].dtype == object
-    assert all(isinstance(v, str) for v in result["ezqcid"])
+    assert result["easyqcid"].dtype == object
+    assert all(isinstance(v, str) for v in result["easyqcid"])
 
 
 def test_rating_save_writes_schema_version(tmp_path) -> None:
-    """A canonical rating JSON carries schema_version=2.
+    """A canonical rating JSON carries schema_version=3.
 
     schema_version is metadata layered on top of the module snapshot; module
     fields the input carried are preserved unchanged (snapshot semantics)."""
     project = Project("SAMPLE", tmp_path / "easyqc_SAMPLE")
     service = RatingService(project)
-    rating = _synthetic_legacy_rating("example", "r1", "SUB001", "Good", "1", True)
+    rating = _synthetic_rating("example", "r1", "SUB001", "Good", "1", True)
 
     saved_path = service.save_rating(rating)
 
     payload = json.loads(saved_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     # module identity + the fields the input carried are preserved
     assert payload["name"] == "example"
     assert payload["rater"] == "r1"
-    assert payload["ezqcid"] == "SUB001"
+    assert payload["easyqcid"] == "SUB001"
     assert payload["scores"]["1"]["value"] == "Good"
 
 
@@ -264,7 +249,7 @@ def test_rating_save_never_preserves_an_undefined_future_schema_version(
 
     project = Project("SAMPLE", tmp_path / "easyqc_SAMPLE")
     service = RatingService(project)
-    rating = _synthetic_legacy_rating(
+    rating = _synthetic_rating(
         "example",
         "r1",
         "SUB001",
@@ -272,23 +257,23 @@ def test_rating_save_never_preserves_an_undefined_future_schema_version(
         "1",
         True,
     )
-    assert rating.legacy_payload is not None
-    rating.legacy_payload["schema_version"] = 99
+    assert rating.module_payload is not None
+    rating.module_payload["schema_version"] = 99
 
     saved_path = service.save_rating(rating)
 
     payload = json.loads(saved_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
 
 
 def test_long_table_to_wide_rejects_duplicate_identity() -> None:
     """P3-A / F-AGG-4: aggfunc='first' silently collapses duplicate
-    (ezqcid, module, rater) tuples. F-RAT-3 guarantees one file per identity,
+    (easyqcid, module, rater) tuples. F-RAT-3 guarantees one file per identity,
     so a duplicate means the invariant is broken (filesystem dirty, bug, etc).
     Fail loud instead of silently dropping data."""
     service = RatingService(_project(Path("/tmp/nonexistent")))
     long_df = pd.DataFrame({
-        "ezqcid": ["SUB001", "SUB001"],   # same subject
+        "easyqcid": ["SUB001", "SUB001"],   # same subject
         "module_name": ["Anat", "Anat"],   # same module
         "rater": ["r1", "r1"],             # same rater -> duplicate identity
         "score1": ["Good", "Poor"],
@@ -305,7 +290,7 @@ def test_long_table_to_wide_allows_distinct_raters_same_subject() -> None:
     raters score the same image). Must NOT raise."""
     service = RatingService(_project(Path("/tmp/nonexistent")))
     long_df = pd.DataFrame({
-        "ezqcid": ["SUB001", "SUB001"],
+        "easyqcid": ["SUB001", "SUB001"],
         "module_name": ["Anat", "Anat"],
         "rater": ["r1", "r2"],   # different raters -> distinct identities
         "score1": ["Good", "Poor"],

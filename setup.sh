@@ -371,7 +371,7 @@ EOF
     echo ""
     echo "使用方法:"
     echo "  ./start.sh                    # 启动 GUI 界面"
-    echo "  ./start.sh project module rater ezqcid  # 直接打开 QC 页面"
+    echo "  ./start.sh project module rater easyqcid  # 直接打开 QC 页面"
 }
 
 # 函数：显示使用说明
@@ -394,7 +394,7 @@ show_usage() {
     echo "     python $PROJECT_ROOT/easyqc.py"
     echo ""
     echo "命令行模式："
-    echo "  ./start.sh project module rater ezqcid"
+    echo "  ./start.sh project module rater easyqcid"
     echo ""
     echo "帮助信息："
     echo "  ./start.sh --help"

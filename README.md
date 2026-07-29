@@ -108,7 +108,7 @@ python easyqc.py --ui tk           # 显式使用当前稳定 GUI（迁移期回
 ```
 
 Qt Preview 已包含共享 Core 服务和不直接修改源表的专业 Table 工作区：类型感知的可视化
-Filter Builder、多列排序、列显示/重排、固定 `ezqcid`、完整结果计数、分页、
+Filter Builder、多列排序、列显示/重排、固定 `easyqcid`、完整结果计数、分页、
 精确查找和安全的 QC 身份校验。筛选与排序界面不显示或要求编辑 JSON。Qt 的
 Table、QC 与项目配置现已通过同一个共享 Core 上下文接通真实项目，耗时
 query/load/export 已移出 GUI 线程；但四个平台的真实 CI、三平台原生安装/UI
@@ -122,7 +122,7 @@ Qt Preview 的七个导航页依次为：跨项目设置、项目选择、质控
 ### CLI 模式（直接打开指定 QC 页面）
 
 ```bash
-./start.sh <project> <module> <rater> <ezqcid>
+./start.sh <project> <module> <rater> <easyqcid>
 # 例：./start.sh CCNPPKE FreeSurferQC rater1 sub-001
 ```
 
@@ -150,18 +150,18 @@ easyqc_<project>/
 ├── settings_<project>.json    # 项目常量、变量和 legacy 模块兼容快照
 ├── modules/                   # 项目模块权威文件（每个模块一个 JSON）
 ├── Table/
-│   ├── ezqc_all.csv           # 受试者主表
-│   ├── ezqc_qctable.csv       # 聚合后的 QC 结果宽表
-│   └── ezqc_<module>.csv      # 各模块筛选后的子表
+│   ├── easyqc_all.csv           # 受试者主表
+│   ├── easyqc_qctable.csv       # 聚合后的 QC 结果宽表
+│   └── easyqc_<module>.csv      # 各模块筛选后的子表
 └── RatingFiles/
     └── <module>/
         └── <rater>/
-            └── <module_name>-<rater>-<ezqcid>.json
+            └── <module_name>-<rater>-<easyqcid>.json
 ```
 
 ### 2. 构建受试者主表
 
-受试者主表 (`ezqc_all.csv`) 至少包含一列 `ezqcid`（受试者标识符）。可通过以下方式导入：
+受试者主表 (`easyqc_all.csv`) 至少包含一列 `easyqcid`（受试者标识符）。可通过以下方式导入：
 
 - **目录扫描**：自动从预处理输出目录中提取受试者 ID
 - **文件导入**：CSV / Excel / TXT / list 文件
@@ -224,39 +224,39 @@ Qt Preview 还可在 **跨项目设置 → 常量模板** 中保存常用起点�
 
 ```text
 RatingFiles/<module_name>/<rater>/
-  <module_name>-<rater>-<ezqcid>.json
+  <module_name>-<rater>-<easyqcid>.json
 ```
 
 `module_name` 和 `rater` 不允许短横线，因此移除末尾一个 `.json` 后，
-文件名可用 `split("-", 2)` 无歧义还原；`ezqcid` 内仍可包含更多短横线。
+文件名可用 `split("-", 2)` 无歧义还原；`easyqcid` 内仍可包含更多短横线。
 三个内部 ID 的规范约束为：
 
 ```regex
 module_name = ^[A-Za-z0-9_]{1,32}$
 rater       = ^[A-Za-z0-9_]{1,32}$
-ezqcid      = ^[A-Za-z0-9_.-]{1,128}$
+easyqcid      = ^[A-Za-z0-9_.-]{1,128}$
 ```
 
-模块名和评分者只能使用 ASCII 字母、数字及下划线；`ezqcid` 还允许点和
-短横线。目录组件还拒绝 Windows 保留设备名，`ezqcid` 拒绝 `.` 和 `..`。
-模块名在项目内、同模块评分者身份和质控总名单中的 `ezqcid` 分别按
+模块名和评分者只能使用 ASCII 字母、数字及下划线；`easyqcid` 还允许点和
+短横线。目录组件还拒绝 Windows 保留设备名，`easyqcid` 拒绝 `.` 和 `..`。
+模块名在项目内、同模块评分者身份和质控总名单中的 `easyqcid` 分别按
 case-insensitive 规则保持唯一，原始大小写仍保留。CSV/Excel 导入必须在
-类型推断前把 `ezqcid` 作为文本读取，不能在前导零已经丢失后再转字符串。
+类型推断前把 `easyqcid` 作为文本读取，不能在前导零已经丢失后再转字符串。
 新保存写入完整 legacy-compatible payload，并标记 `schema_version: 2`。
-同一 `(module_name, rater, ezqcid)` 再次编辑时，EasyQC 在项目写锁内创建
+同一 `(module_name, rater, easyqcid)` 再次编辑时，EasyQC 在项目写锁内创建
 唯一临时文件，执行 flush/`fsync` 后用 `os.replace` 原子覆盖旧快照。
 
 目录 `<module_name>/<rater>`、文件名中的三个字段和 JSON 正文的
-`name`/`rater`/`ezqcid` 是有意保留的安全冗余。扫描会交叉核对三者；
+`name`/`rater`/`easyqcid` 是有意保留的安全冗余。扫描会交叉核对三者；
 损坏 JSON、目录或正文错位、重复三元组以及仅大小写不同的身份冲突都会
 保留具体路径并明确失败，聚合不会静默跳过后继续生成一个看似完整的结果。
 删除质控名单中的行或删除模块配置不会删除既有评分文件。评分仍存在时，
 模块内部名不能被普通重命名或复用于另一个逻辑模块；这类变更需要显式迁移。
-同理，已有评分所引用的 rater 或 `ezqcid` 不能在原位置重新指代另一人或
+同理，已有评分所引用的 rater 或 `easyqcid` 不能在原位置重新指代另一人或
 另一条记录。
 
 旧版
-`<module>._.<ezqcid>._.<rater>._.<score>._.<tag>.json`
+`<module>._.<easyqcid>._.<rater>._.<score>._.<tag>.json`
 仍可读取，但新程序只写规范文件名。若同一三元组仍有旧文件，普通保存会
 拒绝覆盖，必须先执行单独授权的冲突优先迁移。默认命令只生成只读计划：
 
@@ -284,7 +284,7 @@ candidate tree；它不切换活动目录、不移动或删除源文件。对真
 
 单次 QC 会话中，canonical 记录始终通过确定性路径定位。为兼容旧文件名，
 EasyQC 对当前 module/rater 目录建立一次轻量 basename 索引，随后按
-`ezqcid` 二分查找；目录元数据发生外部变化时会刷新索引。这只说明查找
+`easyqcid` 二分查找；目录元数据发生外部变化时会刷新索引。这只说明查找
 路径和定性复杂度，不构成 100,000 个评分文件的性能证明。
 
 ### 6. 提取和聚合结果
@@ -292,9 +292,9 @@ EasyQC 对当前 module/rater 目录建立一次轻量 basename 索引，随后�
 在 GUI 中点击 **提取 QC 结果** → **聚合**：
 
 1. 扫描所有 `RatingFiles/` 下的 JSON 文件
-2. 验证文件路径（module/rater/ezqcid）与 JSON 内容的一致性
+2. 验证文件路径（module/rater/easyqcid）与 JSON 内容的一致性
 3. 展平嵌套 JSON → 透视为宽格式（列名：`<module>.<rater>.<field>`）
-4. 与受试者主表合并 → 输出 `ezqc_qctable.csv`
+4. 与受试者主表合并 → 输出 `easyqc_qctable.csv`
 
 结构化扫描结果同时包含有效记录和每一个带路径的错误。正式聚合只有在错误
 集合为空时才继续；损坏、错位、重复或仅大小写冲突的记录不会被静默排除。
@@ -332,9 +332,9 @@ GUI 中 score 显示为下拉选项框。Scores 表达**程度**（好/坏、通
 命令模板是 EasyQC 的核心扩展机制。模板中的占位符会在运行时替换为实际值：
 
 ```bash
-freeview -v $SUBJECTS_DIR/{ezqcid}/mri/T1.mgz \
-         -f $SUBJECTS_DIR/{ezqcid}/surf/lh.pial:overlay=$TEMPLATE_DIR/lh.pial \
-         -f $SUBJECTS_DIR/{ezqcid}/surf/rh.pial:overlay=$TEMPLATE_DIR/rh.pial
+freeview -v $SUBJECTS_DIR/{easyqcid}/mri/T1.mgz \
+         -f $SUBJECTS_DIR/{easyqcid}/surf/lh.pial:overlay=$TEMPLATE_DIR/lh.pial \
+         -f $SUBJECTS_DIR/{easyqcid}/surf/rh.pial:overlay=$TEMPLATE_DIR/rh.pial
 ```
 
 **占位符语法**：
@@ -342,8 +342,8 @@ freeview -v $SUBJECTS_DIR/{ezqcid}/mri/T1.mgz \
 | 语法 | 示例 | 替换来源 |
 |---|---|---|
 | `$变量名` | `$SUBJECTS_DIR` | 项目常量 |
-| `${变量名}` | `${ezqcid}` | 受试者主表行 |
-| `{变量名}` | `{ezqcid}` | 同上 |
+| `${变量名}` | `${easyqcid}` | 受试者主表行 |
+| `{变量名}` | `{easyqcid}` | 同上 |
 
 每个模块保存一个命令模板；需要有序启动多个命令时，使用受支持的
 `MULTICMD` 形式表达一个命令计划。
@@ -384,13 +384,13 @@ EasyQC 的统一表格工作区直接提供结构化筛选、多列排序、列�
 
 | 操作 | 说明 | 示例 |
 |---|---|---|
-| `select_columns` | 选择并重排列 | 选取 `ezqcid, batch, age` |
+| `select_columns` | 选择并重排列 | 选取 `easyqcid, batch, age` |
 | `filter_rows` | 按条件筛选 | `batch == "baseline" AND age >= 9` |
 | `sort_rows` | 排序 | 按 `age` 降序 |
 | `derive_column` | 派生新列 | `pass_flag = (score1 >= 2) AND not tag1` |
 | `rename_columns` | 重命名列 | `batch` → `acquisition_batch` |
 | `drop_columns` | 删除列 | 删除中间变量列 |
-| `merge_tables` | 合并表格 | 与外部 CSV 按 `ezqcid` 合并 |
+| `merge_tables` | 合并表格 | 与外部 CSV 按 `easyqcid` 合并 |
 | `aggregate` | 分组聚合 | 按 `batch` 分组统计 `score1` 均值 |
 
 这些 Core 操作不是面向用户的 JSON 编辑格式。交互式新增列使用
@@ -411,7 +411,7 @@ ROUND(([age] - [baseline_age]) / 12, 1)
 - **保存语义**：预览成功后只生成普通的新列；公式、AST、快捷模板状态和
   中间结果均不保存；
 - **数据范围**：导入页使用当前完整导入草稿；质控前名单和质控结果使用
-  权威质控总名单。只有尚无 `ezqcid` 的导入草稿可以创建该列，已有列不能覆盖。
+  权威质控总名单。只有尚无 `easyqcid` 的导入草稿可以创建该列，已有列不能覆盖。
 
 ---
 

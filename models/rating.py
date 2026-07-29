@@ -8,7 +8,7 @@ from typing import Any, Protocol
 class _ModuleLike(Protocol):
     name: str
     rater: str | None
-    ezqcid: str | None
+    easyqcid: str | None
     scores: dict[str, Any]
     tags: dict[str, Any]
     notes: str | None
@@ -39,32 +39,32 @@ def _format_datetime(value: datetime | None) -> str | None:
 class Rating:
     module_name: str
     rater: str
-    ezqcid: str
+    easyqcid: str
     scores: dict[str, Any]
     tags: dict[str, bool]
     notes: str | None = None
     time: datetime | None = None
     code_exe: dict[str, str] | None = None
-    legacy_payload: dict[str, Any] | None = None
+    module_payload: dict[str, Any] | None = None
 
     @property
     def filename(self) -> str:
         """Stable basename; Core validates identities and complete paths."""
 
-        return f"{self.module_name}-{self.rater}-{self.ezqcid}.json"
+        return f"{self.module_name}-{self.rater}-{self.easyqcid}.json"
 
     @classmethod
     def from_module(cls, module: _ModuleLike) -> "Rating":
         return cls(
             module_name=module.name,
             rater=module.rater or "",
-            ezqcid=module.ezqcid or "",
+            easyqcid=module.easyqcid or "",
             scores={key: score.value for key, score in module.scores.items()},
             tags={key: tag.value for key, tag in module.tags.items()},
             notes=module.notes,
             time=module.time,
             code_exe=module.code_exe,
-            legacy_payload=module.to_legacy_dict(),
+            module_payload=module.to_legacy_dict(),
         )
 
     @classmethod
@@ -72,7 +72,7 @@ class Rating:
         return cls(
             module_name=data["name"],
             rater=data["rater"],
-            ezqcid=data["ezqcid"],
+            easyqcid=data["easyqcid"],
             scores={
                 str(key): value.get("value") if isinstance(value, dict) else value
                 for key, value in data.get("scores", {}).items()
@@ -86,7 +86,7 @@ class Rating:
             code_exe={str(key): value for key, value in data.get("code_exe", {}).items()}
             if isinstance(data.get("code_exe"), dict)
             else data.get("code_exe"),
-            legacy_payload=data.copy(),
+            module_payload=data.copy(),
         )
 
     def to_legacy_dict(
@@ -94,7 +94,7 @@ class Rating:
         legacy_module: _ModuleLike | dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if legacy_module is None:
-            data = self.legacy_payload.copy() if self.legacy_payload else {}
+            data = self.module_payload.copy() if self.module_payload else {}
         elif isinstance(legacy_module, dict):
             data = legacy_module.copy()
         else:
@@ -108,7 +108,7 @@ class Rating:
 
         data["name"] = self.module_name
         data["rater"] = self.rater
-        data["ezqcid"] = self.ezqcid
+        data["easyqcid"] = self.easyqcid
         data["notes"] = self.notes
         data["time"] = _format_datetime(self.time)
         data["code_exe"] = self.code_exe
@@ -132,7 +132,7 @@ class Rating:
         return data
 
     def apply_to_module(self, module: _ModuleLike) -> None:
-        module.ezqcid = self.ezqcid
+        module.easyqcid = self.easyqcid
         module.rater = self.rater
         module.notes = self.notes
         module.time = self.time

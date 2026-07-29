@@ -552,7 +552,7 @@ def _run_table_seam() -> dict[str, object]:
 
     source = pd.DataFrame(
         {
-            "ezqcid": [f"SUB{index:03d}" for index in range(1, 7)],
+            "easyqcid": [f"SUB{index:03d}" for index in range(1, 7)],
             "site": ["A", "B", "A", "B", "A", "B"],
             "age": [21, 22, 23, 24, 25, 26],
         }
@@ -567,7 +567,7 @@ def _run_table_seam() -> dict[str, object]:
         )
         _require(workspace.apply_filter_draft(), "typed Qt filter did not apply")
         first_window = [
-            str(value) for value in workspace.row_window.dataframe["ezqcid"]
+            str(value) for value in workspace.row_window.dataframe["easyqcid"]
         ]
         result_position = workspace.service.find_identity(
             workspace.result,
@@ -577,20 +577,20 @@ def _run_table_seam() -> dict[str, object]:
         _require(workspace.find_identity_exact("SUB005"), "exact identity not found")
         _require(workspace.open_selected_qc(), "exact identity callback did not open")
         target_window = [
-            str(value) for value in workspace.row_window.dataframe["ezqcid"]
+            str(value) for value in workspace.row_window.dataframe["easyqcid"]
         ]
         _require(source.equals(original), "Qt table seam mutated the source frame")
         return {
             "source_rows": len(source),
             "matched_rows": workspace.result.matched_total,
             "page_size": workspace.applied_state.page_size,
-            "first_window_ezqcids": first_window,
-            "target_ezqcid": "SUB005",
+            "first_window_easyqcids": first_window,
+            "target_easyqcid": "SUB005",
             "target_result_position": result_position,
             "target_source_position": workspace.selected_source_position,
             "target_page_offset": workspace.page_offset,
-            "target_window_ezqcids": target_window,
-            "qc_callback_ezqcids": list(opened),
+            "target_window_easyqcids": target_window,
+            "qc_callback_easyqcids": list(opened),
             "qt_platform": application.platformName(),
         }
     finally:

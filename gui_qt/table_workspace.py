@@ -312,8 +312,8 @@ class QtTableWorkspace(QWidget):
             self.delete_columns_button.setAccessibleName("选择删除质控前名单列")
         self.find_edit = QLineEdit(self.action_toolbar)
         self.find_edit.setObjectName("findIdentity")
-        self.find_edit.setAccessibleName("查找精确 ezqcid")
-        self.find_edit.setPlaceholderText("查找精确 ezqcid")
+        self.find_edit.setAccessibleName("查找精确 easyqcid")
+        self.find_edit.setPlaceholderText("查找精确 easyqcid")
         self.find_edit.setClearButtonEnabled(True)
         self.action_toolbar.addWidget(self.find_edit)
         self.find_action = self._add_toolbar_action(
@@ -412,7 +412,7 @@ class QtTableWorkspace(QWidget):
         )
         self.pinned_view = QTableView(self.table_surface)
         self.pinned_view.setObjectName("pinnedIdentityTable")
-        self.pinned_view.setAccessibleName("固定 ezqcid 列")
+        self.pinned_view.setAccessibleName("固定 easyqcid 列")
         self._configure_table(self.table_view)
         self._configure_table(self.pinned_view)
         self.table_view.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -969,11 +969,11 @@ class QtTableWorkspace(QWidget):
                 self.result,
                 position,
                 1,
-                columns=("ezqcid",),
+                columns=("easyqcid",),
             )
         except TableViewError:
             return ""
-        value = window.dataframe.iloc[0]["ezqcid"]
+        value = window.dataframe.iloc[0]["easyqcid"]
         return "" if pd.isna(value) else str(value).strip()
 
     @staticmethod
@@ -1584,15 +1584,15 @@ class QtTableWorkspace(QWidget):
     def find_identity_exact(self, identity: str | None = None) -> bool:
         query = (self.find_edit.text() if identity is None else identity).strip()
         if not query:
-            self._set_error("请输入精确的 ezqcid")
+            self._set_error("请输入精确的 easyqcid")
             return False
         try:
             result_position = self.service.find_identity(self.result, query)
         except QcIdentityError:
-            self._set_error("当前结果中没有 ezqcid 列")
+            self._set_error("当前结果中没有 easyqcid 列")
             return False
         if result_position is None:
-            self._set_error(f"没有匹配的 ezqcid：{query}")
+            self._set_error(f"没有匹配的 easyqcid：{query}")
             return False
         self.selected_source_position = int(self.result.source_positions[result_position])
         self.page_offset = (
@@ -2021,7 +2021,7 @@ class QtTableWorkspace(QWidget):
                 self.result,
                 reference.result_position,
             )
-            if identity != reference.ezqcid:
+            if identity != reference.easyqcid:
                 raise TableViewError("所选记录引用已失效，请重新选择")
             if (
                 self.row_context_provider is None

@@ -84,7 +84,7 @@ class QtQcListImportPage(QWidget):
             raise TypeError("QtQcListImportPage requires ConfigurationService")
         self.configuration = configuration
         self._draft = pd.DataFrame()
-        self._current = pd.DataFrame(columns=["ezqcid"])
+        self._current = pd.DataFrame(columns=["easyqcid"])
         self._source_mode = "file"
         self._revision = 0
         self._pending: tuple[int, str] | None = None
@@ -288,7 +288,7 @@ class QtQcListImportPage(QWidget):
         self.single_column_name = QLineEdit(self)
         self.single_column_name.setObjectName("singleColumnName")
         self.single_column_name.setAccessibleName("单列字段名")
-        self.single_column_name.setPlaceholderText("例如 ezqcid 或 scanner_model")
+        self.single_column_name.setPlaceholderText("例如 easyqcid 或 scanner_model")
         self.single_column_name.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         single_column_row.addWidget(self.single_column_name, 1)
         single_column_hint = QLabel("仅在导入单列数据时使用", self)
@@ -401,7 +401,7 @@ class QtQcListImportPage(QWidget):
         self.write_mode_combo = QComboBox(apply_panel)
         self.write_mode_label.setBuddy(self.write_mode_combo)
         self.write_mode_combo.setAccessibleName("质控名单写入方式")
-        self.write_mode_combo.addItem("按 ezqcid 合并列", "merge_columns")
+        self.write_mode_combo.addItem("按 easyqcid 合并列", "merge_columns")
         self.write_mode_combo.addItem("追加行", "append")
         self.write_mode_combo.addItem("替换现有名单", "replace")
         apply_mode_row.addWidget(self.write_mode_label)
@@ -432,7 +432,7 @@ class QtQcListImportPage(QWidget):
         layout.addWidget(apply_panel)
 
         hint = QLabel(
-            "写入前会校验 ezqcid、重复行和字段冲突；失败不会修改原名单。",
+            "写入前会校验 easyqcid、重复行和字段冲突；失败不会修改原名单。",
             self,
         )
         hint.setObjectName("qcListImportHint")
@@ -634,7 +634,7 @@ class QtQcListImportPage(QWidget):
         conflict_policy: str | None,
     ) -> str:
         mode_label = {
-            "merge_columns": "按 ezqcid 合并列",
+            "merge_columns": "按 easyqcid 合并列",
             "append": "追加行",
             "replace": "替换现有名单",
         }[mode]
@@ -1480,15 +1480,15 @@ class QtQcListImportPage(QWidget):
         if self._draft.empty:
             self.stats_label.setText("尚未读取导入数据")
             return
-        if "ezqcid" not in self._draft.columns:
-            self.stats_label.setText("写入前需包含 ezqcid")
+        if "easyqcid" not in self._draft.columns:
+            self.stats_label.setText("写入前需包含 easyqcid")
             return
-        identities = self._draft["ezqcid"].map(
+        identities = self._draft["easyqcid"].map(
             lambda value: "" if value is None or pd.isna(value) else str(value).strip()
         )
         current_ids = (
-            set(self._current["ezqcid"].astype(str).str.strip())
-            if "ezqcid" in self._current.columns
+            set(self._current["easyqcid"].astype(str).str.strip())
+            if "easyqcid" in self._current.columns
             else set()
         )
         incoming_ids = set(identities[identities.ne("")])
@@ -1497,7 +1497,7 @@ class QtQcListImportPage(QWidget):
         identity_conflicts = int(identities.eq("").sum()) + int(identities.duplicated().sum())
         mode, conflict_policy = self.current_import_policy()
         overlapping = len(
-            (set(self._draft.columns) & set(self._current.columns)) - {"ezqcid"}
+            (set(self._draft.columns) & set(self._current.columns)) - {"easyqcid"}
         )
         if mode == "merge_columns":
             policy_label = (

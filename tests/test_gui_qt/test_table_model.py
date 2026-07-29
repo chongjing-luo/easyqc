@@ -12,7 +12,7 @@ from gui_qt.table_model import QtTableModel
 def _window():
     frame = pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002", "SUB003"],
+            "easyqcid": ["SUB001", "SUB002", "SUB003"],
             "score": [1.5, None, 3.0],
             "status": ["pending", "rated", "pending"],
         }
@@ -30,7 +30,7 @@ def test_qt_table_model_exposes_window_roles_and_stable_row_reference(qtbot):
 
     assert model.rowCount() == 2
     assert model.columnCount() == 3
-    assert model.headerData(0, Qt.Horizontal, Qt.DisplayRole) == "ezqcid"
+    assert model.headerData(0, Qt.Horizontal, Qt.DisplayRole) == "easyqcid"
     assert model.headerData(0, Qt.Vertical, Qt.DisplayRole) == "2"
     assert model.data(model.index(0, 0), Qt.DisplayRole) == "SUB002"
     assert model.data(model.index(0, 1), Qt.DisplayRole) == ""
@@ -39,7 +39,7 @@ def test_qt_table_model_exposes_window_roles_and_stable_row_reference(qtbot):
     reference = model.row_reference(0)
     assert reference.result_position == 1
     assert reference.source_position == 1
-    assert reference.ezqcid == "SUB002"
+    assert reference.easyqcid == "SUB002"
     assert_frame_equal(source, original)
 
 

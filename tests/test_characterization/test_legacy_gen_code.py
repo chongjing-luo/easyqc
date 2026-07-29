@@ -22,7 +22,7 @@ def _page_with_code(code: str) -> gui_qcpage:
         "example": pd.DataFrame(
             [
                 {
-                    "ezqcid": "SUB001",
+                    "easyqcid": "SUB001",
                     "age": 29,
                     "image_path": "/tmp/sub001.nii.gz",
                 }
@@ -33,7 +33,7 @@ def _page_with_code(code: str) -> gui_qcpage:
 
 
 def test_gen_code_replaces_three_variable_syntaxes() -> None:
-    page = _page_with_code("echo $ezqcid ${age} {site} {image_path}")
+    page = _page_with_code("echo $easyqcid ${age} {site} {image_path}")
 
     code, code_exe = page.gen_code("SUB001")
 
@@ -42,7 +42,7 @@ def test_gen_code_replaces_three_variable_syntaxes() -> None:
 
 
 def test_gen_code_multicmd_at_start_splits_commands() -> None:
-    page = _page_with_code("MULTICMD echo {ezqcid};| echo ${age}")
+    page = _page_with_code("MULTICMD echo {easyqcid};| echo ${age}")
 
     code, code_exe = page.gen_code("SUB001")
 
@@ -51,7 +51,7 @@ def test_gen_code_multicmd_at_start_splits_commands() -> None:
 
 
 def test_gen_code_multicmd_after_prefix_prepends_prefix_to_each_command() -> None:
-    page = _page_with_code("cd /tmp MULTICMD echo {ezqcid};| echo done")
+    page = _page_with_code("cd /tmp MULTICMD echo {easyqcid};| echo done")
 
     code, code_exe = page.gen_code("SUB001")
 

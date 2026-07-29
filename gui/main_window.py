@@ -123,7 +123,7 @@ class EasyQCApp:
                             self.project_service.load(last)
                             # sync tables from service into session state
                             if self.table_service is not None:
-                                loaded = self.table_service.load_legacy_state_tables(
+                                loaded = self.table_service.load_state_tables(
                                     self.project_service.current_project
                                 )
                                 if loaded is not None:
@@ -764,11 +764,11 @@ class EasyQCApp:
         if rating_service is None:
             return False
 
-        loaded_ratings = rating_service.load_legacy_state(subjects)
+        loaded_ratings = rating_service.load_state(subjects)
         self.gui_state.apply_loaded_ratings(loaded_ratings)
         self.table_service.save_table(project, TABLE_QCTABLE, loaded_ratings.qctable)
         # P3-D / F-AGG-6: no intermediate _orig/_orig_wide files — pure in-memory
-        # pipeline. Only the final ezqc_qctable.csv is persisted.
+        # pipeline. Only the final easyqc_qctable.csv is persisted.
         return True
 
     def _rating_service_for_project(self, project):
@@ -794,7 +794,7 @@ class EasyQCApp:
         if project is None:
             return
 
-        loaded_tables = self.table_service.load_legacy_state_tables(
+        loaded_tables = self.table_service.load_state_tables(
             project,
             module_names=self.gui_state.module_names(),
         )
@@ -883,7 +883,7 @@ class EasyQCApp:
             if self.project_service is not None and self.table_service is not None:
                 cp = self.project_service.current_project
                 if cp is not None:
-                    loaded = self.table_service.load_legacy_state_tables(cp)
+                    loaded = self.table_service.load_state_tables(cp)
                     if loaded is not None:
                         self.gui_state.apply_loaded_tables(loaded)
             self.load_project_to_gui()

@@ -23,7 +23,7 @@ def _module(
         "name": name,
         "label": "Anatomical QC",
         "rater": rater,
-        "ezqcid": None,
+        "easyqcid": None,
         "watch_mode": False,
         "scores": {
             "1": {
@@ -46,7 +46,7 @@ def _module(
 
 
 @pytest.mark.parametrize(
-    ("module_name", "rater", "ezqcid"),
+    ("module_name", "rater", "easyqcid"),
     [
         ("Anat-QC", "rater_1", "SUB001"),
         ("AnatQC", "rater-one", "SUB001"),
@@ -58,7 +58,7 @@ def test_qc_workflow_rejects_invalid_persistent_identity_before_writing(
     tmp_path: Path,
     module_name: str,
     rater: str,
-    ezqcid: str,
+    easyqcid: str,
 ) -> None:
     rating_dir = (
         tmp_path
@@ -70,42 +70,42 @@ def test_qc_workflow_rejects_invalid_persistent_identity_before_writing(
     with pytest.raises(QcIdentityError):
         QcWorkflowService(
             _module(name=module_name, rater=rater),
-            pd.DataFrame({"ezqcid": [ezqcid]}),
+            pd.DataFrame({"easyqcid": [easyqcid]}),
             rating_dir=rating_dir,
         )
 
     assert not rating_dir.exists()
 
 
-def test_qc_workflow_rejects_case_only_ezqcid_collision(tmp_path: Path) -> None:
+def test_qc_workflow_rejects_case_only_easyqcid_collision(tmp_path: Path) -> None:
     with pytest.raises(QcIdentityError, match="case"):
         QcWorkflowService(
             _module(),
-            pd.DataFrame({"ezqcid": ["SUB001", "sub001"]}),
+            pd.DataFrame({"easyqcid": ["SUB001", "sub001"]}),
             rating_dir=tmp_path / "RatingFiles" / "AnatQC" / "rater_1",
         )
 
 
 @pytest.mark.parametrize(
-    ("module_name", "rater", "ezqcid", "field"),
+    ("module_name", "rater", "easyqcid", "field"),
     [
         (" AnatQC", "rater_1", "SUB001", "module_name"),
         ("AnatQC", " rater_1", "SUB001", "rater"),
-        ("AnatQC", "rater_1", " SUB001", "ezqcid"),
-        ("AnatQC", "rater_1", 1, "ezqcid"),
+        ("AnatQC", "rater_1", " SUB001", "easyqcid"),
+        ("AnatQC", "rater_1", 1, "easyqcid"),
     ],
 )
 def test_qc_workflow_does_not_clean_or_stringify_persistent_identities(
     tmp_path: Path,
     module_name,
     rater,
-    ezqcid,
+    easyqcid,
     field: str,
 ) -> None:
     with pytest.raises(QcIdentityError, match=field):
         QcWorkflowService(
             _module(name=module_name, rater=rater),
-            pd.DataFrame({"ezqcid": [ezqcid]}),
+            pd.DataFrame({"easyqcid": [easyqcid]}),
             rating_dir=tmp_path / "RatingFiles",
         )
 
@@ -117,7 +117,7 @@ def test_qc_workflow_keeps_blank_rater_as_read_only(
 ) -> None:
     workflow = QcWorkflowService(
         _module(rater=rater),
-        pd.DataFrame({"ezqcid": ["SUB001"]}),
+        pd.DataFrame({"easyqcid": ["SUB001"]}),
         rating_dir=tmp_path / "RatingFiles",
     )
 
@@ -128,16 +128,16 @@ def test_qc_workflow_keeps_blank_rater_as_read_only(
     assert not (tmp_path / "RatingFiles").exists()
 
 
-def test_project_context_rejects_invalid_and_case_colliding_ezqcids() -> None:
-    with pytest.raises(ProjectContextError, match="ezqcid"):
+def test_project_context_rejects_invalid_and_case_colliding_easyqcids() -> None:
+    with pytest.raises(ProjectContextError, match="easyqcid"):
         ProjectContextService._validate_subjects(
-            pd.DataFrame({"ezqcid": [" SUB001"]}),
+            pd.DataFrame({"easyqcid": [" SUB001"]}),
             {},
         )
 
     with pytest.raises(ProjectContextError, match="case"):
         ProjectContextService._validate_subjects(
-            pd.DataFrame({"ezqcid": ["SUB001", "sub001"]}),
+            pd.DataFrame({"easyqcid": ["SUB001", "sub001"]}),
             {},
         )
 
@@ -147,29 +147,29 @@ def test_qc_workflow_accepts_numeric_leading_internal_ids(
 ) -> None:
     workflow = QcWorkflowService(
         _module(name="1Anat", rater="2rater"),
-        pd.DataFrame({"ezqcid": ["001-session.1"]}),
+        pd.DataFrame({"easyqcid": ["001-session.1"]}),
         rating_dir=tmp_path / "RatingFiles" / "1Anat" / "2rater",
     )
 
-    assert workflow.current_ezqcid == "001-session.1"
+    assert workflow.current_easyqcid == "001-session.1"
     assert workflow.current_module.name == "1Anat"
     assert workflow.current_module.rater == "2rater"
 
 
 @pytest.mark.parametrize(
-    ("module_name", "rater", "ezqcid", "field"),
+    ("module_name", "rater", "easyqcid", "field"),
     [
         ("Anat-QC", "rater_1", "SUB001", "module_name"),
         ("AnatQC", "rater-one", "SUB001", "rater"),
-        ("AnatQC", "rater_1", "SUB 001", "ezqcid"),
-        ("AnatQC", "rater_1", 1, "ezqcid"),
+        ("AnatQC", "rater_1", "SUB 001", "easyqcid"),
+        ("AnatQC", "rater_1", 1, "easyqcid"),
     ],
 )
 def test_cli_rejects_invalid_identity_before_project_resolution(
     tmp_path: Path,
     module_name: str,
     rater: str,
-    ezqcid: str,
+    easyqcid: str,
     field: str,
 ) -> None:
     registry = tmp_path / "projects.json"
@@ -179,7 +179,7 @@ def test_cli_rejects_invalid_identity_before_project_resolution(
             "missing",
             module_name,
             rater,
-            ezqcid,
+            easyqcid,
             registry,
         )
     assert not registry.exists()

@@ -20,17 +20,17 @@ from models.table_view_state import (
 
 def test_column_state_reports_visible_columns_in_saved_order() -> None:
     columns = ColumnViewState(
-        order=("ezqcid", "age", "site", "score"),
+        order=("easyqcid", "age", "site", "score"),
         hidden=("site",),
-        pinned=("ezqcid",),
+        pinned=("easyqcid",),
     )
 
-    assert columns.visible_columns == ("ezqcid", "age", "score")
+    assert columns.visible_columns == ("easyqcid", "age", "score")
 
 
 def test_table_view_state_is_replaced_without_mutating_applied_state() -> None:
     applied = TableViewState(
-        columns=ColumnViewState(order=("ezqcid", "age")),
+        columns=ColumnViewState(order=("easyqcid", "age")),
     )
     draft = replace(
         applied,
@@ -43,7 +43,7 @@ def test_table_view_state_is_replaced_without_mutating_applied_state() -> None:
 
 def test_sort_rules_are_ordered_for_future_multi_sort_support() -> None:
     state = TableViewState(
-        columns=ColumnViewState(order=("ezqcid", "site", "score")),
+        columns=ColumnViewState(order=("easyqcid", "site", "score")),
         sort_rules=(
             SortRule(column="site", ascending=True),
             SortRule(column="score", ascending=False),
@@ -54,7 +54,7 @@ def test_sort_rules_are_ordered_for_future_multi_sort_support() -> None:
 
 
 def test_table_result_owns_only_read_only_contiguous_int64_positions() -> None:
-    state = TableViewState(columns=ColumnViewState(order=("ezqcid",)))
+    state = TableViewState(columns=ColumnViewState(order=("easyqcid",)))
     caller_positions = np.array([4, 1, 9], dtype=np.int64)
 
     result = TableViewResult(
@@ -77,7 +77,7 @@ def test_table_result_owns_only_read_only_contiguous_int64_positions() -> None:
 
 
 def test_table_result_rejects_position_count_and_range_mismatches() -> None:
-    state = TableViewState(columns=ColumnViewState(order=("ezqcid",)))
+    state = TableViewState(columns=ColumnViewState(order=("easyqcid",)))
 
     with pytest.raises(ValueError, match="matched_total"):
         TableViewResult(
@@ -99,10 +99,10 @@ def _state_payload_v1() -> dict[str, object]:
     return {
         "schema_version": 1,
         "columns": {
-            "order": ["ezqcid", "site", "score"],
+            "order": ["easyqcid", "site", "score"],
             "hidden": [],
-            "widths": [["ezqcid", 120]],
-            "pinned": ["ezqcid"],
+            "widths": [["easyqcid", 120]],
+            "pinned": ["easyqcid"],
         },
         "conditions": [
             {
@@ -203,7 +203,7 @@ def test_explicit_grouped_state_keeps_flat_compatibility_view() -> None:
 
     state = TableViewState(
         columns=ColumnViewState(
-            order=("ezqcid", "site", "score"), pinned=("ezqcid",)
+            order=("easyqcid", "site", "score"), pinned=("easyqcid",)
         ),
         filter=expression,
     )

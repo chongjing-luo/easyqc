@@ -6,13 +6,13 @@ def test_test_fixtures_are_available(
     sample_project_dir: Path,
 ) -> None:
     assert (fixtures_dir / "sample_settings.json").exists()
-    assert (fixtures_dir / "sample_ezqc_all.csv").exists()
+    assert (fixtures_dir / "sample_easyqc_all.csv").exists()
     assert (sample_project_dir / "settings_SAMPLE.json").exists()
-    assert (sample_project_dir / "Table" / "ezqc_all.csv").exists()
+    assert (sample_project_dir / "Table" / "easyqc_all.csv").exists()
     assert (
         sample_project_dir
         / "RatingFiles"
         / "example"
         / "rater1"
-        / "example._.SUB001._.rater1._.Good._.True.json"
+        / "example-rater1-SUB001.json"
     ).exists()

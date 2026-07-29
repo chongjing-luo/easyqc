@@ -267,40 +267,40 @@ class ModuleRepository:
         path.unlink()
         return True
 
-    def migrate_legacy(
+    def initialize_settings(
         self,
         modules: Mapping[str, Mapping[str, Any]],
     ) -> tuple[ModuleRecord, ...]:
         """Publish one complete module directory from a legacy qcmodule mapping."""
 
         with self.project_write_lock():
-            return self._migrate_legacy_unlocked(modules)
+            return self._initialize_settings_unlocked(modules)
 
-    def _migrate_legacy_unlocked(
+    def _initialize_settings_unlocked(
         self,
         modules: Mapping[str, Mapping[str, Any]],
     ) -> tuple[ModuleRecord, ...]:
         if self.root.exists():
             return self._strict_records()
-        records = self._records_from_legacy(modules)
-        self._validate_legacy_rating_owners(records)
+        records = self._records_from_settings(modules)
+        self._validate_initial_rating_owners(records)
         self._replace_records(records, _trusted_rating_owners=records)
         return self._strict_records()
 
-    def replace_legacy(
+    def replace_settings(
         self,
         modules: Mapping[str, Mapping[str, Any]],
     ) -> tuple[ModuleRecord, ...]:
         """Atomically replace this catalog from one complete legacy mapping."""
 
         with self.project_write_lock():
-            return self._replace_legacy_unlocked(modules)
+            return self._replace_settings_unlocked(modules)
 
-    def _replace_legacy_unlocked(
+    def _replace_settings_unlocked(
         self,
         modules: Mapping[str, Mapping[str, Any]],
     ) -> tuple[ModuleRecord, ...]:
-        records = self._records_from_legacy(modules)
+        records = self._records_from_settings(modules)
         self._replace_records(records)
         return self._strict_records()
 
@@ -420,7 +420,7 @@ class ModuleRepository:
         return True
 
     @staticmethod
-    def legacy_mapping(
+    def settings_mapping(
         records: tuple[ModuleRecord, ...] | list[ModuleRecord],
     ) -> dict[str, dict[str, Any]]:
         """Return one ordered compatibility qcmodule mapping."""
@@ -472,7 +472,7 @@ class ModuleRepository:
         FileUtils.safe_json_save(target, record.to_json_object())
         return self.load(record.module_id)
 
-    def _validate_legacy_rating_owners(
+    def _validate_initial_rating_owners(
         self,
         records: tuple[ModuleRecord, ...],
     ) -> None:
@@ -579,7 +579,7 @@ class ModuleRepository:
             )
         return snapshot.records
 
-    def _records_from_legacy(
+    def _records_from_settings(
         self,
         modules: Mapping[str, Mapping[str, Any]],
     ) -> tuple[ModuleRecord, ...]:

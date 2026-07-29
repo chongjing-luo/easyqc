@@ -86,7 +86,7 @@ def test_structured_filter_is_authoritative_over_legacy_select_filter() -> None:
                 "group_join": "all",
                 "groups": [],
             },
-            "select_filter": "SELECT ezqcid FROM df",
+            "select_filter": "SELECT easyqcid FROM df",
         }
     )
 
@@ -132,7 +132,7 @@ def test_supported_legacy_select_filter_converts_to_typed_expression() -> None:
 @pytest.mark.parametrize(
     "legacy_filter",
     [
-        "SELECT ezqcid FROM df",
+        "SELECT easyqcid FROM df",
         "SELECT * FROM df WHERE site = 'A' OR score >= 3",
         '{"operations": [{"operation": "derive_column"}]}',
     ],

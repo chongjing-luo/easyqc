@@ -146,8 +146,8 @@ class TableDisplay:
     def module_names_for_menu(self):
         return self.state_adapter().module_names()
 
-    def rating_menu_items(self, ezqcid):
-        return self.state_adapter().rating_menu_items(ezqcid)
+    def rating_menu_items(self, easyqcid):
+        return self.state_adapter().rating_menu_items(easyqcid)
 
     def state_adapter(self):
         if not hasattr(self, 'gui_state'):
@@ -155,9 +155,9 @@ class TableDisplay:
         return self.gui_state
 
 
-    def show_right_menu(self, ezqcid, anchor):
+    def show_right_menu(self, easyqcid, anchor):
         """
-        显示右键菜单，显示该ezqcid的所有质控结果
+        显示右键菜单，显示该easyqcid的所有质控结果
         """
         if not self.state_adapter().has_rating_data():
             messagebox.showwarning(_tr(_T, "警告"), _tr(_T, "评分数据未加载"))
@@ -175,15 +175,15 @@ class TableDisplay:
             label = f'打开图像: {module}'
             menu.add_command(
                 label=label,
-                command=lambda m=module, e=ezqcid: self.open_image_from_right_menu(e, m)
+                command=lambda m=module, e=easyqcid: self.open_image_from_right_menu(e, m)
             )
 
         
-        # 获取该ezqcid的所有评分结果
-        for item in self.rating_menu_items(ezqcid):
+        # 获取该easyqcid的所有评分结果
+        for item in self.rating_menu_items(easyqcid):
             menu.add_command(
                 label=item['label'],
-                command=lambda ezqcid=ezqcid, name=item['name'], rater=item['rater']: self.open_gui(ezqcid, name, rater)
+                command=lambda easyqcid=easyqcid, name=item['name'], rater=item['rater']: self.open_gui(easyqcid, name, rater)
             )
 
         menu.add_separator()
@@ -209,29 +209,29 @@ class TableDisplay:
             )
         raise ValueError("无法确定 QC 菜单的显示位置")
 
-    def open_gui(self, ezqcid, module_name, rater):
+    def open_gui(self, easyqcid, module_name, rater):
         """
         处理右键菜单点击事件
         """
-        log_info(f"右键菜单点击: ezqcid={ezqcid}, module={module_name}, rater={rater}")
+        log_info(f"右键菜单点击: easyqcid={easyqcid}, module={module_name}, rater={rater}")
         
-        open_qc_subprocess(self.state_adapter().current_project_name(), module_name, rater, ezqcid)
+        open_qc_subprocess(self.state_adapter().current_project_name(), module_name, rater, easyqcid)
 
         
 
 
-    def open_image_from_right_menu(self, ezqcid, module_name):
+    def open_image_from_right_menu(self, easyqcid, module_name):
         """
         打开图片
         """
         # 延迟导入，避免循环导入
         from gui.gui_qcpage import gui_qcpage
         
-        log_info(f"open_image_from_right_menu: ezqcid={ezqcid}, module_name={module_name}", "TableDisplay")
+        log_info(f"open_image_from_right_menu: easyqcid={easyqcid}, module_name={module_name}", "TableDisplay")
         state = self.state_adapter()
         module_index = state.module_index_by_name(module_name)
         module = state.module_by_key(module_index)
-        table = state.result_table('ezqc_qctable')
+        table = state.result_table('easyqc_qctable')
         settings = state.settings()
         
         # 创建qcpage实例并保存为类属性，防止被垃圾回收
@@ -241,7 +241,7 @@ class TableDisplay:
         qcpage_instance = gui_qcpage()
         self.qcpage_instances.append(qcpage_instance)  # 保存引用，防止被垃圾回收
         
-        code,code_exe = qcpage_instance.gen_code(ezqcid, settings, module, table)
+        code,code_exe = qcpage_instance.gen_code(easyqcid, settings, module, table)
         qcpage_instance.exe_code(code_exe, control=False)
         
     def resolve_filter_source(self, type=None, df=None):

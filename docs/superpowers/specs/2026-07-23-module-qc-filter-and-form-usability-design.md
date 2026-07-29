@@ -29,7 +29,7 @@ stylesheet.
   formulas are not part of a module filter.
 - A module queue is recalculated from the current complete list whenever QC is
   started. The queue preserves complete-list row order.
-- Saving a rule, rather than a resolved `ezqcid` list, keeps module membership
+- Saving a rule, rather than a resolved `easyqcid` list, keeps module membership
   current when rows or values in the complete list change.
 
 ## Considered approaches
@@ -109,7 +109,7 @@ save.
    referenced column and typed value with `TableViewService`.
 3. It applies only the row filter and retains the read-only source-position
    result. It does not apply a page's sort, columns or pagination state.
-4. It resolves the matching positions to an ordered `ezqcid` tuple.
+4. It resolves the matching positions to an ordered `easyqcid` tuple.
 5. `ProjectContextService.create_qc_workflow()` validates that the identities
    are unique, nonblank and part of the current project before materializing
    the bounded workflow subject table.

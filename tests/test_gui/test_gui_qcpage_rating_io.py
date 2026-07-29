@@ -45,7 +45,7 @@ def _module(score="Good", tag=True) -> dict:
         "name": "example",
         "label": "Current Label",
         "rater": "rater1",
-        "ezqcid": "SUB001",
+        "easyqcid": "SUB001",
         "tags": {"1": {"label": "Visible artifact", "value": tag}},
         "scores": {
             "1": {
@@ -95,20 +95,20 @@ def test_save_rating_writes_canonical_current_snapshot(tmp_path) -> None:
     new_file = _rating_dir(tmp_path) / "example-rater1-SUB001.json"
     assert new_file.exists()
     payload = json.loads(new_file.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["name"] == "example"
     assert payload["code"] == "current-code"
     assert payload["scores"]["1"]["value"] == "Good"
 
 
-def test_save_rating_surfaces_legacy_conflict_without_deleting_it(
+def test_save_rating_does_not_delete_unrelated_noncanonical_json(
     monkeypatch,
     tmp_path,
 ) -> None:
     page = _page(tmp_path)
     rating_dir = _rating_dir(tmp_path)
     rating_dir.mkdir(parents=True)
-    old_file = rating_dir / "example._.SUB001._.rater1._.Old._.False.json"
+    old_file = rating_dir / "unrelated.json"
     old_file.write_text("{}", encoding="utf-8")
     errors = []
     monkeypatch.setattr(
@@ -120,8 +120,8 @@ def test_save_rating_surfaces_legacy_conflict_without_deleting_it(
     page.save_rating()
 
     assert old_file.exists()
-    assert not (rating_dir / "example-rater1-SUB001.json").exists()
-    assert errors and "Legacy rating requires explicit migration" in errors[0][-1]
+    assert (rating_dir / "example-rater1-SUB001.json").exists()
+    assert errors == []
 
 
 def test_save_rating_keeps_old_file_if_atomic_write_fails(monkeypatch, tmp_path) -> None:
@@ -129,7 +129,9 @@ def test_save_rating_keeps_old_file_if_atomic_write_fails(monkeypatch, tmp_path)
     rating_dir = _rating_dir(tmp_path)
     rating_dir.mkdir(parents=True)
     old_file = rating_dir / "example-rater1-SUB001.json"
-    old_file.write_text(json.dumps(_module(score="Poor", tag=False)), encoding="utf-8")
+    old_payload = _module(score="Poor", tag=False)
+    old_payload["schema_version"] = 3
+    old_file.write_text(json.dumps(old_payload), encoding="utf-8")
     before = old_file.read_bytes()
 
     def fail_save(*args, **kwargs):
@@ -145,63 +147,57 @@ def test_save_rating_keeps_old_file_if_atomic_write_fails(monkeypatch, tmp_path)
     assert list(rating_dir.glob("*.json")) == [old_file]
 
 
-def test_tk_controller_reuses_one_directory_index_for_loads_and_save(
+def test_tk_controller_reuses_one_current_directory_index_for_loads_and_save(
     monkeypatch,
     tmp_path,
 ) -> None:
     rating_dir = _rating_dir(tmp_path)
     rating_dir.mkdir(parents=True)
-    for ezqcid in ("SUB001", "SUB002"):
+    for easyqcid in ("SUB001", "SUB002"):
         payload = _module(score="Good", tag=True)
-        payload["ezqcid"] = ezqcid
-        path = (
-            rating_dir
-            / f"example._.{ezqcid}._.rater1._.Good._.True.json"
-        )
+        payload["easyqcid"] = easyqcid
+        payload["schema_version"] = 3
+        path = rating_dir / f"example-rater1-{easyqcid}.json"
         path.write_text(json.dumps(payload), encoding="utf-8")
 
-    real_scan = rating_service.RatingRaterDirectoryIndex._scan_legacy_paths
-    scans = 0
+    real_build = rating_service.RatingRaterDirectoryIndex.build.__func__
+    builds = 0
 
-    def counted_scan(index):
-        nonlocal scans
-        scans += 1
-        return real_scan(index)
+    def counted_build(cls, target_dir, *, module_name, rater):
+        nonlocal builds
+        builds += 1
+        return real_build(
+            cls,
+            target_dir,
+            module_name=module_name,
+            rater=rater,
+        )
 
     monkeypatch.setattr(
         rating_service.RatingRaterDirectoryIndex,
-        "_scan_legacy_paths",
-        counted_scan,
-    )
-
-    def unexpected_fallback(*_args):
-        pytest.fail("save rebuilt the legacy lookup instead of reusing the index")
-
-    monkeypatch.setattr(
-        rating_service.RatingService,
-        "_legacy_files_for_identity",
-        staticmethod(unexpected_fallback),
+        "build",
+        classmethod(counted_build),
     )
     controller = QCPageController()
     module = _module(score=None, tag=False)
 
-    for ezqcid in ("SUB001", "SUB002"):
-        files, payload = controller.load_first_legacy_module_rating(
+    for easyqcid in ("SUB001", "SUB002"):
+        files, payload = controller.load_first_module_rating(
             module,
             rating_dir,
-            ezqcid,
+            easyqcid,
             "rater1",
         )
         assert len(files) == 1
         assert payload is not None
-        assert payload["ezqcid"] == ezqcid
+        assert payload["easyqcid"] == easyqcid
 
     new_rating = _module(score="Good", tag=False)
-    new_rating["ezqcid"] = "SUB003"
-    saved = controller.save_legacy_module_rating(new_rating, rating_dir)
+    new_rating["easyqcid"] = "SUB003"
+    saved = controller.save_module_rating(new_rating, rating_dir)
 
     assert saved.name == "example-rater1-SUB003.json"
-    assert scans == 1
+    assert builds == 1
 
 
 def test_set_module_rater_dir_without_rater_enters_watch_mode(tmp_path) -> None:
@@ -257,12 +253,13 @@ def test_load_rating_only_applies_rating_state_not_module_configuration(tmp_path
     rating_payload["notes"] = "saved notes"
     rating_payload["time"] = "2026-06-02 00:00:00"
     rating_payload["code_exe"] = {"0": "saved"}
+    rating_payload["schema_version"] = 3
     rating_dir = _rating_dir(tmp_path)
     rating_dir.mkdir(parents=True)
-    rating_file = rating_dir / "example._.SUB001._.rater1._.Good._.True.json"
+    rating_file = rating_dir / "example-rater1-SUB001.json"
     rating_file.write_text(json.dumps(rating_payload), encoding="utf-8")
 
-    page.load_rating(ezqcid="SUB001")
+    page.load_rating(easyqcid="SUB001")
 
     module = page.dt.settings["qcmodule"]["1"]
     assert module["label"] == "Current Label"
@@ -275,38 +272,18 @@ def test_load_rating_only_applies_rating_state_not_module_configuration(tmp_path
     assert module["code_exe"] == {"0": "saved"}
 
 
-def test_load_rating_with_duplicate_files_loads_first_without_popup(monkeypatch, tmp_path) -> None:
-    page = _page(tmp_path, module=_module(score=None, tag=False))
-    first_payload = _module(score="A", tag=False)
-    second_payload = _module(score="B", tag=True)
-    rating_dir = _rating_dir(tmp_path)
-    rating_dir.mkdir(parents=True)
-    first_file = rating_dir / "example._.SUB001._.rater1._.A._.False.json"
-    second_file = rating_dir / "example._.SUB001._.rater1._.B._.True.json"
-    first_file.write_text(json.dumps(first_payload), encoding="utf-8")
-    second_file.write_text(json.dumps(second_payload), encoding="utf-8")
-    monkeypatch.setattr(gui_qcpage_module.messagebox, "showinfo", lambda *args, **kwargs: pytest.fail("unexpected popup"))
-    monkeypatch.setattr(gui_qcpage_module.messagebox, "showerror", lambda *args, **kwargs: pytest.fail("unexpected popup"))
-
-    page.load_rating(ezqcid="SUB001")
-
-    module = page.dt.settings["qcmodule"]["1"]
-    assert module["scores"]["1"]["value"] == "A"
-    assert module["tags"]["1"]["value"] is False
-
-
 def test_load_rating_without_rater_enters_watch_mode_without_popup(monkeypatch, tmp_path) -> None:
     module = _module(score="Good", tag=True)
     module["rater"] = None
     page = _page(tmp_path, module=module)
     monkeypatch.setattr(gui_qcpage_module.messagebox, "showerror", lambda *args, **kwargs: pytest.fail("unexpected popup"))
 
-    page.load_rating(ezqcid="SUB002")
+    page.load_rating(easyqcid="SUB002")
 
     current_module = page.dt.settings["qcmodule"]["1"]
     assert page.watch_mode_ is True
     assert page.watch_mode.get() is True
-    assert current_module["ezqcid"] == "SUB002"
+    assert current_module["easyqcid"] == "SUB002"
     assert current_module["scores"]["1"]["value"] is None
     assert current_module["tags"]["1"]["value"] is False
 
@@ -315,13 +292,14 @@ def test_load_rating_incompatible_file_enters_watch_mode_without_popup(monkeypat
     page = _page(tmp_path, module=_module(score=None, tag=False))
     rating_payload = _module(score="Good", tag=True)
     rating_payload["scores"]["1"]["num_"] = ["Bad", "Ugly"]
+    rating_payload["schema_version"] = 3
     rating_dir = _rating_dir(tmp_path)
     rating_dir.mkdir(parents=True)
-    rating_file = rating_dir / "example._.SUB001._.rater1._.Good._.True.json"
+    rating_file = rating_dir / "example-rater1-SUB001.json"
     rating_file.write_text(json.dumps(rating_payload), encoding="utf-8")
     monkeypatch.setattr(gui_qcpage_module.messagebox, "showerror", lambda *args, **kwargs: pytest.fail("unexpected popup"))
 
-    page.load_rating(ezqcid="SUB001")
+    page.load_rating(easyqcid="SUB001")
 
     module = page.dt.settings["qcmodule"]["1"]
     assert page.watch_mode_ is True
@@ -337,7 +315,7 @@ def test_load_present_to_gui_without_module_uses_current_module(tmp_path) -> Non
     page.score_vars = {"1": _ValueVar()}
     page.tag_vars = {"1": _ValueVar()}
     page.notes_text = _NotesText()
-    page.ezqcid_index = None
+    page.easyqcid_index = None
 
     page.load_present_to_gui()
 
@@ -368,7 +346,7 @@ def test_gen_code_respects_passed_settings_for_current_module(tmp_path) -> None:
         "constants": {"image_path": "/custom/path.nii.gz"},
         "qcmodule": {"1": module},
     }
-    table = pd.DataFrame({"ezqcid": ["SUB001"]})
+    table = pd.DataFrame({"easyqcid": ["SUB001"]})
 
     code, code_exe = page.gen_code("SUB001", settings=settings, table=table)
 

@@ -18,7 +18,7 @@ from typing import Any, NoReturn
 
 MODULE_NAME_MAX_LENGTH = 32
 RATER_MAX_LENGTH = 32
-EZQCID_MAX_LENGTH = 128
+EASYQCID_MAX_LENGTH = 128
 
 PORTABLE_FILENAME_MAX_UTF8_BYTES = 240
 PORTABLE_PATH_MAX_UTF16_UNITS = 240
@@ -26,7 +26,7 @@ PORTABLE_PATH_MAX_UTF16_UNITS = 240
 _MODULE_OR_RATER_PATTERN = re.compile(
     rf"^[A-Za-z0-9_]{{1,{MODULE_NAME_MAX_LENGTH}}}$"
 )
-_EZQCID_PATTERN = re.compile(rf"^[A-Za-z0-9_.-]{{1,{EZQCID_MAX_LENGTH}}}$")
+_EASYQCID_PATTERN = re.compile(rf"^[A-Za-z0-9_.-]{{1,{EASYQCID_MAX_LENGTH}}}$")
 _WINDOWS_DEVICE_NAMES = frozenset(
     {
         "CON",
@@ -112,18 +112,18 @@ def _validate_module_or_rater(field: str, value: Any) -> None:
         _raise_identifier_error(field, value, "is a reserved Windows device name")
 
 
-def _validate_ezqcid(value: Any) -> None:
+def _validate_easyqcid(value: Any) -> None:
     if not isinstance(value, str):
-        _raise_identifier_error("ezqcid", value, "must be a string")
-    if _EZQCID_PATTERN.fullmatch(value) is None:
+        _raise_identifier_error("easyqcid", value, "must be a string")
+    if _EASYQCID_PATTERN.fullmatch(value) is None:
         _raise_identifier_error(
-            "ezqcid",
+            "easyqcid",
             value,
             "must contain 1-128 ASCII letters, digits, underscores, periods, or hyphens",
         )
     if value in {".", ".."}:
         _raise_identifier_error(
-            "ezqcid",
+            "easyqcid",
             value,
             "cannot be a current-directory or parent-directory marker",
         )
@@ -135,12 +135,12 @@ class RatingIdentity:
 
     module_name: str
     rater: str
-    ezqcid: str
+    easyqcid: str
 
     def __post_init__(self) -> None:
         validate_module_name(self.module_name)
         validate_rater(self.rater)
-        validate_ezqcid(self.ezqcid)
+        validate_easyqcid(self.easyqcid)
 
 
 def validate_module_name(value: str) -> str:
@@ -163,17 +163,17 @@ def validate_rater(value: str) -> str:
     return value
 
 
-def validate_ezqcid(value: str) -> str:
+def validate_easyqcid(value: str) -> str:
     """Validate and return one exact QC-list row identity."""
 
-    _validate_ezqcid(value)
+    _validate_easyqcid(value)
     return value
 
 
 def validate_rating_identity(
     module_name: str,
     rater: str,
-    ezqcid: str,
+    easyqcid: str,
 ) -> RatingIdentity:
     """Validate three strings and return their immutable exact identity.
 
@@ -181,7 +181,7 @@ def validate_rating_identity(
     Errors: :class:`RatingIdentityError` names the invalid field and reason.
     """
 
-    return RatingIdentity(module_name=module_name, rater=rater, ezqcid=ezqcid)
+    return RatingIdentity(module_name=module_name, rater=rater, easyqcid=easyqcid)
 
 
 def _validate_filename_budget(filename: str) -> None:
@@ -206,7 +206,7 @@ def build_rating_filename(identity: RatingIdentity) -> str:
 
     if not isinstance(identity, RatingIdentity):
         raise TypeError("identity must be a RatingIdentity")
-    filename = f"{identity.module_name}-{identity.rater}-{identity.ezqcid}.json"
+    filename = f"{identity.module_name}-{identity.rater}-{identity.easyqcid}.json"
     _validate_filename_budget(filename)
     return filename
 
@@ -214,7 +214,7 @@ def build_rating_filename(identity: RatingIdentity) -> str:
 def parse_rating_filename(filename: str) -> RatingIdentity:
     """Decode a canonical basename by removing one suffix and splitting twice.
 
-    Additional hyphens are retained in ``ezqcid``. Directory-bearing input is
+    Additional hyphens are retained in ``easyqcid``. Directory-bearing input is
     rejected so callers cannot accidentally treat a path as a basename.
 
     Side effects: none.
@@ -233,7 +233,7 @@ def parse_rating_filename(filename: str) -> RatingIdentity:
     if len(identity_parts) != 3 or any(part == "" for part in identity_parts):
         raise RatingFilenameError(
             filename,
-            "must encode module_name, rater, and ezqcid separated by two hyphens",
+            "must encode module_name, rater, and easyqcid separated by two hyphens",
         )
 
     try:
@@ -298,7 +298,7 @@ def canonical_rating_path(
 
 
 __all__ = [
-    "EZQCID_MAX_LENGTH",
+    "EASYQCID_MAX_LENGTH",
     "MODULE_NAME_MAX_LENGTH",
     "PORTABLE_FILENAME_MAX_UTF8_BYTES",
     "PORTABLE_PATH_MAX_UTF16_UNITS",
@@ -312,7 +312,7 @@ __all__ = [
     "build_rating_filename",
     "canonical_rating_path",
     "parse_rating_filename",
-    "validate_ezqcid",
+    "validate_easyqcid",
     "validate_module_name",
     "validate_rating_identity",
     "validate_rater",

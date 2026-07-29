@@ -18,7 +18,7 @@ from models.derived_formula import DerivedColumnFormula
 def _source() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002", "SUB003"],
+            "easyqcid": ["SUB001", "SUB002", "SUB003"],
             "age": [29, 31, 27],
             "score": [2, 4, 3],
         },
@@ -41,7 +41,7 @@ def test_dialog_previews_only_referenced_inputs_result_and_error(qtbot) -> None:
     assert [
         dialog.preview_table.horizontalHeaderItem(index).text()
         for index in range(dialog.preview_table.columnCount())
-    ] == ["ezqcid", "age", "age next", "错误"]
+    ] == ["easyqcid", "age", "age next", "错误"]
     assert dialog.preview_table.item(0, 2).text() == "30.0"
     assert dialog.preview_table.item(0, 3).text() == ""
     assert dialog.error_label.text() == ""
@@ -89,7 +89,7 @@ def test_preview_renders_missing_values_as_blank(qtbot) -> None:
 def test_row_errors_are_visible_in_preview_and_block_commit(qtbot) -> None:
     source = pd.DataFrame(
         {
-            "ezqcid": ["A", "B", "C"],
+            "easyqcid": ["A", "B", "C"],
             "raw": ["4", "bad", pd.NA],
         },
         index=[1, 2, 3],
@@ -130,17 +130,17 @@ def test_dialog_previews_and_commits_fixed_formula(qtbot) -> None:
     assert commits[0] == DerivedColumnFormula("batch", '"A"')
 
 
-def test_dialog_can_preview_missing_ezqcid_target(qtbot) -> None:
+def test_dialog_can_preview_missing_easyqcid_target(qtbot) -> None:
     source = pd.DataFrame({"raw_id": [" SUB001 ", "SUB002"]})
     dialog = DerivedColumnDialog(source, lambda request: request.name)
     qtbot.addWidget(dialog)
-    dialog.name_edit.setText("ezqcid")
+    dialog.name_edit.setText("easyqcid")
     dialog.editor.set_formula("TRIM([raw_id])")
 
     assert dialog.preview()
     assert dialog.preview_table.horizontalHeaderItem(0).text() == "行"
     assert dialog.preview_table.horizontalHeaderItem(1).text() == "raw_id"
-    assert dialog.preview_table.horizontalHeaderItem(2).text() == "ezqcid"
+    assert dialog.preview_table.horizontalHeaderItem(2).text() == "easyqcid"
     assert dialog.preview_table.item(0, 2).text() == "SUB001"
 
 

@@ -62,7 +62,7 @@ _LOCALIZABLE_PROPERTY_NAMES = frozenset(
 
 MESSAGES: Mapping[str, Mapping[str, str]] = {
     "app.workspace": {"zh_CN": "EasyQC 工作区", "en": "EasyQC workspace"},
-    "field.ezqcid": {"zh_CN": "ezqcid", "en": "ezqcid"},
+    "field.easyqcid": {"zh_CN": "easyqcid", "en": "easyqcid"},
     "language.label": {"zh_CN": "语言", "en": "Language"},
     "language.switch_to_english": {
         "zh_CN": "将界面切换为英文",
@@ -304,10 +304,10 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
         "en": "Close EasyQC-managed viewers before restarting",
     },
     "cross.viewer_placeholder": {
-        "zh_CN": "查看器命令模板，例如：freeview {{image}} --title {{ezqcid}}",
+        "zh_CN": "查看器命令模板，例如：freeview {{image}} --title {{easyqcid}}",
         "en": (
             "Viewer command template, for example: "
-            "freeview {{image}} --title {{ezqcid}}"
+            "freeview {{image}} --title {{easyqcid}}"
         ),
     },
     "nav.constants": {"zh_CN": "常量设置", "en": "Constants"},
@@ -377,8 +377,8 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "只读名单；筛选和排序作用于完整结果。": (
         "Read-only list. Filters and sorting apply to the complete result."
     ),
-    "写入前会校验 ezqcid、重复行和字段冲突；失败不会修改原名单。": (
-        "Before writing, EasyQC validates ezqcid, duplicate rows and field "
+    "写入前会校验 easyqcid、重复行和字段冲突；失败不会修改原名单。": (
+        "Before writing, EasyQC validates easyqcid, duplicate rows and field "
         "conflicts. A failure leaves the original list unchanged."
     ),
     "支持算术、比较以及 abs、round、isna、notna、fillna、contains、"
@@ -436,8 +436,8 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "重新启动前关闭由 EasyQC 管理的查看器": (
         "Close viewers managed by EasyQC before relaunching"
     ),
-    "查看器命令模板，例如：freeview {image} --title {ezqcid}": (
-        "Viewer command template, for example: freeview {image} --title {ezqcid}"
+    "查看器命令模板，例如：freeview {image} --title {easyqcid}": (
+        "Viewer command template, for example: freeview {image} --title {easyqcid}"
     ),
     "写入：质控前名单": "Write to Pre-QC list",
     "写入质控前名单": "Write to Pre-QC list",
@@ -509,7 +509,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "质控名单写入方式": "QC-list write mode",
     "冲突处理": "Conflict handling",
     "质控名单冲突处理": "QC-list conflict handling",
-    "按 ezqcid 合并列": "Merge columns by ezqcid",
+    "按 easyqcid 合并列": "Merge columns by easyqcid",
     "追加行": "Append rows",
     "替换现有名单": "Replace current list",
     "保留已有值": "Keep existing values",
@@ -579,8 +579,8 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "名单删除正在完成，请稍候": (
         "List deletion is finishing. Please wait."
     ),
-    "所选名单行包含重复 ezqcid": (
-        "The selected list rows contain duplicate ezqcid values."
+    "所选名单行包含重复 easyqcid": (
+        "The selected list rows contain duplicate easyqcid values."
     ),
     "当前没有可维护的质控前名单": (
         "There is no current Pre-QC list to maintain."
@@ -608,11 +608,11 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "新增列表达式不能为空": "The new-column expression cannot be empty.",
     "新增列名不能为空": "The new column name cannot be empty.",
     "新增列预览来源必须是表格": "The new-column preview source must be a table.",
-    "当前结果中没有 ezqcid 列": "The current result has no ezqcid column.",
-    "ezqcid 必须保持在第一列、可见且固定": (
-        "ezqcid must remain first, visible and pinned."
+    "当前结果中没有 easyqcid 列": "The current result has no easyqcid column.",
+    "easyqcid 必须保持在第一列、可见且固定": (
+        "easyqcid must remain first, visible and pinned."
     ),
-    "ezqcid 必须保持为第一列": "ezqcid must remain the first column.",
+    "easyqcid 必须保持为第一列": "easyqcid must remain the first column.",
     "固定列必须组成连续的前置列区": (
         "Pinned columns must form one continuous leading block."
     ),
@@ -753,7 +753,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "刷新结果": "Refresh results",
     "导出…": "Export…",
     "查找": "Find",
-    "搜索 ezqcid": "Search ezqcid",
+    "搜索 easyqcid": "Search easyqcid",
     "上一页": "Previous page",
     "下一页": "Next page",
     "每页": "Per page",
@@ -1052,12 +1052,12 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "直接输入": "Direct input",
     "读取并预览": "Read and preview",
     "导入方式": "Import mode",
-    "按 ezqcid 合并列": "Merge columns by ezqcid",
+    "按 easyqcid 合并列": "Merge columns by easyqcid",
     "追加行": "Append rows",
     "增加空行": "Add blank row",
     "删除选中行": "Delete selected rows",
     "清空导入数据": "Clear import data",
-    "写入前需包含 ezqcid": "ezqcid is required before writing",
+    "写入前需包含 easyqcid": "easyqcid is required before writing",
     "导入预览": "Import preview",
     "前 10 行预览": "First 10 rows",
     "名称": "Name",
@@ -1100,8 +1100,8 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "未选择记录": "No record selected",
     "没有可显示的质控前名单。": "No Pre-QC list records to display.",
     "没有可显示的质控结果": "No QC results to display.",
-    "请输入精确的 ezqcid": "Enter an exact ezqcid",
-    "没有匹配的 ezqcid": "No matching ezqcid",
+    "请输入精确的 easyqcid": "Enter an exact easyqcid",
+    "没有匹配的 easyqcid": "No matching easyqcid",
     "请选择要打开的项目": "Select a project to open.",
     "请先打开项目": "Open a project first.",
     "请先启动质控": "Start QC first.",
@@ -1124,7 +1124,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "为质控前名单新增列": "Add a column to the Pre-QC list",
     "为导入草稿新增列": "Add a column to the import draft",
     "仅在导入单列数据时使用": "Use only when importing one data column",
-    "例如 ezqcid 或 scanner_model": "For example: ezqcid or scanner_model",
+    "例如 easyqcid 或 scanner_model": "For example: easyqcid or scanner_model",
     "单列字段名": "Single-column field name",
     "可滚动质控名单导入页": "Scrollable QC list import page",
     "导入来源路径": "Import source path",
@@ -1162,7 +1162,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "下移所选列": "Move selected column down",
     "添加排序规则": "Add sort rule",
     "清空排序规则": "Clear sort rules",
-    "查找精确 ezqcid": "Find exact ezqcid",
+    "查找精确 easyqcid": "Find exact easyqcid",
     "项目常量": "Project constants",
     "常量操作错误": "Constant action error",
     "取消编辑": "Cancel editing",
@@ -1181,7 +1181,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "质控结果表格": "QC results table",
     "质控结果表格工具": "QC results table tools",
     "导出当前质控结果视图": "Export current QC-results view",
-    "搜索精确 ezqcid": "Search exact ezqcid",
+    "搜索精确 easyqcid": "Search exact easyqcid",
     "选择导入文件夹": "Select import folder",
     "选择导入文件": "Select import file",
     "名单文件 (*.csv *.xlsx *.xls *.txt *.list)": (
@@ -1247,7 +1247,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "模块编辑操作": "Module-edit actions",
     "质控模块名称": "QC module name",
     "质控模块显示标签": "QC module display label",
-    "固定 ezqcid 列": "Pinned ezqcid column",
+    "固定 easyqcid 列": "Pinned easyqcid column",
     "刷新质控结果": "Refresh QC results",
     "正在导入项目…": "Importing project…",
     "正在导入质控模块…": "Importing QC module…",
@@ -1701,8 +1701,8 @@ _SOURCE_PATTERNS = (
         "Delete sort priority {priority}",
     ),
     (
-        re.compile(r"^没有匹配的 ezqcid：(?P<value>.*)$"),
-        "No matching ezqcid: {value}",
+        re.compile(r"^没有匹配的 easyqcid：(?P<value>.*)$"),
+        "No matching easyqcid: {value}",
     ),
     (
         re.compile(r"^筛选 \((?P<shortcut>[A-Za-z0-9+]+)\)$"),

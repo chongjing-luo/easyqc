@@ -15,7 +15,7 @@ def test_100k_by_300_formula_stays_within_normal_envelope() -> None:
 
     row_count = 100_000
     source: dict[str, object] = {
-        "ezqcid": [f"ROW{index:06d}" for index in range(row_count)],
+        "easyqcid": [f"ROW{index:06d}" for index in range(row_count)],
         "image_path": [
             f"/data/site{index % 4}/SUB{index:06d}_T1.nii.gz"
             for index in range(row_count)

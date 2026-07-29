@@ -35,7 +35,7 @@ with redirect_stdout(sys.stderr if __name__ == "__main__" else sys.stdout):
 
 DATASET_SCHEMA_VERSION = 2
 METADATA_COLUMNS = (
-    "ezqcid",
+    "easyqcid",
     "group",
     "marker",
     "site",
@@ -159,7 +159,7 @@ def build_synthetic_table(config: BenchmarkConfig) -> pd.DataFrame:
 
     metadata = pd.DataFrame(
         {
-            "ezqcid": [f"SUB{index:07d}" for index in range(config.rows)],
+            "easyqcid": [f"SUB{index:07d}" for index in range(config.rows)],
             "group": pd.Categorical(
                 np.where(positions % 2 == 0, "control", "case")
             ),

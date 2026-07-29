@@ -34,7 +34,7 @@ _T = {
     "筛选": {"zh": "筛选", "en": "Filters"},
     "排序": {"zh": "排序", "en": "Sort"},
     "列": {"zh": "列", "en": "Columns"},
-    "查找 ezqcid": {"zh": "查找 ezqcid", "en": "Find ezqcid"},
+    "查找 easyqcid": {"zh": "查找 easyqcid", "en": "Find easyqcid"},
     "查找": {"zh": "查找", "en": "Find"},
     "打开 QC…": {"zh": "打开 QC…", "en": "Open QC…"},
     "撤销": {"zh": "撤销", "en": "Undo"},
@@ -82,15 +82,15 @@ _T = {
     "小于等于": {"zh": "小于等于", "en": "is at most"},
     "介于": {"zh": "介于", "en": "is between"},
     "没有可撤销的视图操作": {"zh": "没有可撤销的视图操作", "en": "No view action to undo"},
-    "ezqcid 不能隐藏": {"zh": "ezqcid 是 QC 身份列，不能隐藏", "en": "ezqcid is the QC identity column and cannot be hidden"},
-    "请输入 ezqcid": {"zh": "请输入 ezqcid", "en": "Enter an ezqcid"},
-    "未找到 ezqcid": {"zh": "在已应用的结果中未找到 ezqcid", "en": "ezqcid was not found in the applied result"},
+    "easyqcid 不能隐藏": {"zh": "easyqcid 是 QC 身份列，不能隐藏", "en": "easyqcid is the QC identity column and cannot be hidden"},
+    "请输入 easyqcid": {"zh": "请输入 easyqcid", "en": "Enter an easyqcid"},
+    "未找到 easyqcid": {"zh": "在已应用的结果中未找到 easyqcid", "en": "easyqcid was not found in the applied result"},
     "行计数": {"zh": "{matched} / {total} 行", "en": "{matched} / {total} rows"},
     "列计数": {"zh": "{visible} / {total} 列", "en": "{visible} / {total} columns"},
     "源位置": {"zh": "源位置 {position}", "en": "source {position}"},
     "列不存在": {"zh": "列不存在: {column}", "en": "Column does not exist: {column}"},
     "每页错误": {"zh": "每页行数必须大于零", "en": "Rows per page must be greater than zero"},
-    "结果缺少 ezqcid": {"zh": "已应用的结果缺少 ezqcid 列", "en": "The applied result has no ezqcid column"},
+    "结果缺少 easyqcid": {"zh": "已应用的结果缺少 easyqcid 列", "en": "The applied result has no easyqcid column"},
     "QC 缺少身份列": {"zh": "表格缺少 QC 身份列 '{column}'", "en": "The table has no QC identity column '{column}'"},
     "QC 位置失效": {"zh": "所选记录位置已失效，请重新选择", "en": "The selected row is stale; select it again"},
     "QC 身份为空": {"zh": "所选记录的 {column} 为空，无法打开 QC", "en": "The selected row has an empty {column}; QC cannot be opened"},
@@ -509,7 +509,7 @@ class TableWorkspace:
         for index, widget in enumerate((self.filter_button, self.sort_button, self.columns_button, self.undo_button, self.reset_button)):
             widget.grid(row=0, column=index, padx=(0, 6))
 
-        ttk.Label(self.toolbar, text=_tr(_T, "查找 ezqcid")).grid(row=0, column=7, sticky="e", padx=(12, 4))
+        ttk.Label(self.toolbar, text=_tr(_T, "查找 easyqcid")).grid(row=0, column=7, sticky="e", padx=(12, 4))
         self.find_entry = ttk.Entry(self.toolbar, textvariable=self.find_var, width=18)
         self.find_entry.grid(row=0, column=8, sticky="e")
         ttk.Button(self.toolbar, text=_tr(_T, "查找"), command=self.find_identity_exact).grid(row=0, column=9, padx=(4, 8))
@@ -817,8 +817,8 @@ class TableWorkspace:
         if column not in self.applied_state.columns.order:
             self.action_error_var.set(_tr(_T, "列不存在").format(column=column))
             return False
-        if column == "ezqcid" and not visible:
-            self.action_error_var.set(_tr(_T, "ezqcid 不能隐藏"))
+        if column == "easyqcid" and not visible:
+            self.action_error_var.set(_tr(_T, "easyqcid 不能隐藏"))
             return False
         base = self._state_with_current_widths()
         hidden = set(base.columns.hidden)
@@ -908,15 +908,15 @@ class TableWorkspace:
     def find_identity_exact(self) -> bool:
         query = self.find_var.get().strip()
         if not query:
-            self.action_error_var.set(_tr(_T, "请输入 ezqcid"))
+            self.action_error_var.set(_tr(_T, "请输入 easyqcid"))
             return False
         try:
             result_position = self.service.find_identity(self.result, query)
         except QcIdentityError:
-            self.action_error_var.set(_tr(_T, "结果缺少 ezqcid"))
+            self.action_error_var.set(_tr(_T, "结果缺少 easyqcid"))
             return False
         if result_position is None:
-            self.action_error_var.set(_tr(_T, "未找到 ezqcid"))
+            self.action_error_var.set(_tr(_T, "未找到 easyqcid"))
             return False
         self._remember_current_widths()
         self.selected_source_position = int(self.result.source_positions[result_position])
@@ -1108,7 +1108,7 @@ class TableWorkspace:
             self.selection_status_var.set(_tr(_T, "所选记录不在当前视图"))
         elif self.table.selected_row is not None:
             source_text = _tr(_T, "源位置").format(position=self.table.selected_row.source_position)
-            self.selection_status_var.set(f"ezqcid · {source_text}")
+            self.selection_status_var.set(f"easyqcid · {source_text}")
         else:
             self.selection_status_var.set(_tr(_T, "未选择记录"))
         if matched == 0:

@@ -11,8 +11,8 @@ from models.table_view_state import ColumnViewState
 
 
 DEFAULT = ColumnViewState(
-    order=("ezqcid", "site", "age", "passed"),
-    pinned=("ezqcid",),
+    order=("easyqcid", "site", "age", "passed"),
+    pinned=("easyqcid",),
 )
 
 
@@ -52,21 +52,21 @@ def test_column_visibility_pin_unpin_and_move_keep_one_leading_block(qtbot):
     site.setCheckState(Qt.CheckState.Unchecked)
     editor.list_widget.setCurrentItem(site)
     qtbot.mouseClick(editor.pin_button, Qt.MouseButton.LeftButton)
-    assert editor.state().pinned == ("ezqcid", "site")
+    assert editor.state().pinned == ("easyqcid", "site")
     assert "site" not in editor.state().hidden
 
     age = _item(editor, "age")
     editor.list_widget.setCurrentItem(age)
     qtbot.mouseClick(editor.pin_button, Qt.MouseButton.LeftButton)
     qtbot.mouseClick(editor.move_up_button, Qt.MouseButton.LeftButton)
-    assert editor.state().order == ("ezqcid", "age", "site", "passed")
-    assert editor.state().pinned == ("ezqcid", "age", "site")
+    assert editor.state().order == ("easyqcid", "age", "site", "passed")
+    assert editor.state().pinned == ("easyqcid", "age", "site")
 
     age = _item(editor, "age")
     editor.list_widget.setCurrentItem(age)
     qtbot.mouseClick(editor.unpin_button, Qt.MouseButton.LeftButton)
-    assert editor.state().order == ("ezqcid", "site", "age", "passed")
-    assert editor.state().pinned == ("ezqcid", "site")
+    assert editor.state().order == ("easyqcid", "site", "age", "passed")
+    assert editor.state().pinned == ("easyqcid", "site")
     pinned_count = len(editor.state().pinned)
     assert editor.state().order[:pinned_count] == editor.state().pinned
 
@@ -75,12 +75,12 @@ def test_column_visibility_pin_unpin_and_move_keep_one_leading_block(qtbot):
     assert editor.state().hidden == ("passed",)
 
 
-def test_ezqcid_controls_cannot_hide_unpin_or_move_identity(qtbot):
+def test_easyqcid_controls_cannot_hide_unpin_or_move_identity(qtbot):
     dialog = ColumnsDialog(DEFAULT, DEFAULT)
     qtbot.addWidget(dialog)
     dialog.show()
     editor = dialog.editor
-    identity = _item(editor, "ezqcid")
+    identity = _item(editor, "easyqcid")
     editor.list_widget.setCurrentItem(identity)
 
     assert not bool(identity.flags() & Qt.ItemFlag.ItemIsUserCheckable)
@@ -89,16 +89,16 @@ def test_ezqcid_controls_cannot_hide_unpin_or_move_identity(qtbot):
     assert not editor.unpin_button.isEnabled()
     assert not editor.move_selected(1)
     assert not editor.unpin_selected()
-    assert editor.state().order[0] == "ezqcid"
-    assert "ezqcid" not in editor.state().hidden
-    assert editor.state().pinned[0] == "ezqcid"
+    assert editor.state().order[0] == "easyqcid"
+    assert "easyqcid" not in editor.state().hidden
+    assert editor.state().pinned[0] == "easyqcid"
 
 
 def test_columns_reset_cancel_close_and_apply_are_transactional(qtbot):
     applied = ColumnViewState(
-        order=("ezqcid", "age", "site", "passed"),
+        order=("easyqcid", "age", "site", "passed"),
         hidden=("passed",),
-        pinned=("ezqcid", "age"),
+        pinned=("easyqcid", "age"),
     )
     dialog = ColumnsDialog(applied, DEFAULT)
     qtbot.addWidget(dialog)
@@ -159,7 +159,7 @@ def test_search_has_a_visible_label_and_invalid_state_is_atomic(qtbot):
             ColumnViewState(
                 order=DEFAULT.order,
                 hidden=("site",),
-                pinned=("ezqcid", "site"),
+                pinned=("easyqcid", "site"),
             )
         )
     assert dialog.editor.state() == before
@@ -167,7 +167,7 @@ def test_search_has_a_visible_label_and_invalid_state_is_atomic(qtbot):
         dialog.editor.set_state(
             ColumnViewState(
                 order=DEFAULT.order,
-                pinned=("ezqcid", "age"),
+                pinned=("easyqcid", "age"),
             )
         )
     assert dialog.editor.state() == before

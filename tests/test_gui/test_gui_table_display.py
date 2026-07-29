@@ -17,11 +17,11 @@ def _display() -> TableDisplay:
     display = TableDisplay.__new__(TableDisplay)
     display.dt = SimpleNamespace(
         var={
-            "ezqc_new": pd.DataFrame({"ezqcid": ["SUB002"]}),
-            "ezqc_all": pd.DataFrame({"ezqcid": ["SUB001"]}),
+            "easyqc_new": pd.DataFrame({"easyqcid": ["SUB002"]}),
+            "easyqc_all": pd.DataFrame({"easyqcid": ["SUB001"]}),
         },
         tab={
-            "ezqc_qctable": pd.DataFrame({"ezqcid": ["SUB003"]}),
+            "easyqc_qctable": pd.DataFrame({"easyqcid": ["SUB003"]}),
         },
         settings={
             "var_select_filter": "var filter",
@@ -60,7 +60,7 @@ def test_open_image_from_right_menu_passes_explicit_qcpage_context() -> None:
 
     assert "state = self.state_adapter()" in source
     assert "settings = state.settings()" in source
-    assert "qcpage_instance.gen_code(ezqcid, settings, module, table)" in source
+    assert "qcpage_instance.gen_code(easyqcid, settings, module, table)" in source
     assert "qcpage_instance.dt = self.dt" not in source
     assert "self.dt.settings" not in source
     assert "qcpage_instance.module_index" not in source
@@ -81,7 +81,7 @@ class _FakeDataManager:
 def test_execute_filter_query_rejects_non_json_text() -> None:
     display = _display()
     display.DataM = _FakeDataManager()
-    df = pd.DataFrame({"ezqcid": ["SUB001"], "age": [29], "flag": [True]})
+    df = pd.DataFrame({"easyqcid": ["SUB001"], "age": [29], "flag": [True]})
 
     try:
         display.execute_filter_query(df, "age >= 18")
@@ -98,7 +98,7 @@ def test_execute_filter_query_rejects_empty_query() -> None:
     display.DataM = _FakeDataManager()
 
     try:
-        display.execute_filter_query(pd.DataFrame({"ezqcid": ["SUB001"]}), "  ")
+        display.execute_filter_query(pd.DataFrame({"easyqcid": ["SUB001"]}), "  ")
     except ValueError as exc:
         assert "请输入 JSON 结构化表格转换操作" in str(exc)
     else:
@@ -108,15 +108,15 @@ def test_execute_filter_query_rejects_empty_query() -> None:
 def test_default_transform_template_is_structured_json_and_executable() -> None:
     display = _display()
     display.DataM = DataManager()
-    df = pd.DataFrame({"ezqcid": ["SUB001", "SUB002"], "score": [1, 3], "label": ["A", "B"]})
+    df = pd.DataFrame({"easyqcid": ["SUB001", "SUB002"], "score": [1, 3], "label": ["A", "B"]})
 
     template = display.default_transform_template(df)
     operations = display.parse_transform_operations(template)
     result = display.execute_filter_query(df, template)
 
     assert operations[0] == {"operation": "derive_column", "name": "score_valid", "expression": "notna(score)"}
-    assert result["ezqcid"].tolist() == ["SUB002", "SUB001"]
-    assert list(result.columns) == ["ezqcid", "score", "score_valid", "label"]
+    assert result["easyqcid"].tolist() == ["SUB002", "SUB001"]
+    assert list(result.columns) == ["easyqcid", "score", "score_valid", "label"]
     assert result["score_valid"].tolist() == [True, True]
 
 
@@ -133,25 +133,25 @@ def test_default_transform_template_stays_executable_with_special_column_names()
 
 def test_table_transform_dialog_executes_structured_json_without_gui() -> None:
     dialog = TableTransformDialog(None)
-    df = pd.DataFrame({"ezqcid": ["SUB001", "SUB002"], "age": [17, 25]})
+    df = pd.DataFrame({"easyqcid": ["SUB001", "SUB002"], "age": [17, 25]})
 
     result = dialog.execute_query(
         df,
         '{"operations": ['
         '{"operation": "derive_column", "name": "adult", "expression": "age >= 18"},'
         '{"operation": "filter_rows", "conditions": [{"column": "adult", "operator": "==", "value": true}]},'
-        '{"operation": "select_columns", "columns": ["ezqcid", "adult"]}'
+        '{"operation": "select_columns", "columns": ["easyqcid", "adult"]}'
         ']}',
     )
 
-    assert result.to_dict("records") == [{"ezqcid": "SUB002", "adult": True}]
+    assert result.to_dict("records") == [{"easyqcid": "SUB002", "adult": True}]
 
 
 def test_table_transform_dialog_converts_simple_legacy_select_filter_without_sql_engine() -> None:
     dialog = TableTransformDialog(None)
     df = pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002", "SUB003"],
+            "easyqcid": ["SUB001", "SUB002", "SUB003"],
             "mod": ["anat", "rest", "rest"],
             "SESSION": [1, 1, 2],
         }
@@ -159,7 +159,7 @@ def test_table_transform_dialog_converts_simple_legacy_select_filter_without_sql
 
     result = dialog.execute_query(df, "SELECT * FROM df WHERE mod = 'rest' and SESSION >= 2")
 
-    assert result["ezqcid"].tolist() == ["SUB003"]
+    assert result["easyqcid"].tolist() == ["SUB003"]
 
 
 def test_table_transform_dialog_rejects_invalid_structured_operation() -> None:
@@ -208,7 +208,7 @@ def _workspace_display(tk_root) -> TableDisplay:
 
 
 def test_show_df_returns_the_unified_workspace_window(monkeypatch, tk_root) -> None:
-    source = pd.DataFrame({"ezqcid": ["SUB001"], "score": [1]})
+    source = pd.DataFrame({"easyqcid": ["SUB001"], "score": [1]})
     calls = []
 
     class FakeWorkspace:
@@ -230,7 +230,7 @@ def test_show_df_returns_the_unified_workspace_window(monkeypatch, tk_root) -> N
 
 
 def test_filter_sorter_uses_same_workspace_and_never_persists_result(monkeypatch, tk_root) -> None:
-    source = pd.DataFrame({"ezqcid": ["SUB001"], "score": [1]})
+    source = pd.DataFrame({"easyqcid": ["SUB001"], "score": [1]})
     display = _workspace_display(tk_root)
     display.resolve_filter_source = lambda result_type, frame: (
         source.copy(),
@@ -252,7 +252,7 @@ def test_filter_sorter_uses_same_workspace_and_never_persists_result(monkeypatch
 def test_supported_legacy_select_becomes_typed_applied_filters(tk_root) -> None:
     source = pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002", "SUB003"],
+            "easyqcid": ["SUB001", "SUB002", "SUB003"],
             "site": ["A", "B", "B"],
             "score": [1, 2, 3],
         }
@@ -269,20 +269,20 @@ def test_supported_legacy_select_becomes_typed_applied_filters(tk_root) -> None:
         ("site", "==", "B"),
         ("score", ">=", 3),
     ]
-    assert workspace.row_window.dataframe["ezqcid"].tolist() == ["SUB003"]
+    assert workspace.row_window.dataframe["easyqcid"].tolist() == ["SUB003"]
     assert workspace.result.source_total == 3
     assert workspace.result.matched_total == 1
 
 
 def test_unsupported_legacy_filter_opens_complete_source_with_specific_safe_warning(tk_root) -> None:
-    source = pd.DataFrame({"ezqcid": ["SUB001", "SUB002"], "score": [1, 2]})
+    source = pd.DataFrame({"easyqcid": ["SUB001", "SUB002"], "score": [1, 2]})
     display = _workspace_display(tk_root)
     raw_legacy = '{"operations": [{"operation": "drop_columns"}]}'
 
     display.open_table_workspace(source, raw_legacy)
     workspace = display.table_workspace
 
-    assert workspace.row_window.dataframe["ezqcid"].tolist() == ["SUB001", "SUB002"]
+    assert workspace.row_window.dataframe["easyqcid"].tolist() == ["SUB001", "SUB002"]
     assert workspace.applied_state.conditions == ()
     warning = workspace.action_error_var.get()
     assert "legacy" in warning.lower() or "旧版" in warning
@@ -318,8 +318,8 @@ def test_qc_menu_popup_coordinates_accept_a_workspace_button_anchor() -> None:
 def test_parse_transform_operations_accepts_list_wrapper_and_single_operation() -> None:
     display = _display()
 
-    assert display.parse_transform_operations('[{"operation": "select_columns", "columns": ["ezqcid"]}]') == [
-        {"operation": "select_columns", "columns": ["ezqcid"]}
+    assert display.parse_transform_operations('[{"operation": "select_columns", "columns": ["easyqcid"]}]') == [
+        {"operation": "select_columns", "columns": ["easyqcid"]}
     ]
     assert display.parse_transform_operations('{"operations": [{"operation": "sort_rows", "sort_keys": []}]}') == [
         {"operation": "sort_rows", "sort_keys": []}
@@ -338,7 +338,7 @@ def test_parse_transform_operations_accepts_list_wrapper_and_single_operation() 
 def test_execute_filter_query_routes_json_operations_to_table_transform() -> None:
     display = _display()
     display.DataM = _FakeDataManager()
-    df = pd.DataFrame({"ezqcid": ["SUB001"], "age": [29]})
+    df = pd.DataFrame({"easyqcid": ["SUB001"], "age": [29]})
 
     result = display.execute_filter_query(
         df,
@@ -376,7 +376,7 @@ def test_execute_filter_query_rejects_invalid_json_transform_shape() -> None:
     display.DataM = _FakeDataManager()
 
     try:
-        display.execute_filter_query(pd.DataFrame({"ezqcid": ["SUB001"]}), '{"bad": true}')
+        display.execute_filter_query(pd.DataFrame({"easyqcid": ["SUB001"]}), '{"bad": true}')
     except ValueError as exc:
         assert "JSON转换操作" in str(exc)
     else:
@@ -388,22 +388,22 @@ def test_execute_filter_query_rejects_invalid_json_transform_shape() -> None:
 
 def test_restore_filter_source_without_type_returns_copy() -> None:
     display = _display()
-    source = pd.DataFrame({"ezqcid": ["SUB010"]})
+    source = pd.DataFrame({"easyqcid": ["SUB010"]})
 
     result = display.restore_filter_source(None, source)
 
     assert result.equals(source)
-    result.loc[0, "ezqcid"] = "CHANGED"
-    assert source.loc[0, "ezqcid"] == "SUB010"
+    result.loc[0, "easyqcid"] = "CHANGED"
+    assert source.loc[0, "easyqcid"] == "SUB010"
 
 
 
 def test_restore_filter_source_for_qctable_preserves_existing_filter_table() -> None:
     display = _display()
-    existing = pd.DataFrame({"ezqcid": ["OLD"]})
-    display.dt.tab["ezqc_qctable_filter"] = existing.copy()
+    existing = pd.DataFrame({"easyqcid": ["OLD"]})
+    display.dt.tab["easyqc_qctable_filter"] = existing.copy()
 
-    result = display.restore_filter_source("qctable", pd.DataFrame({"ezqcid": ["SUB010"]}))
+    result = display.restore_filter_source("qctable", pd.DataFrame({"easyqcid": ["SUB010"]}))
 
     assert result is None
-    assert display.dt.tab["ezqc_qctable_filter"].equals(existing)
+    assert display.dt.tab["easyqc_qctable_filter"].equals(existing)

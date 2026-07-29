@@ -79,15 +79,19 @@ class DataManager:
         """
         df = df.copy()
 
-        # 如果ezqcid列不存在，则添加
-        if varname and 'ezqcid' not in df.columns:
+        # 如果easyqcid列不存在，则添加
+        if varname and 'easyqcid' not in df.columns:
             if varname not in df.columns:
                 log_error(f"变量列不存在: {varname}", "DataManager", show_popup=False)
             else:
-                df['ezqcid'] = df[varname]
-        # 如果ezqcbatch列不存在，或者当前的ezqcbatch和batch不同，则添加
-        if batch and ('ezqcbatch' not in df.columns or df.empty or df['ezqcbatch'].iloc[0] != batch):
-            df['ezqcbatch'] = batch
+                df['easyqcid'] = df[varname]
+        # 如果 easyqcbatch 列不存在，或者当前批次不同，则添加
+        if batch and (
+            "easyqcbatch" not in df.columns
+            or df.empty
+            or df["easyqcbatch"].iloc[0] != batch
+        ):
+            df["easyqcbatch"] = batch
 
         return df
 

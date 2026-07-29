@@ -23,7 +23,7 @@ from core.module_filter import (
 from core.qc_workflow_service import QcWorkflowService
 from core.rating_identity import (
     RatingIdentityError,
-    validate_ezqcid,
+    validate_easyqcid,
     validate_module_name,
     validate_rater,
     validate_rating_identity,
@@ -57,7 +57,7 @@ class ProjectContextSnapshot:
     constants: dict[str, Any]
     modules: tuple[QCModule, ...]
     ratings: tuple[Rating, ...]
-    rating_positions_by_ezqcid: Mapping[str, tuple[int, ...]]
+    rating_positions_by_easyqcid: Mapping[str, tuple[int, ...]]
     table_view_service: TableViewService
 
     @property
@@ -75,7 +75,7 @@ class PreparedProjectContext:
     constants: dict[str, Any]
     modules: tuple[QCModule, ...]
     ratings: tuple[Rating, ...]
-    rating_positions_by_ezqcid: Mapping[str, tuple[int, ...]]
+    rating_positions_by_easyqcid: Mapping[str, tuple[int, ...]]
     table_view_service: TableViewService
 
 
@@ -131,7 +131,7 @@ class ProjectContextService:
         last = project_service.registry.last_project
         if last:
             return self.prepare_project(last)
-        subjects = pd.DataFrame(columns=["ezqcid"])
+        subjects = pd.DataFrame(columns=["easyqcid"])
         return PreparedProjectContext(
             project_load=None,
             project_names=tuple(project_service.list_all()),
@@ -139,7 +139,7 @@ class ProjectContextService:
             constants={},
             modules=(),
             ratings=(),
-            rating_positions_by_ezqcid=MappingProxyType({}),
+            rating_positions_by_easyqcid=MappingProxyType({}),
             table_view_service=TableViewService(subjects),
         )
 
@@ -179,7 +179,7 @@ class ProjectContextService:
                 constants={},
                 modules=(),
                 ratings=(),
-                rating_positions_by_ezqcid=MappingProxyType({}),
+                rating_positions_by_easyqcid=MappingProxyType({}),
                 table_view_service=prepared.table_view_service,
             )
 
@@ -201,7 +201,7 @@ class ProjectContextService:
             constants=deepcopy(prepared.constants),
             modules=tuple(deepcopy(prepared.modules)),
             ratings=tuple(deepcopy(prepared.ratings)),
-            rating_positions_by_ezqcid=prepared.rating_positions_by_ezqcid,
+            rating_positions_by_easyqcid=prepared.rating_positions_by_easyqcid,
             table_view_service=prepared.table_view_service,
         )
 
@@ -222,9 +222,9 @@ class ProjectContextService:
             self._validate_module_identity(module)
         subjects = self.configuration_service.table_service.load_table(project, TABLE_ALL)
         if subjects is None:
-            subjects = pd.DataFrame(columns=["ezqcid"])
+            subjects = pd.DataFrame(columns=["easyqcid"])
         subjects = self._validate_subjects(subjects, constants)
-        loaded_ratings = RatingService(project).load_legacy_state(subjects)
+        loaded_ratings = RatingService(project).load_state(subjects)
         ratings = tuple(deepcopy(loaded_ratings.ratings))
         table_source = self._professional_table_source(subjects, loaded_ratings.qctable)
         return PreparedProjectContext(
@@ -234,7 +234,7 @@ class ProjectContextService:
             constants=deepcopy(constants),
             modules=typed_modules,
             ratings=ratings,
-            rating_positions_by_ezqcid=self._index_rating_positions(ratings),
+            rating_positions_by_easyqcid=self._index_rating_positions(ratings),
             table_view_service=TableViewService(table_source),
         )
 
@@ -248,15 +248,15 @@ class ProjectContextService:
             raise TypeError("Subjects must be a pandas DataFrame")
         if frame.columns.has_duplicates:
             raise ConfigurationError("Subject table contains duplicate columns")
-        if "ezqcid" not in frame.columns:
-            raise ConfigurationError("Subject table requires ezqcid")
+        if "easyqcid" not in frame.columns:
+            raise ConfigurationError("Subject table requires easyqcid")
         result = frame.copy(deep=True)
-        identities = tuple(cls._validated_ezqcid(value) for value in result["ezqcid"])
+        identities = tuple(cls._validated_easyqcid(value) for value in result["easyqcid"])
         duplicates = sorted(
             identity for identity, count in Counter(identities).items() if count > 1
         )
         if duplicates:
-            raise ProjectContextError(f"Subject table contains duplicate ezqcid: {duplicates}")
+            raise ProjectContextError(f"Subject table contains duplicate easyqcid: {duplicates}")
         casefolded: dict[str, str] = {}
         case_collisions: set[tuple[str, str]] = set()
         for identity in identities:
@@ -265,13 +265,13 @@ class ProjectContextService:
                 case_collisions.add(tuple(sorted((prior, identity))))
         if case_collisions:
             raise ProjectContextError(
-                "Subject table contains case-only ezqcid collisions: "
+                "Subject table contains case-only easyqcid collisions: "
                 f"{sorted(case_collisions)}"
             )
         collisions = sorted(set(map(str, result.columns)) & set(constants))
         if collisions:
             raise ConfigurationError(f"Subject column conflicts with constant: {collisions}")
-        result["ezqcid"] = list(identities)
+        result["easyqcid"] = list(identities)
         return result
 
     @staticmethod
@@ -297,9 +297,9 @@ class ProjectContextService:
         return aggregated.loc[:, subject_columns + rating_columns].copy(deep=True)
 
     @staticmethod
-    def _validated_ezqcid(value: Any) -> str:
+    def _validated_easyqcid(value: Any) -> str:
         try:
-            return validate_ezqcid(value)
+            return validate_easyqcid(value)
         except RatingIdentityError as exc:
             raise ProjectContextError(str(exc)) from exc
 
@@ -307,7 +307,7 @@ class ProjectContextService:
     def _normalize_identity(cls, value: Any) -> str:
         if value in (None, ""):
             return ""
-        return cls._validated_ezqcid(value)
+        return cls._validated_easyqcid(value)
 
     @staticmethod
     def _validate_module_identity(module: QCModule) -> None:
@@ -322,13 +322,13 @@ class ProjectContextService:
     def _validated_rating_identity(
         module_name: Any,
         rater: Any,
-        ezqcid: Any,
+        easyqcid: Any,
     ) -> tuple[str, str, str]:
         try:
-            identity = validate_rating_identity(module_name, rater, ezqcid)
+            identity = validate_rating_identity(module_name, rater, easyqcid)
         except RatingIdentityError as exc:
             raise ProjectContextError(str(exc)) from exc
-        return identity.module_name, identity.rater, identity.ezqcid
+        return identity.module_name, identity.rater, identity.easyqcid
 
     @classmethod
     def _index_rating_positions(
@@ -337,9 +337,9 @@ class ProjectContextService:
     ) -> Mapping[str, tuple[int, ...]]:
         positions: dict[str, list[int]] = {}
         for position, rating in enumerate(ratings):
-            identity = cls._normalize_identity(rating.ezqcid)
+            identity = cls._normalize_identity(rating.easyqcid)
             if not identity:
-                raise ProjectContextError("Rating snapshot contains a blank ezqcid")
+                raise ProjectContextError("Rating snapshot contains a blank easyqcid")
             positions.setdefault(identity, []).append(position)
         return MappingProxyType(
             {
@@ -354,14 +354,14 @@ class ProjectContextService:
         snapshot: ProjectContextSnapshot,
         identity: str,
     ) -> tuple[Rating, ...]:
-        positions = snapshot.rating_positions_by_ezqcid.get(identity, ())
+        positions = snapshot.rating_positions_by_easyqcid.get(identity, ())
         if any(
             position < 0 or position >= len(snapshot.ratings)
             for position in positions
         ):
             raise ProjectContextError("QC rating snapshot index is inconsistent")
         ratings = tuple(snapshot.ratings[position] for position in positions)
-        if any(rating.ezqcid != identity for rating in ratings):
+        if any(rating.easyqcid != identity for rating in ratings):
             raise ProjectContextError("QC rating snapshot index is inconsistent")
         return ratings
 
@@ -387,26 +387,26 @@ class ProjectContextService:
     def qc_row_context(
         self,
         snapshot: ProjectContextSnapshot,
-        ezqcid: str,
+        easyqcid: str,
     ) -> QcRowContext:
         """Resolve snapshot-backed module and rating facts for one exact row."""
 
         self._validate_current_snapshot(snapshot)
-        identity = self._normalize_identity(ezqcid)
+        identity = self._normalize_identity(easyqcid)
         if not identity:
             raise ProjectContextError(
-                f"QC row ezqcid is not in the current project: {identity}"
+                f"QC row easyqcid is not in the current project: {identity}"
             )
         selected_subject = snapshot.subjects.loc[
-            snapshot.subjects["ezqcid"].eq(identity)
+            snapshot.subjects["easyqcid"].eq(identity)
         ].copy(deep=True)
         if selected_subject.empty:
             raise ProjectContextError(
-                f"QC row ezqcid is not in the current project: {identity}"
+                f"QC row easyqcid is not in the current project: {identity}"
             )
         if len(selected_subject) > 1:
             raise ProjectContextError(
-                f"QC row ezqcid is ambiguous in the current project: {identity}"
+                f"QC row easyqcid is ambiguous in the current project: {identity}"
             )
 
         module_entries = []
@@ -449,7 +449,7 @@ class ProjectContextService:
             rater = self._normalize_identity(rating.rater)
             record_entries.append(
                 QcRecordMenuEntry(
-                    ezqcid=identity,
+                    easyqcid=identity,
                     module_name=module_name,
                     module_label=str(
                         payload.get("label")
@@ -469,7 +469,7 @@ class ProjectContextService:
         )
         try:
             return QcRowContext(
-                ezqcid=identity,
+                easyqcid=identity,
                 modules=tuple(module_entries),
                 records=tuple(record_entries),
             )
@@ -480,7 +480,7 @@ class ProjectContextService:
         self,
         snapshot: ProjectContextSnapshot,
         *,
-        ezqcid: str,
+        easyqcid: str,
         module_name: str,
         rater: str,
     ) -> QcWorkflowService:
@@ -490,13 +490,13 @@ class ProjectContextService:
         module_key, rater_key, identity = self._validated_rating_identity(
             module_name,
             rater,
-            ezqcid,
+            easyqcid,
         )
         matches = [
             rating
             for rating in self._ratings_for_identity(snapshot, identity)
             if (
-                rating.ezqcid,
+                rating.easyqcid,
                 rating.module_name,
                 rating.rater,
             )
@@ -512,15 +512,15 @@ class ProjectContextService:
             )
 
         matching_rows = snapshot.subjects.loc[
-            snapshot.subjects["ezqcid"].eq(identity)
+            snapshot.subjects["easyqcid"].eq(identity)
         ]
         if len(matching_rows) != 1:
             raise ProjectContextError(
-                f"Historical QC ezqcid is not in the current project: {identity}"
+                f"Historical QC easyqcid is not in the current project: {identity}"
             )
         payload = deepcopy(matches[0].to_legacy_dict())
         if (
-            payload.get("ezqcid") != identity
+            payload.get("easyqcid") != identity
             or payload.get("name") != module_key
             or payload.get("rater") != rater_key
         ):
@@ -544,11 +544,11 @@ class ProjectContextService:
             )
         if identity not in requested:
             raise ProjectContextError(
-                "Historical QC ezqcid is not in the saved module queue: "
+                "Historical QC easyqcid is not in the saved module queue: "
                 f"{identity}"
             )
         source_ids = tuple(
-            self._normalize_identity(value) for value in snapshot.subjects["ezqcid"]
+            self._normalize_identity(value) for value in snapshot.subjects["easyqcid"]
         )
         positions = {
             subject_identity: index
@@ -569,7 +569,7 @@ class ProjectContextService:
             constants=snapshot.constants,
             rating_service=self.rating_service,
             code_executor=self.code_executor,
-            initial_ezqcid=identity,
+            initial_easyqcid=identity,
             event_bus=self.event_bus,
             event_context={
                 "context_revision": snapshot.context_revision,
@@ -589,7 +589,7 @@ class ProjectContextService:
         snapshot: ProjectContextSnapshot,
         *,
         module_name: str,
-        initial_ezqcid: str,
+        initial_easyqcid: str,
         navigation_ids: tuple[str, ...] | None = None,
     ) -> QcWorkflowService:
         """Create one workflow from a validated snapshot and ordered identity queue."""
@@ -604,7 +604,7 @@ class ProjectContextService:
             raise ProjectContextError(f"Unknown QC module in current project: {module_name}")
 
         source_ids = tuple(
-            self._normalize_identity(value) for value in snapshot.subjects["ezqcid"]
+            self._normalize_identity(value) for value in snapshot.subjects["easyqcid"]
         )
         positions = {identity: index for index, identity in enumerate(source_ids)}
         if navigation_ids is None:
@@ -615,26 +615,26 @@ class ProjectContextService:
                 )
         else:
             requested = tuple(
-                self._validated_ezqcid(value) for value in navigation_ids
+                self._validated_easyqcid(value) for value in navigation_ids
             )
         if not requested:
-            raise ProjectContextError("QC navigation requires at least one ezqcid")
+            raise ProjectContextError("QC navigation requires at least one easyqcid")
         if any(not identity for identity in requested):
-            raise ProjectContextError("QC navigation contains a blank ezqcid")
+            raise ProjectContextError("QC navigation contains a blank easyqcid")
         duplicates = sorted(
             identity for identity, count in Counter(requested).items() if count > 1
         )
         if duplicates:
-            raise ProjectContextError(f"QC navigation contains duplicate ezqcid: {duplicates}")
+            raise ProjectContextError(f"QC navigation contains duplicate easyqcid: {duplicates}")
         foreign = [identity for identity in requested if identity not in positions]
         if foreign:
             raise ProjectContextError(
-                f"QC navigation ezqcid is not in the current project: {foreign}"
+                f"QC navigation easyqcid is not in the current project: {foreign}"
             )
-        initial = self._normalize_identity(initial_ezqcid)
+        initial = self._normalize_identity(initial_easyqcid)
         if initial not in requested:
             raise ProjectContextError(
-                f"Initial ezqcid is not in the applied QC navigation queue: {initial}"
+                f"Initial easyqcid is not in the applied QC navigation queue: {initial}"
             )
 
         ordered_subjects = snapshot.subjects.iloc[
@@ -658,7 +658,7 @@ class ProjectContextService:
             constants=snapshot.constants,
             rating_service=self.rating_service,
             code_executor=self.code_executor,
-            initial_ezqcid=initial,
+            initial_easyqcid=initial,
             event_bus=self.event_bus,
             event_context={
                 "context_revision": snapshot.context_revision,
@@ -729,7 +729,7 @@ class ProjectContextService:
         if not score_columns and not tag_columns:
             return {}
         selected_columns = (
-            "ezqcid",
+            "easyqcid",
             *score_columns,
             *(column for column, _label in tag_columns),
         )
@@ -742,7 +742,7 @@ class ProjectContextService:
             max(1, service.source_total),
             selected_columns,
         ).dataframe
-        normalized_ids = frame["ezqcid"].map(cls._normalize_identity)
+        normalized_ids = frame["easyqcid"].map(cls._normalize_identity)
         requested = set(identities)
         keep = normalized_ids.isin(requested)
         frame = frame.loc[keep].reset_index(drop=True)

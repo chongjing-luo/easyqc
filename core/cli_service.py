@@ -20,7 +20,7 @@ class QCPageLaunchContext:
     module: dict[str, Any]
     module_name: str
     rater: str
-    ezqcid: str
+    easyqcid: str
     module_rater_dir: Path
     available_modules: list[str]
 
@@ -29,11 +29,11 @@ def resolve_qcpage_launch(
     project_name: str,
     module_name: str,
     rater: str,
-    ezqcid: str,
+    easyqcid: str,
     registry_path: Path,
 ) -> QCPageLaunchContext:
     try:
-        validate_rating_identity(module_name, rater, ezqcid)
+        validate_rating_identity(module_name, rater, easyqcid)
     except RatingIdentityError as exc:
         raise QCPageLaunchError(str(exc)) from exc
 
@@ -59,7 +59,7 @@ def resolve_qcpage_launch(
         module=module,
         module_name=module_name,
         rater=rater,
-        ezqcid=ezqcid,
+        easyqcid=easyqcid,
         module_rater_dir=project.rating_dir / module_name / rater,
         available_modules=available_modules,
     )

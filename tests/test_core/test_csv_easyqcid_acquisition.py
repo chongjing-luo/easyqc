@@ -1,3 +1,5 @@
+"""Schema-v3 CSV identity acquisition tests."""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -11,7 +13,7 @@ from models.subject_table import SubjectTable
 
 def _csv(path) -> None:
     path.write_text(
-        "ezqcid,visit,note\n001,1,NA\nNA,2,value\n01-A,3,value\n",
+        "easyqcid,visit,note\n001,1,NA\nNA,2,value\n01-A,3,value\n",
         encoding="utf-8",
     )
 
@@ -28,12 +30,12 @@ def test_table_and_subject_csv_acquisition_preserve_na_and_leading_zero(
     subject_table = SubjectTable.from_csv(source).dataframe
 
     for frame in (loaded, subject_table):
-        assert frame["ezqcid"].tolist() == ["001", "NA", "01-A"]
+        assert frame["easyqcid"].tolist() == ["001", "NA", "01-A"]
         assert frame["visit"].tolist() == [1, 2, 3]
         assert pd.isna(frame.loc[0, "note"])
 
 
-def test_configuration_csv_draft_and_import_preserve_exact_ezqcid(
+def test_configuration_csv_draft_and_import_preserve_exact_easyqcid(
     tmp_path,
 ) -> None:
     projects = ProjectService(tmp_path / "projects.json")
@@ -45,8 +47,8 @@ def test_configuration_csv_draft_and_import_preserve_exact_ezqcid(
     draft = service.draft_from_file(source)
     service.import_subject_csv(source)
 
-    assert draft["ezqcid"].tolist() == ["001", "NA", "01-A"]
-    assert service.subjects()["ezqcid"].tolist() == ["001", "NA", "01-A"]
+    assert draft["easyqcid"].tolist() == ["001", "NA", "01-A"]
+    assert service.subjects()["easyqcid"].tolist() == ["001", "NA", "01-A"]
     assert draft["visit"].tolist() == [1, 2, 3]
     assert pd.isna(draft.loc[0, "note"])
 
@@ -64,10 +66,10 @@ def test_configuration_excel_converter_preserves_values_without_cleaning(
 
     def fake_read_excel(path, **kwargs):
         captured.update(kwargs)
-        converter = kwargs["converters"]["ezqcid"]
+        converter = kwargs["converters"]["easyqcid"]
         return pd.DataFrame(
             {
-                "ezqcid": [converter("NA"), converter("001"), converter(7)],
+                "easyqcid": [converter("NA"), converter("001"), converter(7)],
                 "visit": [1, 2, 3],
             }
         )
@@ -76,5 +78,5 @@ def test_configuration_excel_converter_preserves_values_without_cleaning(
 
     draft = service.draft_from_file(source)
 
-    assert draft["ezqcid"].tolist() == ["NA", "001", 7]
+    assert draft["easyqcid"].tolist() == ["NA", "001", 7]
     assert set(captured) == {"converters"}

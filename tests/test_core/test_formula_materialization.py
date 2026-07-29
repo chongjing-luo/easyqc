@@ -22,7 +22,7 @@ def _service(tmp_path) -> tuple[ConfigurationService, ProjectService]:
     service.replace_subjects(
         pd.DataFrame(
             {
-                "ezqcid": ["ROW001", "ROW002"],
+                "easyqcid": ["ROW001", "ROW002"],
                 "age": [29, 31],
                 "site": ["A", "B"],
             }
@@ -53,18 +53,18 @@ def test_formula_evaluation_error_summary_is_bounded_and_index_aware() -> None:
     assert "VALUE 无法转换为数值" in message
 
 
-def test_formula_transform_can_create_missing_ezqcid_but_never_overwrite_it() -> None:
+def test_formula_transform_can_create_missing_easyqcid_but_never_overwrite_it() -> None:
     source = pd.DataFrame(
         {"raw id": [" ROW001 ", "ROW002"]},
         index=[7, 9],
     )
     original = source.copy(deep=True)
-    request = DerivedColumnFormula("ezqcid", "TRIM([raw id])")
+    request = DerivedColumnFormula("easyqcid", "TRIM([raw id])")
     engine = TableTransformEngine()
 
     result = engine.derive_column_from_formula(source, request)
 
-    assert result["ezqcid"].tolist() == ["ROW001", "ROW002"]
+    assert result["easyqcid"].tolist() == ["ROW001", "ROW002"]
     assert result.index.equals(source.index)
     pd.testing.assert_frame_equal(source, original)
     with pytest.raises(TableTransformError, match="已存在"):
@@ -118,7 +118,7 @@ def test_formula_service_persists_one_ordinary_column_once_and_then_notifies(
     assert save_calls[0]["age next"].tolist() == [15.0, 16.0]
     assert service.subjects()["age next"].tolist() == [15.0, 16.0]
     assert len(events) == 1
-    csv_path = projects.current_project.table_dir / "ezqc_all.csv"
+    csv_path = projects.current_project.table_dir / "easyqc_all.csv"
     csv_text = csv_path.read_text(encoding="utf-8")
     settings_text = projects.current_project.settings_path.read_text(
         encoding="utf-8"
@@ -140,7 +140,7 @@ def test_formula_service_failure_preserves_csv_and_publishes_nothing(
     formula_request,
 ) -> None:
     service, projects = _service(tmp_path)
-    csv_path = projects.current_project.table_dir / "ezqc_all.csv"
+    csv_path = projects.current_project.table_dir / "easyqc_all.csv"
     before = csv_path.read_bytes()
     before_frame = service.subjects()
     events = []
@@ -162,7 +162,7 @@ def test_formula_service_rejects_constant_collision_before_writing(
 ) -> None:
     service, projects = _service(tmp_path)
     service.set_constant("site_label", "A")
-    csv_path = projects.current_project.table_dir / "ezqc_all.csv"
+    csv_path = projects.current_project.table_dir / "easyqc_all.csv"
     before = csv_path.read_bytes()
 
     with pytest.raises(ConfigurationError, match="常量冲突"):
@@ -178,7 +178,7 @@ def test_formula_service_atomic_save_failure_publishes_nothing(
     monkeypatch,
 ) -> None:
     service, projects = _service(tmp_path)
-    csv_path = projects.current_project.table_dir / "ezqc_all.csv"
+    csv_path = projects.current_project.table_dir / "easyqc_all.csv"
     before = csv_path.read_bytes()
     events = []
     service.project_service.event_bus.subscribe(

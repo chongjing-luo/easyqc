@@ -21,7 +21,7 @@ from core.project_service import (
 )
 from core.rating_identity import (
     RatingIdentityError,
-    validate_ezqcid,
+    validate_easyqcid,
     validate_module_name,
     validate_rater,
 )
@@ -289,12 +289,12 @@ class ConfigurationService:
                 frame = pd.read_csv(
                     source,
                     encoding="utf-8",
-                    converters={"ezqcid": lambda value: value},
+                    converters={"easyqcid": lambda value: value},
                 )
             elif suffix in {".xlsx", ".xls"}:
                 frame = pd.read_excel(
                     source,
-                    converters={"ezqcid": lambda value: value},
+                    converters={"easyqcid": lambda value: value},
                 )
             elif suffix in {".txt", ".list"}:
                 name = self._import_column_name(single_column_name or "")
@@ -337,7 +337,7 @@ class ConfigurationService:
 
     def subjects(self) -> pd.DataFrame:
         table = self.table_service.load_table(self._require_project(), TABLE_ALL)
-        return table.copy(deep=True) if table is not None else pd.DataFrame(columns=["ezqcid"])
+        return table.copy(deep=True) if table is not None else pd.DataFrame(columns=["easyqcid"])
 
     def snapshot(self) -> ConfigurationSnapshot:
         """Read one detached configuration view for UI-thread rendering."""
@@ -345,7 +345,7 @@ class ConfigurationService:
         subjects = (
             self.validate_subjects(self.subjects())
             if project is not None
-            else pd.DataFrame(columns=["ezqcid"])
+            else pd.DataFrame(columns=["easyqcid"])
         )
         return ConfigurationSnapshot(
             projects=self.projects(),
@@ -366,18 +366,18 @@ class ConfigurationService:
             raise TypeError("质控名单必须是 pandas DataFrame")
         if frame.columns.has_duplicates:
             raise ConfigurationError("质控名单包含重复字段")
-        if "ezqcid" not in frame.columns:
-            raise ConfigurationError("质控名单缺少 ezqcid")
+        if "easyqcid" not in frame.columns:
+            raise ConfigurationError("质控名单缺少 easyqcid")
         result = frame.copy(deep=True)
         if any(
             value is None or (isinstance(value, str) and value == "")
-            for value in result["ezqcid"]
+            for value in result["easyqcid"]
         ):
-            raise ConfigurationError("质控名单包含空白 ezqcid")
+            raise ConfigurationError("质控名单包含空白 easyqcid")
         try:
             identities = tuple(
-                validate_ezqcid(value)
-                for value in result["ezqcid"]
+                validate_easyqcid(value)
+                for value in result["easyqcid"]
             )
         except RatingIdentityError as exc:
             raise ConfigurationError(str(exc)) from exc
@@ -388,7 +388,7 @@ class ConfigurationService:
             if count > 1
         )
         if duplicates:
-            raise ConfigurationError(f"质控名单包含重复 ezqcid: {duplicates}")
+            raise ConfigurationError(f"质控名单包含重复 easyqcid: {duplicates}")
 
         casefolded: dict[str, str] = {}
         case_collisions: set[tuple[str, str]] = set()
@@ -398,11 +398,11 @@ class ConfigurationService:
                 case_collisions.add(tuple(sorted((prior, identity))))
         if case_collisions:
             raise ConfigurationError(
-                "质控名单包含 case-only ezqcid 冲突: "
+                "质控名单包含 case-only easyqcid 冲突: "
                 f"{sorted(case_collisions)}"
             )
 
-        result["ezqcid"] = identities
+        result["easyqcid"] = identities
         constant_collisions = sorted(set(map(str, result.columns)) & set(self.constants()))
         if constant_collisions:
             raise ConfigurationError(
@@ -418,34 +418,34 @@ class ConfigurationService:
 
     def delete_subject_rows(
         self,
-        ezqcids: tuple[str, ...],
+        easyqcids: tuple[str, ...],
         *,
         notify: bool = True,
     ) -> int:
         """Atomically remove exact identities from the authoritative QC list.
 
-        Input is one nonempty tuple of unique, nonblank ``ezqcid`` strings.
+        Input is one nonempty tuple of unique, nonblank ``easyqcid`` strings.
         Output is the number of rows removed. The only side effect is replacing
         ``TABLE_ALL`` and publishing after that save succeeds; rating storage is
         intentionally outside this contract.
         """
 
-        if not isinstance(ezqcids, tuple):
-            raise TypeError("删除名单行必须提供 ezqcid 元组")
+        if not isinstance(easyqcids, tuple):
+            raise TypeError("删除名单行必须提供 easyqcid 元组")
         normalized = tuple(
             value.strip() if isinstance(value, str) else ""
-            for value in ezqcids
+            for value in easyqcids
         )
         if not normalized or any(not value for value in normalized):
-            raise ConfigurationError("删除名单行必须提供非空 ezqcid")
+            raise ConfigurationError("删除名单行必须提供非空 easyqcid")
         if len(set(normalized)) != len(normalized):
-            raise ConfigurationError("删除名单行包含重复 ezqcid")
+            raise ConfigurationError("删除名单行包含重复 easyqcid")
         frame = self.validate_subjects(self.subjects())
-        available = set(frame["ezqcid"])
+        available = set(frame["easyqcid"])
         missing = tuple(value for value in normalized if value not in available)
         if missing:
             raise ConfigurationError(f"质控前名单行不存在或已变化: {missing}")
-        candidate = frame.loc[~frame["ezqcid"].isin(normalized)].reset_index(
+        candidate = frame.loc[~frame["easyqcid"].isin(normalized)].reset_index(
             drop=True
         )
         self.replace_subjects(candidate, notify=notify)
@@ -459,7 +459,7 @@ class ConfigurationService:
     ) -> int:
         """Atomically remove exact ordinary columns from the authoritative list.
 
-        ``ezqcid`` is always protected. The only persistent side effect is the
+        ``easyqcid`` is always protected. The only persistent side effect is the
         validated ``TABLE_ALL`` replacement; no formula or rating data is read
         or changed.
         """
@@ -474,8 +474,8 @@ class ConfigurationService:
             raise ConfigurationError("删除名单列必须提供非空列名")
         if len(set(normalized)) != len(normalized):
             raise ConfigurationError("删除名单列包含重复列名")
-        if "ezqcid" in normalized:
-            raise ConfigurationError("质控前名单不能删除 ezqcid")
+        if "easyqcid" in normalized:
+            raise ConfigurationError("质控前名单不能删除 easyqcid")
         frame = self.validate_subjects(self.subjects())
         missing = tuple(value for value in normalized if value not in frame.columns)
         if missing:
@@ -531,7 +531,7 @@ class ConfigurationService:
         frame = pd.read_csv(
             path,
             encoding="utf-8",
-            converters={"ezqcid": lambda value: value},
+            converters={"easyqcid": lambda value: value},
         )
         if mode == "replace":
             self.replace_subjects(frame, notify=notify)
@@ -597,8 +597,8 @@ class ConfigurationService:
             )
         incoming = self.validate_subjects(incoming)
         current = self.validate_subjects(self.subjects())
-        current_ids = current["ezqcid"].tolist()
-        incoming_ids = incoming["ezqcid"].tolist()
+        current_ids = current["easyqcid"].tolist()
+        incoming_ids = incoming["easyqcid"].tolist()
         current_id_set = set(current_ids)
         matching = tuple(
             identity for identity in incoming_ids if identity in current_id_set
@@ -609,11 +609,11 @@ class ConfigurationService:
         overlapping = tuple(
             str(column)
             for column in incoming.columns
-            if column != "ezqcid" and column in current.columns
+            if column != "easyqcid" and column in current.columns
         )
 
         if mode == "replace" or (
-            current.empty and tuple(current.columns) == ("ezqcid",)
+            current.empty and tuple(current.columns) == ("easyqcid",)
         ):
             candidate = incoming.copy(deep=True)
         elif mode == "append":
@@ -653,14 +653,14 @@ class ConfigurationService:
         if set(current.columns) != set(incoming.columns):
             raise ConfigurationError("追加行要求导入名单与现有名单包含相同字段")
         ordered = incoming.loc[:, current.columns]
-        current_ids = current["ezqcid"].tolist()
+        current_ids = current["easyqcid"].tolist()
         current_id_set = set(current_ids)
-        new_rows = ordered.loc[~ordered["ezqcid"].isin(current_id_set)]
+        new_rows = ordered.loc[~ordered["easyqcid"].isin(current_id_set)]
         if conflict_policy == "deduplicate":
             base = current
         else:
-            base = current.set_index("ezqcid", drop=False)
-            replacements = ordered.set_index("ezqcid", drop=False)
+            base = current.set_index("easyqcid", drop=False)
+            replacements = ordered.set_index("easyqcid", drop=False)
             matching = [
                 identity
                 for identity in current_ids
@@ -689,15 +689,15 @@ class ConfigurationService:
     ) -> pd.DataFrame:
         """Merge columns by identity without ambiguous suffix columns."""
 
-        current_ids = current["ezqcid"].tolist()
-        incoming_ids = incoming["ezqcid"].tolist()
+        current_ids = current["easyqcid"].tolist()
+        incoming_ids = incoming["easyqcid"].tolist()
         current_id_set = set(current_ids)
         new_ids = [
             identity for identity in incoming_ids if identity not in current_id_set
         ]
         result_ids = [*current_ids, *new_ids]
-        current_by_id = current.set_index("ezqcid", drop=False)
-        incoming_by_id = incoming.set_index("ezqcid", drop=False)
+        current_by_id = current.set_index("easyqcid", drop=False)
+        incoming_by_id = incoming.set_index("easyqcid", drop=False)
         output_columns = [
             *current.columns,
             *(
@@ -706,9 +706,9 @@ class ConfigurationService:
                 if column not in current.columns
             ),
         ]
-        candidate = pd.DataFrame({"ezqcid": result_ids})
+        candidate = pd.DataFrame({"easyqcid": result_ids})
         for column in output_columns:
-            if column == "ezqcid":
+            if column == "easyqcid":
                 continue
             values = pd.Series(pd.NA, index=result_ids, dtype="object")
             if column in current_by_id.columns:
@@ -747,7 +747,7 @@ class ConfigurationService:
     ) -> None:
         incoming = self.validate_subjects(incoming)
         current = self.subjects()
-        if current.empty and tuple(current.columns) == ("ezqcid",):
+        if current.empty and tuple(current.columns) == ("easyqcid",):
             self.replace_subjects(incoming, notify=notify)
             return
         if mode == "rows":
@@ -758,10 +758,10 @@ class ConfigurationService:
                 ignore_index=True,
             )
         elif mode == "columns":
-            overlap = sorted((set(current.columns) & set(incoming.columns)) - {"ezqcid"})
+            overlap = sorted((set(current.columns) & set(incoming.columns)) - {"easyqcid"})
             if overlap:
                 raise ConfigurationError(f"Column merge overlap: {overlap}")
-            candidate = current.merge(incoming, on="ezqcid", how="outer", validate="one_to_one")
+            candidate = current.merge(incoming, on="easyqcid", how="outer", validate="one_to_one")
         else:
             raise ConfigurationError(f"Unsupported list merge mode: {mode}")
         self.replace_subjects(candidate, notify=notify)
@@ -880,7 +880,7 @@ class ConfigurationService:
                 validate_rater(typed.rater)
         except RatingIdentityError as exc:
             raise ConfigurationError(str(exc)) from exc
-        typed.ezqcid = None
+        typed.easyqcid = None
         typed.time = None
         typed.notes = None
         typed.code_exe = None

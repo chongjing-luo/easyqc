@@ -1,8 +1,9 @@
 {
+  "schema_version": 3,
   "name": "example",
   "label": "Example",
   "rater": "rater1",
-  "ezqcid": "SUB001",
+  "easyqcid": "SUB001",
   "tags": {
     "1": {
       "label": "Visible artifact",
@@ -21,7 +22,7 @@
       "value": "Good"
     }
   },
-  "code": "echo {ezqcid}",
+  "code": "echo {easyqcid}",
   "interper": "shell",
   "control": true,
   "select_filter": null,

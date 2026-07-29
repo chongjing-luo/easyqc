@@ -124,7 +124,7 @@ def test_main_window_project_loading_uses_gui_state_adapter() -> None:
     assert "self.project_service.reload_registry()" in project_sync_source
     assert "self.project_service.load(project_name)" in project_sync_source
     assert "self.gui_state.current_project_model()" in sync_source
-    assert "self.table_service.load_legacy_state_tables(" in sync_source
+    assert "self.table_service.load_state_tables(" in sync_source
     assert "self.gui_state.apply_loaded_tables(" in sync_source
     assert "self.gui_state.project_names()" in load_project_source
     assert "self.gui_state.current_project_name()" in load_project_source
@@ -137,7 +137,7 @@ def test_main_window_syncs_legacy_tables_from_table_service_bridge() -> None:
         def __init__(self) -> None:
             self.calls = []
 
-        def load_legacy_state_tables(self, project, module_names):
+        def load_state_tables(self, project, module_names):
             self.calls.append((project, list(module_names)))
             return "loaded-tables"
 
@@ -188,7 +188,7 @@ def test_main_window_table_service_sync_is_noop_without_service_or_project() -> 
 
     assert app.gui_state.applied == []
 
-    app.table_service = SimpleNamespace(load_legacy_state_tables=lambda *args, **kwargs: "loaded")
+    app.table_service = SimpleNamespace(load_state_tables=lambda *args, **kwargs: "loaded")
     app.gui_state = FakeGuiState(None)
 
     app._sync_legacy_tables_from_service()
@@ -274,13 +274,13 @@ def test_main_window_extract_qc_results_prefers_service_bridge() -> None:
         def __init__(self, project) -> None:
             self.project = project
 
-        def load_legacy_state(self, subjects):
+        def load_state(self, subjects):
             self.__class__.calls.append((self.project, subjects.copy()))
             return SimpleNamespace(
                 rating_dict={"SUB001": {"example-rater1": {"name": "example", "rater": "rater1"}}},
-                qctable=pd.DataFrame({"ezqcid": ["SUB001"], "example.rater1.score1": ["Good"]}),
-                original_table=pd.DataFrame({"ezqcid": ["SUB001"], "module_name": ["example"]}),
-                original_wide_table=pd.DataFrame({"ezqcid": ["SUB001"], "example.rater1.score1": ["Good"]}),
+                qctable=pd.DataFrame({"easyqcid": ["SUB001"], "example.rater1.score1": ["Good"]}),
+                original_table=pd.DataFrame({"easyqcid": ["SUB001"], "module_name": ["example"]}),
+                original_wide_table=pd.DataFrame({"easyqcid": ["SUB001"], "example.rater1.score1": ["Good"]}),
             )
 
     class FakeTableService:
@@ -293,7 +293,7 @@ def test_main_window_extract_qc_results_prefers_service_bridge() -> None:
     class FakeGuiState:
         def __init__(self) -> None:
             self.project = SimpleNamespace(name="SAMPLE", path="/tmp/easyqc_SAMPLE")
-            self.subjects = pd.DataFrame({"ezqcid": ["SUB001"]})
+            self.subjects = pd.DataFrame({"easyqcid": ["SUB001"]})
             self.applied = []
             self.legacy_loads = 0
 
@@ -317,13 +317,13 @@ def test_main_window_extract_qc_results_prefers_service_bridge() -> None:
     app.extract_qc_results()
 
     assert FakeRatingService.calls[0][0] is app.gui_state.project
-    assert FakeRatingService.calls[0][1].equals(pd.DataFrame({"ezqcid": ["SUB001"]}))
+    assert FakeRatingService.calls[0][1].equals(pd.DataFrame({"easyqcid": ["SUB001"]}))
     assert app.gui_state.applied[0].qctable["example.rater1.score1"].tolist() == ["Good"]
     assert app.gui_state.legacy_loads == 0
     assert [save[1] for save in app.table_service.saved] == [
-        "ezqc_qctable",
+        "easyqc_qctable",
     ]
-    assert app.table_service.saved[0][2]["ezqcid"].tolist() == ["SUB001"]
+    assert app.table_service.saved[0][2]["easyqcid"].tolist() == ["SUB001"]
 
 
 def test_main_window_extract_qc_results_reuses_matching_rating_service() -> None:
@@ -335,11 +335,11 @@ def test_main_window_extract_qc_results_reuses_matching_rating_service() -> None
             self.loaded = []
             self.__class__.created += 1
 
-        def load_legacy_state(self, subjects):
+        def load_state(self, subjects):
             self.loaded.append(subjects.copy())
             return SimpleNamespace(
                 rating_dict={},
-                qctable=pd.DataFrame({"ezqcid": ["SUB001"]}),
+                qctable=pd.DataFrame({"easyqcid": ["SUB001"]}),
                 original_table=pd.DataFrame(),
                 original_wide_table=pd.DataFrame(),
             )
@@ -360,7 +360,7 @@ def test_main_window_extract_qc_results_reuses_matching_rating_service() -> None
             return self.project
 
         def all_variable_table(self):
-            return pd.DataFrame({"ezqcid": ["SUB001"]})
+            return pd.DataFrame({"easyqcid": ["SUB001"]})
 
         def apply_loaded_ratings(self, loaded_ratings):
             self.applied.append(loaded_ratings)
@@ -376,8 +376,8 @@ def test_main_window_extract_qc_results_reuses_matching_rating_service() -> None
 
     assert FakeRatingService.created == 1
     assert len(rating_service.loaded) == 1
-    assert app.gui_state.applied[0].qctable["ezqcid"].tolist() == ["SUB001"]
-    assert [save[1] for save in app.table_service.saved] == ["ezqc_qctable"]
+    assert app.gui_state.applied[0].qctable["easyqcid"].tolist() == ["SUB001"]
+    assert [save[1] for save in app.table_service.saved] == ["easyqc_qctable"]
 
 
 def test_main_window_extract_qc_results_falls_back_to_legacy_loader() -> None:
@@ -473,7 +473,7 @@ def test_qc_page_controller_applies_rating_state_without_overwriting_config() ->
     rating = {
         "label": "Old",
         "code": "old-code",
-        "ezqcid": "SUB001",
+        "easyqcid": "SUB001",
         "scores": {"1": {"value": "Good"}},
         "tags": {"1": {"value": True}},
         "notes": "note",
@@ -564,7 +564,7 @@ def test_qc_page_controller_updates_runtime_rating_state() -> None:
         "tags": {"1": {"value": True}},
         "notes": "old note",
         "code_exe": {"0": "old"},
-        "ezqcid": "OLD",
+        "easyqcid": "OLD",
         "time": "old time",
     }
     controller = QCPageController()
@@ -579,7 +579,7 @@ def test_qc_page_controller_updates_runtime_rating_state() -> None:
     assert module["tags"]["1"]["value"] is False
     assert module["notes"] == "new note"
     assert module["code_exe"] == {0: "cmd"}
-    assert module["ezqcid"] == "SUB002"
+    assert module["easyqcid"] == "SUB002"
 
     controller.reset_rating_state(module, "SUB001")
 
@@ -587,7 +587,7 @@ def test_qc_page_controller_updates_runtime_rating_state() -> None:
     assert module["tags"]["1"]["value"] is False
     assert module["notes"] is None
     assert module["code_exe"] is None
-    assert module["ezqcid"] == "SUB001"
+    assert module["easyqcid"] == "SUB001"
     assert module["time"] is None
 
 
@@ -609,14 +609,14 @@ def test_qc_page_controller_shapes_current_module_metadata() -> None:
 
 def test_qc_page_controller_shapes_module_tables_and_subjects(tmp_path) -> None:
     controller = QCPageController()
-    qctable = table = pd.DataFrame({"ezqcid": ["SUB002", "SUB001", "SUB001"], "x": [2, 1, 1]})
-    tables = {"ezqc_qctable": qctable, "ezqc_all": pd.DataFrame({"ezqcid": ["SUB_ALL"]})}
+    qctable = table = pd.DataFrame({"easyqcid": ["SUB002", "SUB001", "SUB001"], "x": [2, 1, 1]})
+    tables = {"easyqc_qctable": qctable, "easyqc_all": pd.DataFrame({"easyqcid": ["SUB_ALL"]})}
 
     assert controller.ensure_module_table(tables, "example") is qctable
     assert tables["example"] is qctable
     assert controller.table_has_rows(table)
     assert not controller.table_has_rows(pd.DataFrame())
-    assert controller.module_subject_rows(tables, "example")["ezqcid"].tolist() == ["SUB001", "SUB002"]
+    assert controller.module_subject_rows(tables, "example")["easyqcid"].tolist() == ["SUB001", "SUB002"]
     assert controller.first_subject_id(tables, "example") == "SUB001"
     assert controller.subject_exists(tables, "example", "SUB002")
     assert not controller.subject_exists(tables, "example", "MISSING")
@@ -627,7 +627,7 @@ def test_qc_page_controller_shapes_module_tables_and_subjects(tmp_path) -> None:
 def test_qc_page_runtime_context_wraps_legacy_dt_and_syncs_rating_dir(tmp_path) -> None:
     dt = type("LegacyDT", (), {})()
     dt.settings = {"qcmodule": {}}
-    dt.tab = {"ezqc_qctable": pd.DataFrame({"ezqcid": ["SUB001"]})}
+    dt.tab = {"easyqc_qctable": pd.DataFrame({"easyqcid": ["SUB001"]})}
     dt.output_dir = str(tmp_path)
 
     context = QCPageRuntimeContext.from_legacy_dt(dt)
@@ -643,7 +643,7 @@ def test_qc_page_runtime_context_wraps_legacy_dt_and_syncs_rating_dir(tmp_path) 
 def test_qc_page_runtime_context_can_be_built_from_gui_state(tmp_path) -> None:
     dt = type("LegacyDT", (), {})()
     dt.settings = {"qcmodule": {}}
-    dt.tab = {"ezqc_qctable": pd.DataFrame({"ezqcid": ["SUB001"]})}
+    dt.tab = {"easyqc_qctable": pd.DataFrame({"easyqcid": ["SUB001"]})}
     dt.output_dir = str(tmp_path)
     gui_state = type("GuiState", (), {"dt": dt})()
 
@@ -657,7 +657,7 @@ def test_qc_page_runtime_context_can_be_built_from_gui_state(tmp_path) -> None:
 def test_legacy_qcpage_runtime_context_prefers_gui_state(tmp_path) -> None:
     dt = type("LegacyDT", (), {})()
     dt.settings = {"qcmodule": {}}
-    dt.tab = {"ezqc_qctable": pd.DataFrame({"ezqcid": ["SUB001"]})}
+    dt.tab = {"easyqc_qctable": pd.DataFrame({"easyqcid": ["SUB001"]})}
     dt.output_dir = str(tmp_path)
     page = gui_qcpage.gui_qcpage()
     page.gui_state = type("GuiState", (), {"dt": dt})()
@@ -693,7 +693,7 @@ def test_legacy_qcpage_rating_state_writes_delegate_to_controller() -> None:
     assert "['code_exe'] = code_exe" not in source
     assert "self.dt.settings['qcmodule'].items()" not in source
     assert "self.dt.settings['qcmodule'][self.module_index] = module" not in source
-    assert "self.dt.settings['qcmodule'][self.module_index]['ezqcid'] = None" not in source
+    assert "self.dt.settings['qcmodule'][self.module_index]['easyqcid'] = None" not in source
 
 
 def test_legacy_qcpage_runtime_state_reads_use_runtime_context() -> None:
@@ -721,14 +721,14 @@ def test_legacy_qcpage_runtime_state_reads_use_runtime_context() -> None:
 
 def test_legacy_qcpage_save_rating_delegates_file_io_to_controller() -> None:
     source = inspect.getsource(gui_qcpage.gui_qcpage.save_rating)
-    assert "self._ensure_controller().save_legacy_module_rating(" in source
+    assert "self._ensure_controller().save_module_rating(" in source
     assert "FileUtils.safe_json_save" not in source
 
 
 def test_legacy_qcpage_load_rating_delegates_file_io_to_controller() -> None:
     source = inspect.getsource(gui_qcpage.gui_qcpage.load_rating)
     assert "controller = self._ensure_controller()" in source
-    assert "controller.load_first_legacy_module_rating(" in source
+    assert "controller.load_first_module_rating(" in source
     assert "controller.find_rating_compatibility_issues(" in source
     assert "json.load" not in source
     assert "['num_'] != new_module" not in source
@@ -738,7 +738,7 @@ def test_legacy_qcpage_load_rating_delegates_file_io_to_controller() -> None:
 def test_legacy_qcpage_list_preview_delegates_rating_file_io_to_controller() -> None:
     source = inspect.getsource(gui_qcpage.gui_qcpage.populate_listbox)
     assert "controller = self._ensure_controller()" in source
-    assert "controller.load_first_legacy_module_rating(" in source
+    assert "controller.load_first_module_rating(" in source
     assert "self._ensure_controller().module_subject_rows(" in source
     assert "glob.glob" not in source
     assert "json.load" not in source

@@ -188,7 +188,7 @@ class gui_qcpage:
             self.gui_state = getattr(app, "gui_state", None) or GUIStateBridge(getattr(app, "project_service", None), getattr(app, "session_state", None), getattr(app, "table_service", None))
             self.runtime_context = QCPageRuntimeContext.from_gui_state(self.gui_state)
             self.module_name = module_name
-            self.ezqcid_index = None
+            self.easyqcid_index = None
             self.watch_mode_ = False
             
             if self.check_module():
@@ -296,7 +296,7 @@ class gui_qcpage:
             raise 
 
 
-    def open_qcpage_from_shell(self, project, module, rater, ezqcid):
+    def open_qcpage_from_shell(self, project, module, rater, easyqcid):
         """
         打开qc页面
         :param module: 模块
@@ -304,15 +304,15 @@ class gui_qcpage:
         输入模块名和项目名，则打开这个项目这个模块的质控页面，需要先加载项目信息、模块信息和质控信息
         """
         try:
-            log_info(f"开始打开QC页面: project={project}, module={module}, rater={rater}, ezqcid={ezqcid}")
+            log_info(f"开始打开QC页面: project={project}, module={module}, rater={rater}, easyqcid={easyqcid}")
             
             self.project = project
             self.module = module
             self.rater = rater
-            self.ezqcid = ezqcid
+            self.easyqcid = easyqcid
             self._set_module_rater_dir(module, rater)
             
-            log_info(f"project: {project}, module: {module}, rater: {rater}, ezqcid: {ezqcid}", "QCPage")
+            log_info(f"project: {project}, module: {module}, rater: {rater}, easyqcid: {easyqcid}", "QCPage")
             log_info(f"self.module_index: {self.module_index}")
             
             # 获取模块配置
@@ -327,7 +327,7 @@ class gui_qcpage:
             
             # 加载评分数据
             log_info("开始加载评分数据")
-            self.load_rating(ezqcid=ezqcid, module=module_config, rater=rater)
+            self.load_rating(easyqcid=easyqcid, module=module_config, rater=rater)
             log_info("评分数据加载完成")
             
             # 填充列表
@@ -388,17 +388,17 @@ class gui_qcpage:
         # 配置Treeview样式
         style = ttk.Style()
         style.configure("Treeview", font=("Arial", 10))
-        self.listbox = Treeview(frame_middle, columns=("index", "ezqcid", "score1", "tag1"), show='headings', selectmode='browse') 
+        self.listbox = Treeview(frame_middle, columns=("index", "easyqcid", "score1", "tag1"), show='headings', selectmode='browse')
         
         # 设置列表头
         self.listbox.heading("index", text="index")
-        self.listbox.heading("ezqcid", text="ezqcid")
+        self.listbox.heading("easyqcid", text="easyqcid")
         self.listbox.heading("score1", text="score1")
         self.listbox.heading("tag1", text="tag1")
         
         # 配置各列的宽度和对齐方式
         self.listbox.column("index", width=35, minwidth=35, anchor="e")  # 右对齐
-        self.listbox.column("ezqcid", width=220, minwidth=220, anchor="e")  # 右对齐
+        self.listbox.column("easyqcid", width=220, minwidth=220, anchor="e")  # 右对齐
         self.listbox.column("score1", width=40, minwidth=40, anchor="center")  # 居中
         self.listbox.column("tag1", width=40, minwidth=40, anchor="w")  # 左对齐
 
@@ -418,15 +418,15 @@ class gui_qcpage:
         # 创建右键菜单
         def show_right_menu(event):
             """
-            提取这一行的ezqcid，传递给self.show_right_menu
+            提取这一行的easyqcid，传递给self.show_right_menu
             """
             # 获取点击的行
             item = self.listbox.identify_row(event.y)
             if item:
                 # 获取该行的数据
                 values = self.listbox.item(item, 'values')
-                ezqcid = values[1]
-                self.TablD.show_right_menu(ezqcid, event)
+                easyqcid = values[1]
+                self.TablD.show_right_menu(easyqcid, event)
         # 绑定右键菜单
         bind_context_menu(self.listbox, show_right_menu)
 
@@ -578,7 +578,7 @@ class gui_qcpage:
             notes_content = str(module['notes']) if module['notes'] else ''
             self.notes_text.insert('1.0', notes_content)
 
-        self.select_listbox_ezqcid()
+        self.select_listbox_easyqcid()
 
 
     def populate_listbox(self, module=None):
@@ -599,9 +599,9 @@ class gui_qcpage:
             for item in self.listbox.get_children():
                 self.listbox.delete(item)
             
-            # 初始化ezqcid到index的映射
-            self.ezqcid_to_index = {}
-            self.index_to_ezqcid = {}
+            # 初始化easyqcid到index的映射
+            self.easyqcid_to_index = {}
+            self.index_to_easyqcid = {}
             
             if self._runtime_tables():
                 data = self._ensure_controller().module_subject_rows(self._runtime_tables(), module['name'])
@@ -609,15 +609,15 @@ class gui_qcpage:
                 
                 for row_num, (index, row) in enumerate(data.iterrows(), 1):
 
-                    ezqcid = row.get('ezqcid', '')
+                    easyqcid = row.get('easyqcid', '')
                     if rater is None:
                         rating_files = []
                         rating = None
                     else:
-                        rating_files, rating = controller.load_first_legacy_module_rating(
+                        rating_files, rating = controller.load_first_module_rating(
                             module,
                             dir_module_rater,
-                            ezqcid,
+                            easyqcid,
                             rater,
                         )
                     if rating_files and rating is not None:
@@ -627,12 +627,12 @@ class gui_qcpage:
                         score1 = ''
                         tag1 = ''
 
-                    self.listbox.insert('', 'end', values=(row_num, ezqcid, score1, tag1))
-                    self.ezqcid_to_index[ezqcid] = row_num
-                    self.index_to_ezqcid[row_num] = ezqcid
+                    self.listbox.insert('', 'end', values=(row_num, easyqcid, score1, tag1))
+                    self.easyqcid_to_index[easyqcid] = row_num
+                    self.index_to_easyqcid[row_num] = easyqcid
                 
-                if self.ezqcid in self.ezqcid_to_index:
-                    self.ezqcid_index = self.ezqcid_to_index[self.ezqcid]
+                if self.easyqcid in self.easyqcid_to_index:
+                    self.easyqcid_index = self.easyqcid_to_index[self.easyqcid]
 
                 log_info(f"表格数据填充完成，共 {len(data)} 行")
             else:
@@ -643,14 +643,14 @@ class gui_qcpage:
             messagebox.showerror("错误", f"填充表格数据失败: {str(e)}")
             raise
 
-    def select_listbox_ezqcid(self, ezqcid_index=None):
-        if ezqcid_index is None:
-            ezqcid_index = self.ezqcid_index
-        if ezqcid_index is not None and ezqcid_index > 0:
+    def select_listbox_easyqcid(self, easyqcid_index=None):
+        if easyqcid_index is None:
+            easyqcid_index = self.easyqcid_index
+        if easyqcid_index is not None and easyqcid_index > 0:
             items = self.listbox.get_children()
-            if ezqcid_index <= len(items):
-                self.listbox.selection_set(items[ezqcid_index-1])
-                self.listbox.see(items[ezqcid_index-1])
+            if easyqcid_index <= len(items):
+                self.listbox.selection_set(items[easyqcid_index-1])
+                self.listbox.see(items[easyqcid_index-1])
 
     def navigate_subject(self, event):
         """
@@ -661,20 +661,20 @@ class gui_qcpage:
             log_debug(f"导航到主题，事件: {event}")
             self.save_rating()
             if event == 1 or event == -1:
-                self.ezqcid_index += event
-                if self.ezqcid_index < 1:
-                    self.ezqcid_index = len(self.listbox.get_children())
-                elif self.ezqcid_index > len(self.listbox.get_children()):
-                    self.ezqcid_index = 1 
-                self.ezqcid = self.index_to_ezqcid[self.ezqcid_index]
-                log_debug(f"导航到主题，事件: {event}，ezqcid: {self.ezqcid}", "QCPage")
+                self.easyqcid_index += event
+                if self.easyqcid_index < 1:
+                    self.easyqcid_index = len(self.listbox.get_children())
+                elif self.easyqcid_index > len(self.listbox.get_children()):
+                    self.easyqcid_index = 1
+                self.easyqcid = self.index_to_easyqcid[self.easyqcid_index]
+                log_debug(f"导航到主题，事件: {event}，easyqcid: {self.easyqcid}", "QCPage")
 
             else:
-                self.ezqcid = event
-                self.ezqcid_index = self.ezqcid_to_index[self.ezqcid]
+                self.easyqcid = event
+                self.easyqcid_index = self.easyqcid_to_index[self.easyqcid]
 
-            self.load_rating(ezqcid=self.ezqcid)
-            self.open_image(ezqcid=self.ezqcid)
+            self.load_rating(easyqcid=self.easyqcid)
+            self.open_image(easyqcid=self.easyqcid)
             self.load_present_to_gui()
         except Exception as e:
             log_exception(f"导航主题失败: {str(e)}")
@@ -700,21 +700,24 @@ class gui_qcpage:
                 module_rater_dir = self._set_module_rater_dir(module['name'], rater)
             if not os.path.exists(module_rater_dir):
                 os.makedirs(module_rater_dir)
-            file_path = self._ensure_controller().save_legacy_module_rating(module, module_rater_dir)
+            file_path = self._ensure_controller().save_module_rating(
+                module,
+                module_rater_dir,
+            )
 
             log_info(f"评分保存完成，文件: {file_path}")
         except Exception as e:
             log_exception(f"保存评分失败: {str(e)}")
             messagebox.showerror(_tr(_T, "错误"), _tr(_T, "保存评分失败") + f": {str(e)}")
 
-    def load_rating(self, ezqcid=None, module=None, rater=None):
+    def load_rating(self, easyqcid=None, module=None, rater=None):
         """
         加载评分
         """
         try:
             log_debug("开始加载评分")
-            if ezqcid is None:
-                ezqcid = self.ezqcid
+            if easyqcid is None:
+                easyqcid = self.easyqcid
             if module is None:
                 module = self.current_module()
             if rater is None:
@@ -723,24 +726,24 @@ class gui_qcpage:
             if rater is None:
                 self._enter_watch_mode(_tr(_T, "评分人未设置"))
                 log_info("评分人未设置，观察模式不加载评分文件")
-                self.init_present(module, ezqcid)
+                self.init_present(module, easyqcid)
                 return
             module_rater_dir = self._module_rater_dir()
             if module_rater_dir is None:
                 module_rater_dir = self._set_module_rater_dir(module['name'], rater)
             log_debug(f"module_rater_dir: {module_rater_dir}", "QCPage")
             controller = self._ensure_controller()
-            rating_files, new_module = controller.load_first_legacy_module_rating(
+            rating_files, new_module = controller.load_first_module_rating(
                 module,
                 module_rater_dir,
-                ezqcid,
+                easyqcid,
                 rater,
             )
             rating_filenames = [path.name for path in rating_files]
             
             if rating_files and new_module is not None:
                 if len(rating_files) > 1:
-                    log_warning(f"评分文件多于1个，ezqcid: {ezqcid}，加载第一条: {rating_filenames[0]}")
+                    log_warning(f"评分文件多于1个，easyqcid: {easyqcid}，加载第一条: {rating_filenames[0]}")
                 current_module = self.current_module()
                 compatibility_issues = controller.find_rating_compatibility_issues(current_module, new_module)
                 if compatibility_issues:
@@ -756,8 +759,8 @@ class gui_qcpage:
                 log_debug(f"成功加载评分文件: {rating_filenames[0]}")
 
             elif len(rating_files) == 0:
-                log_info(f"未找到评分文件，产生新的ezqcid: {ezqcid}")
-                self.init_present(module, ezqcid)
+                log_info(f"未找到评分文件，产生新的easyqcid: {easyqcid}")
+                self.init_present(module, easyqcid)
 
         except Exception as e:
             log_exception(f"加载评分失败: {str(e)}")
@@ -780,8 +783,8 @@ class gui_qcpage:
             if module is None:
                 module = self.current_module()
 
-            ezqcid = module['ezqcid']
-            row_index = self.ezqcid_to_index[ezqcid]
+            easyqcid = module['easyqcid']
+            row_index = self.easyqcid_to_index[easyqcid]
             score1 = module['scores']['1']['value'] if module['scores']['1']['value'] is not None else ''
             tag1 = module['tags']['1']['value'] if module['tags']['1']['value'] is not None else ''
             
@@ -790,8 +793,8 @@ class gui_qcpage:
             if row_index <= len(items):
                 # 使用item ID来更新特定行
                 item_id = items[row_index - 1]  # row_index是从1开始的，items是从0开始的
-                self.listbox.item(item_id, values=(row_index, ezqcid, score1, tag1))
-                log_debug(f"更新listbox行: ezqcid={ezqcid}, row={row_index}, score1={score1}, tag1={tag1}")
+                self.listbox.item(item_id, values=(row_index, easyqcid, score1, tag1))
+                log_debug(f"更新listbox行: easyqcid={easyqcid}, row={row_index}, score1={score1}, tag1={tag1}")
             else:
                 log_warning(f"无法更新listbox行: row_index {row_index} 超出范围 {len(items)}")
                 
@@ -799,13 +802,13 @@ class gui_qcpage:
             log_exception(f"更新listbox行失败: {str(e)}")
             messagebox.showerror("错误", f"更新listbox行失败: {str(e)}")
 
-    def init_present(self, module, ezqcid):
+    def init_present(self, module, easyqcid):
         """
         初始化演示数据
         """
-        log_debug(f"初始化演示数据，模块: {module['name']}, ezqcid: {ezqcid}")
+        log_debug(f"初始化演示数据，模块: {module['name']}, easyqcid: {easyqcid}")
         controller = self._ensure_controller()
-        controller.reset_rating_state(module, ezqcid)
+        controller.reset_rating_state(module, easyqcid)
         controller.set_current_module(self._runtime_settings(), self.module_index, module)
 
 
@@ -818,24 +821,24 @@ class gui_qcpage:
             if module is None:
                 module = self.current_module()
                 
-            if module['ezqcid'] is None:
+            if module['easyqcid'] is None:
                 log_debug(f"为模块 {module['name']} 创建演示配置")
 
-                first_ezqcid = self._ensure_controller().first_subject_id(self._runtime_tables(), module['name'])
-                if first_ezqcid is not None:
-                    self.ezqcid = first_ezqcid
+                first_easyqcid = self._ensure_controller().first_subject_id(self._runtime_tables(), module['name'])
+                if first_easyqcid is not None:
+                    self.easyqcid = first_easyqcid
                     module_rater_dir = self._module_rater_dir()
                     if module_rater_dir and os.path.exists(module_rater_dir):
                         self.load_rating()
                     else:
-                        self.init_present(module, self.ezqcid) 
+                        self.init_present(module, self.easyqcid)
             else:
-                current_ezqcid = module['ezqcid']
-                if not self._ensure_controller().subject_exists(self._runtime_tables(), module['name'], current_ezqcid):
+                current_easyqcid = module['easyqcid']
+                if not self._ensure_controller().subject_exists(self._runtime_tables(), module['name'], current_easyqcid):
                     self._ensure_controller().set_subject(self.current_module(), None)
                     self.gen_present(module)
                 else:
-                    self.ezqcid = current_ezqcid
+                    self.easyqcid = current_easyqcid
                     self.load_rating()
                 log_info(f"演示配置创建完成，模块: {module['name']}")
 
@@ -844,27 +847,27 @@ class gui_qcpage:
             messagebox.showerror("错误", f"生成演示数据失败: {str(e)}")
             raise
 
-    def open_image(self, ezqcid=None):
+    def open_image(self, easyqcid=None):
         """
         打开图片
-        :param ezqcid: 图片ID
+        :param easyqcid: 图片ID
         """
         try:
-            if ezqcid is None:
-                ezqcid = self.ezqcid
+            if easyqcid is None:
+                easyqcid = self.easyqcid
 
-            log_debug(f"开始打开图片，ID: {ezqcid}")
-            code, code_exe = self.gen_code(ezqcid)
+            log_debug(f"开始打开图片，ID: {easyqcid}")
+            code, code_exe = self.gen_code(easyqcid)
             self._ensure_controller().set_code_execution(self.current_module(), code_exe)
 
             self.exe_code(code_exe)
-            log_info(f"图片 {ezqcid} 打开完成")
+            log_info(f"图片 {easyqcid} 打开完成")
         except Exception as e:
             log_exception(f"打开图片失败: {str(e)}")
             messagebox.showerror(_tr(_T, "错误"), _tr(_T, "启动查看器失败") + f": {str(e)}")
 
 
-    def gen_code(self,ezqcid, settings=None, module=None, table=None):
+    def gen_code(self,easyqcid, settings=None, module=None, table=None):
 
         if settings is None:
             settings = self._runtime_settings()
@@ -875,7 +878,7 @@ class gui_qcpage:
         if table is None:
             table = self._ensure_controller().module_table(self._runtime_tables(), module['name'])
 
-        return self._ensure_controller().generate_code(ezqcid, settings, module, table)
+        return self._ensure_controller().generate_code(easyqcid, settings, module, table)
 
 
     def exe_code(self, code_exe, control=None):

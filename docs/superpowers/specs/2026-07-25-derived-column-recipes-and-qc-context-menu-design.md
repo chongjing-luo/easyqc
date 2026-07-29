@@ -23,7 +23,7 @@ read-only workflow from the saved full legacy module payload.
 3. Add, delete, or reorder operation cards.
 4. Each card consumes the previous result and may reference another existing
    column or literal.
-5. Preview shows `ezqcid`, original source value, and final value.
+5. Preview shows `easyqcid`, original source value, and final value.
 6. Generate executes the complete table in a worker and atomically writes only
    the final column.
 

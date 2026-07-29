@@ -362,12 +362,12 @@ class GUIStateBridge:
 
     # ---- rating dict (session) ----
 
-    def rating_menu_items(self, ezqcid: str) -> list[dict[str, str]]:
+    def rating_menu_items(self, easyqcid: str) -> list[dict[str, str]]:
         rd = self.session_state.rating_dict
-        if not rd or ezqcid not in rd:
+        if not rd or easyqcid not in rd:
             return []
         items = []
-        for key, rating_data in rd[ezqcid].items():
+        for key, rating_data in rd[easyqcid].items():
             if not isinstance(rating_data, dict):
                 continue
             name = rating_data.get("name")
@@ -432,7 +432,7 @@ class GUIStateBridge:
         candidate = (
             current.merge(
                 incoming,
-                on="ezqcid",
+                on="easyqcid",
                 how="outer",
                 validate="one_to_one",
             )
@@ -449,7 +449,7 @@ class GUIStateBridge:
                 df = self.session_state.all_variable_table()
                 if df is not None:
                     validated = self.configuration_service.validate_subjects(df)
-                    self.table_service.save_table(cp, "ezqc_all", validated)
+                    self.table_service.save_table(cp, "easyqc_all", validated)
 
     def refresh_project_after_variable_merge(self) -> None:
         cp = self.project_service.current_project
@@ -457,7 +457,7 @@ class GUIStateBridge:
             return
         df = self.session_state.all_variable_table()
         if df is not None:
-            self.table_service.save_table(cp, "ezqc_all", df)
+            self.table_service.save_table(cp, "easyqc_all", df)
         self.project_service.load(self.current_project_name())
 
     def result_table(self, name: str):
@@ -481,35 +481,35 @@ class GUIStateBridge:
             raise ValueError("缺乏必要参数")
         settings = self.settings()
         if result_type == "new":
-            source = self.var_table("ezqc_new")
+            source = self.var_table("easyqc_new")
             return (source.copy() if source is not None else None), select_filter
         if result_type == "all":
-            source = self.var_table("ezqc_all")
+            source = self.var_table("easyqc_all")
             return source.copy(), settings.get("var_select_filter")
         if result_type == "qctable":
-            rt = self.result_table("ezqc_qctable")
+            rt = self.result_table("easyqc_qctable")
             return (rt.copy() if rt is not None else None), settings.get("select_filter")
         index = self.module_index_by_name(result_type)
         select_filter = self.qcmodule()[index].get("select_filter") if index is not None else None
-        source = self.result_table("ezqc_qctable")
+        source = self.result_table("easyqc_qctable")
         if source is None:
-            source = self.var_table("ezqc_all")
+            source = self.var_table("easyqc_all")
         return (source.copy() if source is not None else None), select_filter
 
     def save_filter_result(self, result_type, df_output: pd.DataFrame, query: str) -> None:
         if result_type == "new":
-            self.session_state._variables["ezqc_filter"] = df_output.copy()
+            self.session_state._variables["easyqc_filter"] = df_output.copy()
             return
         if result_type == "all":
-            self.session_state._variables["ezqc_all"] = df_output.copy()
+            self.session_state._variables["easyqc_all"] = df_output.copy()
             return
         cp = self.project_service.current_project
         if result_type == "qctable":
-            self.session_state._results["ezqc_qctable_filter"] = df_output.copy()
+            self.session_state._results["easyqc_qctable_filter"] = df_output.copy()
             self.project_service._settings["select_filter"] = query
             self.project_service.save()
             if self.table_service is not None and cp is not None:
-                self.table_service.save_table(cp, "ezqc_qctable_filter", df_output)
+                self.table_service.save_table(cp, "easyqc_qctable_filter", df_output)
             return
         self.session_state._results[result_type] = df_output.copy()
         index = self.module_index_by_name(result_type)

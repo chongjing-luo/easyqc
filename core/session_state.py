@@ -25,21 +25,21 @@ from utils.logger import log_warning
 class SessionState:
     """In-memory session-state buffer. Two DataFrame dicts + a rating dict.
 
-    ``_variables`` keys: ezqc_new (imported draft), ezqc_filter (named, ready
-    to merge), ezqc_all (master subject table).
-    ``_results`` keys: ezqc_qctable (aggregated QC), ezqc_qctable_filter
+    ``_variables`` keys: easyqc_new (imported draft), easyqc_filter (named, ready
+    to merge), easyqc_all (master subject table).
+    ``_results`` keys: easyqc_qctable (aggregated QC), easyqc_qctable_filter
     (filtered QC), <module_name> (per-module result tables).
     """
 
     def __init__(self) -> None:
         self._variables: dict[str, pd.DataFrame | None] = {
-            "ezqc_new": None,
-            "ezqc_filter": None,
-            "ezqc_all": None,
+            "easyqc_new": None,
+            "easyqc_filter": None,
+            "easyqc_all": None,
         }
         self._results: dict[str, pd.DataFrame | None] = {
-            "ezqc_qctable": None,
-            "ezqc_qctable_filter": None,
+            "easyqc_qctable": None,
+            "easyqc_qctable_filter": None,
         }
         self.rating_dict: dict[str, dict[str, Any]] = {}
 
@@ -49,45 +49,45 @@ class SessionState:
         return self._variables.get(name)
 
     def new_variable_table(self) -> pd.DataFrame | None:
-        df = self._variables.get("ezqc_new")
+        df = self._variables.get("easyqc_new")
         return df.copy() if df is not None else None
 
     def all_variable_table(self) -> pd.DataFrame | None:
-        df = self._variables.get("ezqc_all")
+        df = self._variables.get("easyqc_all")
         return df.copy() if df is not None else None
 
     def filtered_variable_table(self) -> pd.DataFrame | None:
-        df = self._variables.get("ezqc_filter")
+        df = self._variables.get("easyqc_filter")
         return df.copy() if df is not None else None
 
     def has_all_variable_rows(self) -> bool:
-        df = self._variables.get("ezqc_all")
+        df = self._variables.get("easyqc_all")
         return df is not None and len(df) > 0
 
     def new_variable_merge_source(self) -> pd.DataFrame | None:
-        """Prefer ezqc_filter, fall back to ezqc_new. Returns a copy."""
-        df = self._variables.get("ezqc_filter")
+        """Prefer easyqc_filter, fall back to easyqc_new. Returns a copy."""
+        df = self._variables.get("easyqc_filter")
         if df is None:
-            df = self._variables.get("ezqc_new")
+            df = self._variables.get("easyqc_new")
         return df.copy() if df is not None else None
 
     # ---- variable setters ----
 
     def set_new_variable_table(self, df: pd.DataFrame | None) -> None:
-        self._variables["ezqc_new"] = df  # store reference (matches legacy)
+        self._variables["easyqc_new"] = df  # store reference (matches legacy)
 
     def set_filtered_variable_table(self, df: pd.DataFrame | None) -> None:
-        self._variables["ezqc_filter"] = df.copy() if df is not None else None
+        self._variables["easyqc_filter"] = df.copy() if df is not None else None
 
     def set_all_variable_table(self, df: pd.DataFrame | None) -> None:
-        self._variables["ezqc_all"] = df.copy() if df is not None else None
+        self._variables["easyqc_all"] = df.copy() if df is not None else None
 
     # ---- prepare_new_variable_table (derived: rename + sort + sync filter) ----
 
     def prepare_new_variable_table(self, varname: str) -> pd.DataFrame | None:
-        """Normalize ezqc_new: ensure varname column, sort by it, sync ezqc_filter.
+        """Normalize easyqc_new: ensure varname column, sort by it, sync easyqc_filter.
         Returns a copy of the prepared table."""
-        df = self._variables.get("ezqc_new")
+        df = self._variables.get("easyqc_new")
         if df is None:
             return None
         df = df.copy()
@@ -97,26 +97,26 @@ class SessionState:
             df.columns = [varname]
         elif varname not in df.columns:
             # multicolumn and varname absent: keep as-is, just sync filter
-            self._variables["ezqc_new"] = df
-            self._variables["ezqc_filter"] = df.copy()
+            self._variables["easyqc_new"] = df
+            self._variables["easyqc_filter"] = df.copy()
             return df.copy()
         df = df.sort_values(by=varname, ascending=True)
-        self._variables["ezqc_new"] = df
-        self._variables["ezqc_filter"] = df.copy()
+        self._variables["easyqc_new"] = df
+        self._variables["easyqc_filter"] = df.copy()
         return df.copy()
 
-    # ---- merge into ezqc_all ----
+    # ---- merge into easyqc_all ----
 
     def merge_all_variables_as_rows(self, df: pd.DataFrame) -> None:
-        current = self._variables.get("ezqc_all")
-        self._variables["ezqc_all"] = (
+        current = self._variables.get("easyqc_all")
+        self._variables["easyqc_all"] = (
             pd.concat([current, df]) if current is not None else df.copy()
         )
 
     def merge_all_variables_as_columns(self, df: pd.DataFrame) -> None:
-        current = self._variables.get("ezqc_all")
-        self._variables["ezqc_all"] = (
-            pd.merge(current, df, on="ezqcid", how="outer")
+        current = self._variables.get("easyqc_all")
+        self._variables["easyqc_all"] = (
+            pd.merge(current, df, on="easyqcid", how="outer")
             if current is not None
             else df.copy()
         )
@@ -127,12 +127,12 @@ class SessionState:
         return self._results.get(name)
 
     def qctable_for_display(self) -> pd.DataFrame | None:
-        """Display priority: ezqc_qctable_filter > ezqc_qctable > ezqc_all."""
-        if self._results.get("ezqc_qctable_filter") is not None:
-            return self._results["ezqc_qctable_filter"]
-        if self._results.get("ezqc_qctable") is not None:
-            return self._results["ezqc_qctable"]
-        return self._variables.get("ezqc_all")
+        """Display priority: easyqc_qctable_filter > easyqc_qctable > easyqc_all."""
+        if self._results.get("easyqc_qctable_filter") is not None:
+            return self._results["easyqc_qctable_filter"]
+        if self._results.get("easyqc_qctable") is not None:
+            return self._results["easyqc_qctable"]
+        return self._variables.get("easyqc_all")
 
     # ---- service injection (apply_loaded_*) ----
 
@@ -150,7 +150,7 @@ class SessionState:
         self.rating_dict = deepcopy(loaded_ratings.rating_dict)
         qctable = getattr(loaded_ratings, "qctable", None)
         if qctable is not None:
-            self._results["ezqc_qctable"] = qctable.copy()
+            self._results["easyqc_qctable"] = qctable.copy()
 
     # ---- filter undo (pure memory) ----
 
@@ -160,9 +160,9 @@ class SessionState:
         if result_type is None:
             return df.copy()
         if result_type == "new":
-            self._variables["ezqc_filter"] = df.copy()
+            self._variables["easyqc_filter"] = df.copy()
         elif result_type == "all":
-            self._variables["ezqc_all"] = df.copy()
+            self._variables["easyqc_all"] = df.copy()
         elif result_type == "qctable":
             return None  # qctable not restorable
         else:

@@ -102,14 +102,14 @@ class QCPageController:
     def module_rater_dir(self, output_dir: str | Path, module_name: str, rater: str) -> str:
         return str(Path(output_dir) / "RatingFiles" / module_name / rater)
 
-    def set_subject(self, module: dict, ezqcid: str | None) -> None:
-        module["ezqcid"] = ezqcid
+    def set_subject(self, module: dict, easyqcid: str | None) -> None:
+        module["easyqcid"] = easyqcid
 
     def ensure_module_table(self, tables: dict, module_name: str):
         if module_name not in tables or tables[module_name] is None:
-            tables[module_name] = tables.get("ezqc_qctable")
+            tables[module_name] = tables.get("easyqc_qctable")
             if tables[module_name] is None:
-                tables[module_name] = tables.get("ezqc_all")
+                tables[module_name] = tables.get("easyqc_all")
         return tables.get(module_name)
 
     def table_has_rows(self, table) -> bool:
@@ -119,21 +119,21 @@ class QCPageController:
 
     def module_subject_rows(self, tables: dict, module_name: str) -> pd.DataFrame:
         table = tables.get(module_name)
-        if table is None or "ezqcid" not in table.columns:
-            return pd.DataFrame(columns=["ezqcid"])
-        return table[["ezqcid"]].drop_duplicates().sort_values("ezqcid")
+        if table is None or "easyqcid" not in table.columns:
+            return pd.DataFrame(columns=["easyqcid"])
+        return table[["easyqcid"]].drop_duplicates().sort_values("easyqcid")
 
     def first_subject_id(self, tables: dict, module_name: str) -> str | None:
         rows = self.module_subject_rows(tables, module_name)
         if rows.empty:
             return None
-        return rows["ezqcid"].tolist()[0]
+        return rows["easyqcid"].tolist()[0]
 
-    def subject_exists(self, tables: dict, module_name: str, ezqcid: str) -> bool:
+    def subject_exists(self, tables: dict, module_name: str, easyqcid: str) -> bool:
         table = tables.get(module_name)
-        if table is None or "ezqcid" not in table.columns:
+        if table is None or "easyqcid" not in table.columns:
             return False
-        return ezqcid in table["ezqcid"].values
+        return easyqcid in table["easyqcid"].values
 
     def module_table(self, tables: dict, module_name: str):
         return tables.get(module_name)
@@ -150,19 +150,19 @@ class QCPageController:
     def set_code_execution(self, module: dict, code_exe: dict[int, str] | None) -> None:
         module["code_exe"] = code_exe
 
-    def reset_rating_state(self, module: dict, ezqcid: str) -> dict:
+    def reset_rating_state(self, module: dict, easyqcid: str) -> dict:
         for score in module.get("scores", {}).values():
             score["value"] = None
         for tag in module.get("tags", {}).values():
             tag["value"] = False
         module["code_exe"] = None
-        module["ezqcid"] = ezqcid
+        module["easyqcid"] = easyqcid
         module["time"] = None
         module["notes"] = None
         return module
 
     def apply_rating_state(self, current_module: dict, rating_module: dict) -> dict:
-        current_module["ezqcid"] = rating_module.get("ezqcid", current_module.get("ezqcid"))
+        current_module["easyqcid"] = rating_module.get("easyqcid", current_module.get("easyqcid"))
         current_module["time"] = rating_module.get("time")
         current_module["notes"] = rating_module.get("notes")
         current_module["code_exe"] = rating_module.get("code_exe")
@@ -208,7 +208,7 @@ class QCPageController:
 
         return issues
 
-    def save_legacy_module_rating(self, module: dict, module_rater_dir: str | Path) -> Path:
+    def save_module_rating(self, module: dict, module_rater_dir: str | Path) -> Path:
         module["time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         rating = Rating.from_legacy_dict(module)
         directory_index = self._rating_directory_index(
@@ -223,11 +223,11 @@ class QCPageController:
             directory_index=directory_index,
         )
 
-    def load_legacy_module_rating(
+    def load_module_rating(
         self,
         module: dict,
         module_rater_dir: str | Path,
-        ezqcid: str,
+        easyqcid: str,
         rater: str,
     ) -> tuple[list[Path], dict | None]:
         directory_index = self._rating_directory_index(
@@ -235,16 +235,16 @@ class QCPageController:
             module["name"],
             rater,
         )
-        rating_files = directory_index.find(ezqcid)
+        rating_files = directory_index.find(easyqcid)
         if len(rating_files) != 1:
             return rating_files, None
-        return rating_files, RatingService.load_legacy_rating_file(rating_files[0])
+        return rating_files, RatingService.load_rating_payload(rating_files[0])
 
-    def load_first_legacy_module_rating(
+    def load_first_module_rating(
         self,
         module: dict,
         module_rater_dir: str | Path,
-        ezqcid: str,
+        easyqcid: str,
         rater: str,
     ) -> tuple[list[Path], dict | None]:
         directory_index = self._rating_directory_index(
@@ -252,19 +252,19 @@ class QCPageController:
             module["name"],
             rater,
         )
-        rating_files = directory_index.find(ezqcid)
+        rating_files = directory_index.find(easyqcid)
         if not rating_files:
             return rating_files, None
-        return rating_files, RatingService.load_legacy_rating_file(rating_files[0])
+        return rating_files, RatingService.load_rating_payload(rating_files[0])
 
     def generate_code(
         self,
-        ezqcid: str,
+        easyqcid: str,
         settings: dict,
         module: dict,
         table: pd.DataFrame,
     ) -> tuple[str, dict[int, str]]:
-        code_vars = table.loc[table["ezqcid"] == ezqcid].to_dict("records")[0]
+        code_vars = table.loc[table["easyqcid"] == easyqcid].to_dict("records")[0]
         code_vars = {**code_vars, **settings["constants"]}
         return self.code_executor.render_command_plan(module["code"], code_vars)
 

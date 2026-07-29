@@ -237,7 +237,7 @@ class QtModuleTemplateEditor(QWidget):
                 continue
             key = str(len(module.tags) + 1)
             module.tags[key] = Tag(key, label)
-        module.ezqcid = None
+        module.easyqcid = None
         module.code_exe = None
         module.notes = None
         module.time = None

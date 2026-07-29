@@ -25,7 +25,7 @@ def test_theme_combo_popups_show_all_short_lists_and_a_useful_long_window(qapp):
     short_combo = QComboBox()
     short_combo.addItems(
         (
-            "按 ezqcid 合并列",
+            "按 easyqcid 合并列",
             "追加行",
             "替换现有名单",
         )

@@ -38,10 +38,10 @@ def test_sort_default_ascending() -> None:
 
 
 def test_select_columns_comma_separated() -> None:
-    ops = parse_shorthand(select_expr="ezqcid, age, score")
+    ops = parse_shorthand(select_expr="easyqcid, age, score")
     assert ops[0] == {
         "operation": "select_columns",
-        "columns": ["ezqcid", "age", "score"],
+        "columns": ["easyqcid", "age", "score"],
     }
 
 
@@ -73,7 +73,7 @@ def test_multiple_fields_combined_in_order() -> None:
         filter_expr="age > 30",
         derive_expr="pass = score >= 3",
         sort_expr="score desc",
-        select_expr="ezqcid, score",
+        select_expr="easyqcid, score",
     )
     assert [op["operation"] for op in ops] == [
         "filter_rows",

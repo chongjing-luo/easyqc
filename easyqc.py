@@ -39,13 +39,13 @@ def parse_arguments(argv=None):
         epilog="""
 使用示例:
   python3 easyqc.py                                    # 启动GUI界面
-  python3 easyqc.py project module rater ezqcid        # 直接打开QC页面
+  python3 easyqc.py project module rater easyqcid        # 直接打开QC页面
   
 参数说明:
   project   - 项目名称
   module    - 模块名称  
   rater     - 评分者名称
-  ezqcid    - 受试者ID
+  easyqcid    - 受试者ID
         """
     )
     
@@ -65,19 +65,19 @@ def parse_arguments(argv=None):
     parser.add_argument(
         'args', 
         nargs='*', 
-        help='可选参数：project module rater ezqcid'
+        help='可选参数：project module rater easyqcid'
     )
     
     return parser.parse_args(argv)
 
 @log_function("EasyQC")
-def open_qcpage_from_shell(project, module, rater, ezqcid):
+def open_qcpage_from_shell(project, module, rater, easyqcid):
     """
     从命令行直接打开QC页面
     """
     cli_root = None
     try:
-        log_info(f"开始从命令行打开QC页面: project={project}, module={module}, rater={rater}, ezqcid={ezqcid}")
+        log_info(f"开始从命令行打开QC页面: project={project}, module={module}, rater={rater}, easyqcid={easyqcid}")
         
         # 导入必要的模块
         import tkinter as tk
@@ -92,7 +92,7 @@ def open_qcpage_from_shell(project, module, rater, ezqcid):
             project,
             module,
             rater,
-            ezqcid,
+            easyqcid,
             project_root / "projects.json",
         )
 
@@ -103,22 +103,22 @@ def open_qcpage_from_shell(project, module, rater, ezqcid):
         project_service.load(project)
         table_service = TableService()
         session_state = SessionState()
-        loaded_tables = table_service.load_legacy_state_tables(project_service.current_project)
+        loaded_tables = table_service.load_state_tables(project_service.current_project)
         if loaded_tables is not None:
             session_state.apply_loaded_tables(loaded_tables)
         # merge variables + results into a single tables dict for the controller
         cli_tables = {**session_state._variables, **session_state._results}
         log_info(f"成功加载项目: {project}")
         log_info(f"找到模块: {module} (索引: {launch_context.module_index})")
-        # CLI sets runtime fields (rater/ezqcid) directly on the in-memory module
+        # CLI sets runtime fields (rater/easyqcid) directly on the in-memory module
         # dict. These are runtime state, not module config, so update_module
-        # (which rejects ezqcid as a runtime key) is not used. CLI is watch-mode
+        # (which rejects easyqcid as a runtime key) is not used. CLI is watch-mode
         # (read-only) so settings are never persisted from here.
         qcidx = next((k for k, m in project_service.settings["qcmodule"].items()
                       if m.get("name") == module), None)
         if qcidx is not None:
             project_service.settings["qcmodule"][qcidx]["rater"] = rater
-            project_service.settings["qcmodule"][qcidx]["ezqcid"] = ezqcid
+            project_service.settings["qcmodule"][qcidx]["easyqcid"] = easyqcid
 
         # CLI 模式没有主窗口；显式创建并隐藏 root，避免 Toplevel 触发 tkinter 隐式空白根窗口。
         cli_root = tk.Tk()
@@ -134,7 +134,7 @@ def open_qcpage_from_shell(project, module, rater, ezqcid):
             project_service, tables=cli_tables
         )
         qcpage_instance.module_index = launch_context.module_index
-        qcpage_instance.ezqcid = ezqcid
+        qcpage_instance.easyqcid = easyqcid
         qcpage_instance.module_name = module
         qcpage_instance.rater = rater
 
@@ -143,7 +143,7 @@ def open_qcpage_from_shell(project, module, rater, ezqcid):
         
         # 调用open_qcpage_from_shell方法
         log_info("开始调用open_qcpage_from_shell方法")
-        success = qcpage_instance.open_qcpage_from_shell(project, module, rater, ezqcid)
+        success = qcpage_instance.open_qcpage_from_shell(project, module, rater, easyqcid)
         log_info(f"open_qcpage_from_shell返回结果: {success}")
         
         if not success:
@@ -239,19 +239,19 @@ def main(argv=None):
             launch_argv = sys.argv if argv is None else [sys.argv[0], *argv]
             return launch_qt_preview(launch_argv, registry_path=project_root / "projects.json")
         
-        # 检查是否有4个参数（project, module, rater, ezqcid）
+        # 检查是否有4个参数（project, module, rater, easyqcid）
         if len(args.args) == 4:
-            project, module, rater, ezqcid = args.args
-            log_info(f"检测到命令行参数: project={project}, module={module}, rater={rater}, ezqcid={ezqcid}")
+            project, module, rater, easyqcid = args.args
+            log_info(f"检测到命令行参数: project={project}, module={module}, rater={rater}, easyqcid={easyqcid}")
             
             # 直接打开QC页面
-            success = open_qcpage_from_shell(project, module, rater, ezqcid)
+            success = open_qcpage_from_shell(project, module, rater, easyqcid)
             if not success:
                 sys.exit(1)
             return 0
         elif len(args.args) > 0:
             print("错误：参数数量不正确")
-            print("用法：python3 easyqc.py [project module rater ezqcid]")
+            print("用法：python3 easyqc.py [project module rater easyqcid]")
             print("或者：python3 easyqc.py  # 启动GUI界面")
             sys.exit(1)
         

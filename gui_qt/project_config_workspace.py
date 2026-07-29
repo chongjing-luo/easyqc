@@ -108,7 +108,7 @@ class QtProjectConfigWorkspace(QWidget):
         self._selected_module_name: str | None = None
         self._module_form_baseline: tuple | None = None
         self.module_start_buttons: dict[str, QPushButton] = {}
-        self._module_filter_subjects = pd.DataFrame(columns=["ezqcid"])
+        self._module_filter_subjects = pd.DataFrame(columns=["easyqcid"])
         self._module_filter_profiles = ()
         self._module_filter_expression = FilterExpression()
         self._module_filter_ready_name: str | None = None
@@ -144,7 +144,7 @@ class QtProjectConfigWorkspace(QWidget):
             ConfigurationSnapshot(
                 projects=self.configuration.projects(),
                 current_project_name=current.name if current is not None else "",
-                subjects=pd.DataFrame(columns=["ezqcid"]),
+                subjects=pd.DataFrame(columns=["easyqcid"]),
                 constants={},
                 modules=(),
             )
@@ -641,7 +641,7 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_code = QPlainTextEdit(self.module_viewer_section)
         self.module_code.setObjectName("moduleViewerCommand")
         self.module_code.setPlaceholderText(
-            "查看器命令模板，例如：freeview {image} --title {ezqcid}"
+            "查看器命令模板，例如：freeview {image} --title {easyqcid}"
         )
         self.module_code.setAccessibleName("外部图像查看器命令模板")
         self.module_code.setFont(
@@ -899,7 +899,7 @@ class QtProjectConfigWorkspace(QWidget):
             frame = (
                 self.configuration.subjects()
                 if self.configuration.current_project
-                else pd.DataFrame(columns=["ezqcid"])
+                else pd.DataFrame(columns=["easyqcid"])
             )
         self.subjects_tab.refresh_current(frame)
 

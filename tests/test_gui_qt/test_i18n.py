@@ -88,7 +88,7 @@ def test_translation_formatting_is_strict_and_keeps_business_identifiers(tmp_pat
         controller.tr("status.project_loaded", project_name="MY_PROJECT")
         == "Project loaded: MY_PROJECT"
     )
-    assert controller.tr("field.ezqcid") == "ezqcid"
+    assert controller.tr("field.easyqcid") == "easyqcid"
     with pytest.raises(KeyError):
         controller.tr("status.project_loaded")
     with pytest.raises(KeyError):
@@ -259,8 +259,8 @@ def test_column_item_accessible_text_switches_with_visible_pinned_label(
     controller = LanguageController(settings=_settings(tmp_path))
     panel = ColumnsPanel(
         ColumnViewState(
-            order=("ezqcid", "site"),
-            pinned=("ezqcid",),
+            order=("easyqcid", "site"),
+            pinned=("easyqcid",),
         )
     )
     qtbot.addWidget(panel)
@@ -269,10 +269,10 @@ def test_column_item_accessible_text_switches_with_visible_pinned_label(
     controller.set_language("en")
 
     pinned_item = panel.list_widget.item(0)
-    assert pinned_item.text() == "ezqcid   · pinned"
+    assert pinned_item.text() == "easyqcid   · pinned"
     assert (
         pinned_item.data(Qt.ItemDataRole.AccessibleTextRole)
-        == "ezqcid   · pinned"
+        == "easyqcid   · pinned"
     )
 
 
@@ -283,8 +283,8 @@ def test_pinning_a_column_after_switching_to_english_localizes_visible_and_acces
     controller = LanguageController(settings=_settings(tmp_path))
     panel = ColumnsPanel(
         ColumnViewState(
-            order=("ezqcid", "site"),
-            pinned=("ezqcid",),
+            order=("easyqcid", "site"),
+            pinned=("easyqcid",),
         ),
         language=controller,
     )
@@ -363,7 +363,7 @@ def _widget_presentation_texts(root: QWidget) -> tuple[str, ...]:
 def test_open_table_dialogs_switch_language_without_losing_drafts(qtbot, tmp_path):
     source = pd.DataFrame(
         {
-            "ezqcid": ["A", "B"],
+            "easyqcid": ["A", "B"],
             "site": ["north", "south"],
             "age": [29, 31],
             "approved": [True, False],
@@ -372,8 +372,8 @@ def test_open_table_dialogs_switch_language_without_losing_drafts(qtbot, tmp_pat
     )
     profiles = TableViewService(source).profiles
     columns = ColumnViewState(
-        order=("ezqcid", "site", "age", "approved", "评分"),
-        pinned=("ezqcid",),
+        order=("easyqcid", "site", "age", "approved", "评分"),
+        pinned=("easyqcid",),
     )
     filter_expression = FilterExpression(
         groups=(
@@ -517,7 +517,7 @@ def test_formula_row_errors_switch_to_english_without_translating_data(
     controller = LanguageController(settings=_settings(tmp_path))
     source = pd.DataFrame(
         {
-            "ezqcid": ["A"],
+            "easyqcid": ["A"],
             "评分": ["无法转换"],
         }
     )
@@ -559,7 +559,7 @@ def test_table_accessible_descriptions_switch_to_english_without_rebuilding_page
     controller = LanguageController(settings=_settings(tmp_path))
     source = pd.DataFrame(
         {
-            "ezqcid": ["A", "B"],
+            "easyqcid": ["A", "B"],
             "site": ["north", "south"],
         }
     )

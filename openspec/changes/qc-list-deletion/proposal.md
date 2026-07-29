@@ -10,9 +10,9 @@ record.
 
 - Add multi-row and selected-column deletion to QC List Import.
 - Add multi-row and selected-column deletion to Pre-QC List.
-- Protect authoritative `ezqcid`.
+- Protect authoritative `easyqcid`.
 - Confirm that rating records are retained.
-- Reuse validated atomic `ezqc_all.csv` persistence and context refresh.
+- Reuse validated atomic `easyqc_all.csv` persistence and context refresh.
 
 ## Impact
 

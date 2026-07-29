@@ -38,7 +38,7 @@ def _page(qtbot, tmp_path):
     configuration.create_project("SAMPLE", tmp_path)
     current = pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002"],
+            "easyqcid": ["SUB001", "SUB002"],
             "site": ["A", "B"],
         }
     )
@@ -90,7 +90,7 @@ def test_each_source_builds_a_preview_draft_without_persistence(
     source_mode,
 ) -> None:
     page, configuration, current = _page(qtbot, tmp_path)
-    table_path = configuration.current_project.table_dir / "ezqc_all.csv"
+    table_path = configuration.current_project.table_dir / "easyqc_all.csv"
     before_bytes = table_path.read_bytes()
 
     if source_mode == "folder":
@@ -99,12 +99,12 @@ def test_each_source_builds_a_preview_draft_without_persistence(
         (source / "SUB003").mkdir()
         qtbot.mouseClick(page.folder_mode_button, Qt.LeftButton)
         page.source_path_edit.setText(str(source))
-        page.single_column_name.setText("ezqcid")
+        page.single_column_name.setText("easyqcid")
         expected = ["SUB003", "SUB004"]
     elif source_mode == "file":
         source = tmp_path / "list.csv"
         pd.DataFrame(
-            {"ezqcid": ["SUB003", "SUB004"], "site": ["C", "D"]}
+            {"easyqcid": ["SUB003", "SUB004"], "site": ["C", "D"]}
         ).to_csv(source, index=False)
         qtbot.mouseClick(page.file_mode_button, Qt.LeftButton)
         page.source_path_edit.setText(str(source))
@@ -112,13 +112,13 @@ def test_each_source_builds_a_preview_draft_without_persistence(
     else:
         qtbot.mouseClick(page.text_mode_button, Qt.LeftButton)
         page.direct_text_edit.setPlainText("SUB003, SUB004")
-        page.single_column_name.setText("ezqcid")
+        page.single_column_name.setText("easyqcid")
         expected = ["SUB003", "SUB004"]
 
     qtbot.mouseClick(page.read_preview_button, Qt.LeftButton)
     _wait(page, qtbot)
 
-    assert page.draft["ezqcid"].tolist() == expected
+    assert page.draft["easyqcid"].tolist() == expected
     assert page.preview_model.rowCount() == 2
     pd.testing.assert_frame_equal(configuration.subjects(), current)
     assert table_path.read_bytes() == before_bytes
@@ -126,10 +126,10 @@ def test_each_source_builds_a_preview_draft_without_persistence(
 
 def test_failed_parse_preserves_last_draft_and_active_list(qtbot, tmp_path) -> None:
     page, configuration, current = _page(qtbot, tmp_path)
-    table_path = configuration.current_project.table_dir / "ezqc_all.csv"
+    table_path = configuration.current_project.table_dir / "easyqc_all.csv"
     qtbot.mouseClick(page.text_mode_button, Qt.LeftButton)
     page.direct_text_edit.setPlainText("SUB003 SUB004")
-    page.single_column_name.setText("ezqcid")
+    page.single_column_name.setText("easyqcid")
     qtbot.mouseClick(page.read_preview_button, Qt.LeftButton)
     _wait(page, qtbot)
     before_draft = page.draft
@@ -154,7 +154,7 @@ def test_preview_search_filter_sort_and_columns_do_not_change_draft(
     source = tmp_path / "preview.csv"
     pd.DataFrame(
         {
-            "ezqcid": ["SUB003", "SUB004", "SUB005"],
+            "easyqcid": ["SUB003", "SUB004", "SUB005"],
             "site": ["A", "B", "A"],
             "scanner_model": ["Prisma", "Skyra", "Prisma"],
         }
@@ -184,7 +184,7 @@ def test_preview_search_filter_sort_and_columns_do_not_change_draft(
     _wait(page, qtbot)
 
     assert page.apply_preview_sort((SortRule("site", ascending=False),))
-    assert page.preview_model.snapshot()["ezqcid"].tolist() == [
+    assert page.preview_model.snapshot()["easyqcid"].tolist() == [
         "SUB004",
         "SUB003",
         "SUB005",
@@ -206,7 +206,7 @@ def test_preview_search_filter_sort_and_columns_do_not_change_draft(
         hidden=("scanner_model",),
     )
     assert page.apply_preview_columns(columns)
-    assert tuple(page.preview_model.snapshot().columns) == ("ezqcid", "site")
+    assert tuple(page.preview_model.snapshot().columns) == ("easyqcid", "site")
     pd.testing.assert_frame_equal(page.draft, original)
     pd.testing.assert_frame_equal(configuration.subjects(), _current)
     assert page.filter_button.text().startswith("筛选")
@@ -222,14 +222,14 @@ def test_derived_column_updates_only_latest_import_draft(
     source = tmp_path / "draft-columns.csv"
     pd.DataFrame(
         {
-            "ezqcid": ["NEW001", "NEW002", "NEW003"],
+            "easyqcid": ["NEW001", "NEW002", "NEW003"],
             "batch": ["X", "Y", "Z"],
         }
     ).to_csv(source, index=False)
     page.source_path_edit.setText(str(source))
     qtbot.mouseClick(page.read_preview_button, Qt.LeftButton)
     _wait(page, qtbot)
-    table_path = configuration.current_project.table_dir / "ezqc_all.csv"
+    table_path = configuration.current_project.table_dir / "easyqc_all.csv"
     before_bytes = table_path.read_bytes()
     events = []
     configuration.project_service.event_bus.subscribe(
@@ -254,7 +254,7 @@ def test_derived_column_updates_only_latest_import_draft(
     assert [
         dialog.editor.column_combo.itemData(index)
         for index in range(dialog.editor.column_combo.count())
-    ] == ["ezqcid", "batch"]
+    ] == ["easyqcid", "batch"]
 
     dialog.name_edit.setText("batch_copy")
     dialog.editor.set_formula("[batch]")
@@ -285,7 +285,7 @@ def test_stale_formula_worker_result_cannot_replace_newer_import_draft(
     page._install_draft(
         pd.DataFrame(
             {
-                "ezqcid": ["OLD001", "OLD002"],
+                "easyqcid": ["OLD001", "OLD002"],
                 "batch": ["A", "B"],
             }
         )
@@ -315,7 +315,7 @@ def test_stale_formula_worker_result_cannot_replace_newer_import_draft(
 
     newer = pd.DataFrame(
         {
-            "ezqcid": ["NEW001"],
+            "easyqcid": ["NEW001"],
             "batch": ["Z"],
         }
     )
@@ -338,7 +338,7 @@ def test_import_preview_context_actions_edit_correct_draft_rows(
     source = tmp_path / "draft-rows.csv"
     pd.DataFrame(
         {
-            "ezqcid": ["ROW_A", "ROW_B", "ROW_C", "ROW_D"],
+            "easyqcid": ["ROW_A", "ROW_B", "ROW_C", "ROW_D"],
             "site": ["A", "B", "C", "D"],
         }
     ).to_csv(source, index=False)
@@ -346,7 +346,7 @@ def test_import_preview_context_actions_edit_correct_draft_rows(
     qtbot.mouseClick(page.read_preview_button, Qt.LeftButton)
     _wait(page, qtbot)
     before_bytes = (
-        configuration.current_project.table_dir / "ezqc_all.csv"
+        configuration.current_project.table_dir / "easyqc_all.csv"
     ).read_bytes()
 
     assert page.preview_table.selectionMode() == QAbstractItemView.SingleSelection
@@ -358,20 +358,20 @@ def test_import_preview_context_actions_edit_correct_draft_rows(
     assert page.draft_position_for_preview_row(0) == 3
     page.preview_table.clearSelection()
     assert page.delete_draft_rows_by_filter(_site_filter("D"))
-    assert page.draft["ezqcid"].tolist() == ["ROW_A", "ROW_B", "ROW_C"]
+    assert page.draft["easyqcid"].tolist() == ["ROW_A", "ROW_B", "ROW_C"]
 
     assert page.apply_preview_sort((SortRule("site", ascending=False),))
     assert page.draft_position_for_preview_row(0) == 2
     assert page.draft_position_for_preview_row(2) == 0
     page.preview_table.clearSelection()
     assert page.delete_draft_rows_by_filter(_site_filter("A", "C"))
-    assert page.draft["ezqcid"].tolist() == ["ROW_B"]
-    assert page.draft.columns.tolist() == ["ezqcid", "site"]
+    assert page.draft["easyqcid"].tolist() == ["ROW_B"]
+    assert page.draft.columns.tolist() == ["easyqcid", "site"]
 
     assert page.insert_blank_draft_row(after_position=0)
-    assert page.draft.columns.tolist() == ["ezqcid", "site"]
+    assert page.draft.columns.tolist() == ["easyqcid", "site"]
     assert len(page.draft) == 2
-    assert pd.isna(page.draft.iloc[1]["ezqcid"])
+    assert pd.isna(page.draft.iloc[1]["easyqcid"])
     assert page.insert_blank_draft_row(after_position=None)
     assert len(page.draft) == 3
     assert pd.isna(page.draft.iloc[-1]["site"])
@@ -391,7 +391,7 @@ def test_import_preview_context_actions_edit_correct_draft_rows(
     language.set_language("zh_CN")
     pd.testing.assert_frame_equal(configuration.subjects(), current)
     assert (
-        configuration.current_project.table_dir / "ezqc_all.csv"
+        configuration.current_project.table_dir / "easyqc_all.csv"
     ).read_bytes() == before_bytes
 
 
@@ -400,7 +400,7 @@ def test_import_row_edits_feed_the_next_derived_column(qtbot, tmp_path) -> None:
     page._install_draft(
         pd.DataFrame(
             {
-                "ezqcid": ["NEW001", "NEW002", "NEW003"],
+                "easyqcid": ["NEW001", "NEW002", "NEW003"],
                 "batch": ["X", "Y", "Z"],
             }
         )
@@ -432,7 +432,7 @@ def test_import_row_edits_feed_the_next_derived_column(qtbot, tmp_path) -> None:
     qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
     qtbot.waitUntil(lambda: "batch_copy" in page.draft.columns, timeout=3000)
 
-    assert page.draft["ezqcid"].tolist() == ["NEW001", "NEW003"]
+    assert page.draft["easyqcid"].tolist() == ["NEW001", "NEW003"]
     assert page.draft["batch_copy"].tolist() == ["X", "Z"]
     pd.testing.assert_frame_equal(configuration.subjects(), current)
 
@@ -446,7 +446,7 @@ def test_merge_columns_applies_once_and_emits_list_change(
     page, configuration, _current = _page(qtbot, tmp_path)
     source = tmp_path / "columns.csv"
     pd.DataFrame(
-        {"ezqcid": ["SUB001", "SUB003"], "batch": ["X", "Y"]}
+        {"easyqcid": ["SUB001", "SUB003"], "batch": ["X", "Y"]}
     ).to_csv(source, index=False)
     page.source_path_edit.setText(str(source))
     qtbot.mouseClick(page.read_preview_button, Qt.LeftButton)
@@ -460,7 +460,7 @@ def test_merge_columns_applies_once_and_emits_list_change(
     qtbot.mouseClick(page.apply_button, Qt.LeftButton)
     _wait(page, qtbot)
 
-    merged = configuration.subjects().set_index("ezqcid")
+    merged = configuration.subjects().set_index("easyqcid")
     assert list(merged.index) == ["SUB001", "SUB002", "SUB003"]
     assert merged.loc["SUB001", "batch"] == "X"
     assert len(events) == 1
@@ -475,7 +475,7 @@ def test_append_rows_and_clear_draft_are_explicit(
     _accept_questions(monkeypatch)
     page, configuration, _current = _page(qtbot, tmp_path)
     source = tmp_path / "rows.csv"
-    pd.DataFrame({"ezqcid": ["SUB003"], "site": ["C"]}).to_csv(
+    pd.DataFrame({"easyqcid": ["SUB003"], "site": ["C"]}).to_csv(
         source,
         index=False,
     )
@@ -489,14 +489,14 @@ def test_append_rows_and_clear_draft_are_explicit(
 
     qtbot.mouseClick(page.apply_button, Qt.LeftButton)
     _wait(page, qtbot)
-    assert configuration.subjects()["ezqcid"].tolist() == [
+    assert configuration.subjects()["easyqcid"].tolist() == [
         "SUB001",
         "SUB002",
         "SUB003",
     ]
     qtbot.mouseClick(page.clear_button, Qt.LeftButton)
     assert page.draft.empty
-    assert configuration.subjects()["ezqcid"].tolist()[-1] == "SUB003"
+    assert configuration.subjects()["easyqcid"].tolist()[-1] == "SUB003"
 
 
 def test_failed_apply_preserves_disk_active_list_and_draft(
@@ -507,7 +507,7 @@ def test_failed_apply_preserves_disk_active_list_and_draft(
     _accept_questions(monkeypatch)
     page, configuration, current = _page(qtbot, tmp_path)
     source = tmp_path / "conflict.csv"
-    pd.DataFrame({"ezqcid": ["SUB001"], "other": ["changed"]}).to_csv(
+    pd.DataFrame({"easyqcid": ["SUB001"], "other": ["changed"]}).to_csv(
         source,
         index=False,
     )
@@ -518,7 +518,7 @@ def test_failed_apply_preserves_disk_active_list_and_draft(
         page.write_mode_combo.findData("append")
     )
     draft = page.draft
-    table_path = configuration.current_project.table_dir / "ezqc_all.csv"
+    table_path = configuration.current_project.table_dir / "easyqc_all.csv"
     before_bytes = table_path.read_bytes()
 
     qtbot.mouseClick(page.apply_button, Qt.LeftButton)
@@ -537,7 +537,7 @@ def test_preview_load_is_background_responsive_and_visible_language_is_neutral(
 ) -> None:
     page, configuration, _current = _page(qtbot, tmp_path)
     source = tmp_path / "slow.csv"
-    pd.DataFrame({"ezqcid": ["SUB003"]}).to_csv(source, index=False)
+    pd.DataFrame({"easyqcid": ["SUB003"]}).to_csv(source, index=False)
     real_reader = configuration.draft_from_file
     started = Event()
     release = Event()
@@ -587,7 +587,7 @@ def test_reduced_width_keeps_import_and_apply_actions_reachable(qtbot, tmp_path)
     assert page.preview_table.horizontalScrollBarPolicy() == Qt.ScrollBarAsNeeded
 
 
-def test_import_draft_can_generate_missing_ezqcid_then_merge(
+def test_import_draft_can_generate_missing_easyqcid_then_merge(
     qtbot,
     tmp_path,
     monkeypatch,
@@ -606,15 +606,15 @@ def test_import_draft_can_generate_missing_ezqcid_then_merge(
     qtbot.mouseClick(page.derive_button, Qt.LeftButton)
     dialog = page.derived_column_dialog
     assert dialog is not None
-    dialog.name_edit.setText("ezqcid")
+    dialog.name_edit.setText("easyqcid")
     dialog.editor.set_formula("TRIM([raw_id])")
     qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
-    qtbot.waitUntil(lambda: "ezqcid" in page.draft.columns, timeout=3000)
+    qtbot.waitUntil(lambda: "easyqcid" in page.draft.columns, timeout=3000)
 
-    assert page.draft["ezqcid"].tolist() == ["SUB003", "SUB004"]
+    assert page.draft["easyqcid"].tolist() == ["SUB003", "SUB004"]
     qtbot.mouseClick(page.apply_button, Qt.LeftButton)
     _wait(page, qtbot)
-    assert configuration.subjects()["ezqcid"].tolist() == [
+    assert configuration.subjects()["easyqcid"].tolist() == [
         "SUB001",
         "SUB002",
         "SUB003",
@@ -765,13 +765,13 @@ def test_import_draft_column_deletion_is_discoverable_and_never_writes_project_d
     page._install_draft(
         pd.DataFrame(
             {
-                "ezqcid": ["NEW001", "NEW002"],
+                "easyqcid": ["NEW001", "NEW002"],
                 "site": ["A", "B"],
                 "path": ["/a/one.nii", "/b/two.nii"],
             }
         )
     )
-    table_path = configuration.current_project.table_dir / "ezqc_all.csv"
+    table_path = configuration.current_project.table_dir / "easyqc_all.csv"
     table_before = table_path.read_bytes()
     rating_path = (
         configuration.current_project.path
@@ -781,19 +781,19 @@ def test_import_draft_column_deletion_is_discoverable_and_never_writes_project_d
         / "rating.json"
     )
     rating_path.parent.mkdir(parents=True)
-    rating_path.write_bytes(b'{"ezqcid":"NEW001","score":"Good"}')
+    rating_path.write_bytes(b'{"easyqcid":"NEW001","score":"Good"}')
     rating_before = rating_path.read_bytes()
 
     assert page.delete_rows_button.text() == "删除行"
     assert page.delete_column_button.text() == "删除列"
     page.preview_table.clearSelection()
     assert page.delete_draft_columns(("site",))
-    assert page.draft.columns.tolist() == ["ezqcid", "path"]
+    assert page.draft.columns.tolist() == ["easyqcid", "path"]
 
     page.preview_table.clearSelection()
-    assert page.delete_draft_columns(("ezqcid",))
+    assert page.delete_draft_columns(("easyqcid",))
     assert page.draft.columns.tolist() == ["path"]
-    assert "ezqcid" in page.stats_label.text()
+    assert "easyqcid" in page.stats_label.text()
     assert table_path.read_bytes() == table_before
     assert rating_path.read_bytes() == rating_before
     pd.testing.assert_frame_equal(configuration.subjects(), current)
@@ -804,7 +804,7 @@ def test_import_delete_controls_follow_busy_state_and_language(
     tmp_path,
 ) -> None:
     page, _configuration, _current = _page(qtbot, tmp_path)
-    page._install_draft(pd.DataFrame({"ezqcid": ["NEW001"], "site": ["A"]}))
+    page._install_draft(pd.DataFrame({"easyqcid": ["NEW001"], "site": ["A"]}))
     language = get_or_create_language_controller()
     try:
         page.preview_table.clearSelection()
@@ -831,7 +831,7 @@ def test_import_row_deletion_confirmation_names_scope_and_retained_ratings(
 ) -> None:
     page, _configuration, _current = _page(qtbot, tmp_path)
     page._install_draft(
-        pd.DataFrame({"ezqcid": ["NEW001", "NEW002"], "site": ["A", "B"]})
+        pd.DataFrame({"easyqcid": ["NEW001", "NEW002"], "site": ["A", "B"]})
     )
     page.preview_table.clearSelection()
     prompts = []
@@ -846,7 +846,7 @@ def test_import_row_deletion_confirmation_names_scope_and_retained_ratings(
     assert dialog is not None
     dialog.editor.set_expression(_site_filter("A"))
     qtbot.mouseClick(dialog.delete_button, Qt.LeftButton)
-    assert page.draft["ezqcid"].tolist() == ["NEW001", "NEW002"]
+    assert page.draft["easyqcid"].tolist() == ["NEW001", "NEW002"]
     assert prompts
     assert prompts[0][0] == "确认删除"
     assert "1" in prompts[0][1]
@@ -860,7 +860,7 @@ def test_import_write_modes_expose_contextual_conflict_policies(
     page, _configuration, _current = _page(qtbot, tmp_path)
     page._install_draft(
         pd.DataFrame(
-            {"ezqcid": ["SUB001", "SUB003"], "site": ["changed", "C"]}
+            {"easyqcid": ["SUB001", "SUB003"], "site": ["changed", "C"]}
         )
     )
 
@@ -897,7 +897,7 @@ def test_import_append_replace_and_full_replace_follow_selected_policy(
     page, configuration, _current = _page(qtbot, tmp_path)
     page._install_draft(
         pd.DataFrame(
-            {"ezqcid": ["SUB002", "SUB003"], "site": ["B2", "C"]}
+            {"easyqcid": ["SUB002", "SUB003"], "site": ["B2", "C"]}
         )
     )
     page.write_mode_combo.setCurrentIndex(
@@ -910,13 +910,13 @@ def test_import_append_replace_and_full_replace_follow_selected_policy(
     qtbot.mouseClick(page.apply_button, Qt.LeftButton)
     _wait(page, qtbot)
     assert configuration.subjects().to_dict("records") == [
-        {"ezqcid": "SUB001", "site": "A"},
-        {"ezqcid": "SUB002", "site": "B2"},
-        {"ezqcid": "SUB003", "site": "C"},
+        {"easyqcid": "SUB001", "site": "A"},
+        {"easyqcid": "SUB002", "site": "B2"},
+        {"easyqcid": "SUB003", "site": "C"},
     ]
 
     page._install_draft(
-        pd.DataFrame({"ezqcid": ["NEW001"], "batch": ["X"]})
+        pd.DataFrame({"easyqcid": ["NEW001"], "batch": ["X"]})
     )
     page.write_mode_combo.setCurrentIndex(
         page.write_mode_combo.findData("replace")
@@ -924,5 +924,5 @@ def test_import_append_replace_and_full_replace_follow_selected_policy(
     qtbot.mouseClick(page.apply_button, Qt.LeftButton)
     _wait(page, qtbot)
     assert configuration.subjects().to_dict("records") == [
-        {"ezqcid": "NEW001", "batch": "X"}
+        {"easyqcid": "NEW001", "batch": "X"}
     ]

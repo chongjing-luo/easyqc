@@ -46,7 +46,7 @@ from models.table_view_state import (
 def _source() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "ezqcid": ["SUB001", "SUB002", "SUB003", "SUB004", "SUB005"],
+            "easyqcid": ["SUB001", "SUB002", "SUB003", "SUB004", "SUB005"],
             "site": ["A", "B", "A", "B", "A"],
             "age": [29, 31, 27, 30, 35],
             "passed": [True, False, True, False, True],
@@ -261,13 +261,13 @@ def test_derived_dialog_preparation_error_is_visible_instead_of_escaping(
     workspace.show()
 
     def fail_default_state(*_args, **_kwargs):
-        raise TableViewError("ezqcid 预览状态无效")
+        raise TableViewError("easyqcid 预览状态无效")
 
     monkeypatch.setattr(workspace.service, "default_state", fail_default_state)
 
     assert workspace.open_derived_column_dialog() is None
     assert workspace.error_label.isVisibleTo(workspace)
-    assert workspace.error_label.text() == "ezqcid 预览状态无效"
+    assert workspace.error_label.text() == "easyqcid 预览状态无效"
 
 
 def test_applied_filter_actions_use_toolbar_overflow_and_remain_removable(qtbot):
@@ -313,9 +313,9 @@ def test_multi_pinned_width_uses_all_sections_and_caps_at_45_percent(qtbot):
     workspace.show()
     assert workspace.apply_column_state(
         ColumnViewState(
-            order=("ezqcid", "age", "site", "passed"),
-            widths=(("ezqcid", 260), ("age", 240), ("site", 132), ("passed", 132)),
-            pinned=("ezqcid", "age"),
+            order=("easyqcid", "age", "site", "passed"),
+            widths=(("easyqcid", 260), ("age", 240), ("site", 132), ("passed", 132)),
+            pinned=("easyqcid", "age"),
         )
     )
     surface_width = workspace.table_surface.contentsRect().width()
@@ -348,7 +348,7 @@ def test_external_scrollbars_span_surface_and_keep_last_rows_aligned(qtbot):
     rows = 120
     source = pd.DataFrame(
         {
-            "ezqcid": [f"SUB{index:03d}" for index in range(rows)],
+            "easyqcid": [f"SUB{index:03d}" for index in range(rows)],
             **{
                 f"value_{column}": list(range(rows))
                 for column in range(8)
@@ -390,7 +390,7 @@ def test_vertical_scrolling_from_either_view_keeps_rendered_rows_synchronized(qt
     rows = 120
     source = pd.DataFrame(
         {
-            "ezqcid": [f"SUB{index:03d}" for index in range(rows)],
+            "easyqcid": [f"SUB{index:03d}" for index in range(rows)],
             "value": list(range(rows)),
         }
     )
@@ -438,9 +438,9 @@ def test_pinned_width_recomputes_after_resize_and_section_change(qtbot):
     workspace.show()
     assert workspace.apply_column_state(
         ColumnViewState(
-            order=("ezqcid", "age", "site", "passed"),
-            widths=(("ezqcid", 220), ("age", 200)),
-            pinned=("ezqcid", "age"),
+            order=("easyqcid", "age", "site", "passed"),
+            widths=(("easyqcid", 220), ("age", 200)),
+            pinned=("easyqcid", "age"),
         )
     )
     qtbot.waitUntil(
@@ -506,7 +506,7 @@ def test_narrow_toolbar_actions_are_keyboard_reachable(qtbot):
         Qt.Key.Key_F,
         Qt.KeyboardModifier.ControlModifier,
     )
-    assert "精确的 ezqcid" in workspace.error_text
+    assert "精确的 easyqcid" in workspace.error_text
 
     qtbot.keyClick(
         workspace.table_view,
@@ -613,7 +613,7 @@ def test_cancel_export_preserves_destination_and_restores_actions(
 ):
     source = pd.DataFrame(
         {
-            "ezqcid": [f"S{index:04d}" for index in range(200)],
+            "easyqcid": [f"S{index:04d}" for index in range(200)],
             "value": list(range(200)),
         }
     )
@@ -831,7 +831,7 @@ def test_filter_draft_cancel_apply_and_invalid_input_preserve_last_result(qtbot)
     workspace.set_filter_draft((FilterCondition("site", "==", "A", "site-a"),))
     assert workspace.apply_filter_draft()
     valid_revision = workspace.applied_state.revision
-    valid_ids = _full_result_frame(workspace)["ezqcid"].tolist()
+    valid_ids = _full_result_frame(workspace)["easyqcid"].tolist()
     assert valid_ids == ["SUB001", "SUB003", "SUB005"]
     assert workspace.filter_count == 1
     assert workspace.applied_chip_texts == ("site 等于 A",)
@@ -840,7 +840,7 @@ def test_filter_draft_cancel_apply_and_invalid_input_preserve_last_result(qtbot)
     workspace.set_filter_draft((FilterCondition("age", ">", "not-a-number", "bad"),))
     assert not workspace.apply_filter_draft()
     assert workspace.applied_state.revision == valid_revision
-    assert _full_result_frame(workspace)["ezqcid"].tolist() == valid_ids
+    assert _full_result_frame(workspace)["easyqcid"].tolist() == valid_ids
     assert "数值" in workspace.error_text
     assert_frame_equal(source, original)
 
@@ -911,7 +911,7 @@ def test_filter_dialog_cancel_reset_apply_and_inline_error_are_transactional(qtb
     )
     assert workspace.applied_state.revision == initial_state.revision + 1
     assert workspace.applied_state.filter == valid
-    assert _full_result_frame(workspace)["ezqcid"].tolist() == [
+    assert _full_result_frame(workspace)["easyqcid"].tolist() == [
         "SUB001",
         "SUB003",
         "SUB005",
@@ -1008,7 +1008,7 @@ def test_source_replacement_preserves_compatible_grouped_filter_semantics(qtbot)
             ),
         ),
     )
-    assert _full_result_frame(workspace)["ezqcid"].tolist() == [
+    assert _full_result_frame(workspace)["easyqcid"].tolist() == [
         "SUB001",
         "SUB003",
         "SUB005",
@@ -1102,7 +1102,7 @@ def test_multi_sort_header_state_and_column_layout_are_applied(qtbot):
     workspace.table_view.setColumnWidth(1, 211)
 
     assert workspace.apply_sort_rules(rules)
-    assert _full_result_frame(workspace)["ezqcid"].tolist() == [
+    assert _full_result_frame(workspace)["easyqcid"].tolist() == [
         "SUB005",
         "SUB001",
         "SUB003",
@@ -1116,12 +1116,12 @@ def test_multi_sort_header_state_and_column_layout_are_applied(qtbot):
     assert workspace.applied_state.columns.width_for("site") == 211
 
     columns = ColumnViewState(
-        order=("ezqcid", "age", "site", "passed"),
+        order=("easyqcid", "age", "site", "passed"),
         hidden=("passed",),
-        pinned=("ezqcid",),
+        pinned=("easyqcid",),
     )
     assert workspace.apply_column_state(columns)
-    assert tuple(workspace.table_model.snapshot().columns) == ("ezqcid", "age", "site")
+    assert tuple(workspace.table_model.snapshot().columns) == ("easyqcid", "age", "site")
     assert workspace.pinned_view is not None
     assert workspace.pinned_view.isColumnHidden(0) is False
     assert workspace.table_view.isColumnHidden(0) is True
@@ -1171,7 +1171,7 @@ def test_sort_dialog_cancel_duplicate_and_apply_are_transactional(qtbot):
         SortRule("site", True),
         SortRule("age", False),
     )
-    assert _full_result_frame(workspace)["ezqcid"].tolist() == [
+    assert _full_result_frame(workspace)["easyqcid"].tolist() == [
         "SUB005",
         "SUB001",
         "SUB003",
@@ -1189,9 +1189,9 @@ def test_columns_dialog_cancel_reset_and_apply_are_transactional(qtbot):
 
     dialog = workspace.open_columns_dialog()
     modified = ColumnViewState(
-        order=("ezqcid", "age", "site", "passed"),
+        order=("easyqcid", "age", "site", "passed"),
         hidden=("passed",),
-        pinned=("ezqcid", "age"),
+        pinned=("easyqcid", "age"),
     )
     dialog.editor.set_state(modified)
     qtbot.mouseClick(
@@ -1260,9 +1260,9 @@ def test_integrated_inspector_applies_all_three_drafts_in_one_revision(qtbot):
     workspace.inspector_sort_panel.set_rules((SortRule("age", False),))
     workspace.inspector_columns_panel.set_state(
         ColumnViewState(
-            order=("ezqcid", "age", "site", "passed"),
+            order=("easyqcid", "age", "site", "passed"),
             hidden=("passed",),
-            pinned=("ezqcid",),
+            pinned=("easyqcid",),
         )
     )
 
@@ -1271,7 +1271,7 @@ def test_integrated_inspector_applies_all_three_drafts_in_one_revision(qtbot):
     assert workspace.applied_state.revision == initial_revision + 1
     assert workspace.applied_state.sort_rules == (SortRule("age", False),)
     assert workspace.applied_state.columns.hidden == ("passed",)
-    assert _full_result_frame(workspace)["ezqcid"].tolist() == [
+    assert _full_result_frame(workspace)["easyqcid"].tolist() == [
         "SUB005",
         "SUB001",
         "SUB003",
@@ -1290,7 +1290,7 @@ def test_source_replacement_closes_inspector_and_rebuilds_its_schema(qtbot):
 
     assert workspace.view_inspector.isHidden()
     assert workspace.inspector_columns_panel.state().order == (
-        "ezqcid",
+        "easyqcid",
         "site",
         "passed",
     )
@@ -1352,8 +1352,8 @@ def test_source_replacement_rejects_open_sort_and_columns_drafts(qtbot):
     columns_dialog = workspace.open_columns_dialog()
     columns_dialog.editor.set_state(
         ColumnViewState(
-            order=("ezqcid", "age", "site", "passed"),
-            pinned=("ezqcid",),
+            order=("easyqcid", "age", "site", "passed"),
+            pinned=("easyqcid",),
         )
     )
     workspace.replace_service(TableViewService(_source()), preserve_state=True)
@@ -1414,15 +1414,15 @@ def test_sort_dialog_background_failure_preserves_applied_view(qtbot, monkeypatc
     assert "synthetic sort dialog background failure" in workspace.error_text
 
 
-def test_ezqcid_cannot_be_hidden_or_unpinned(qtbot):
+def test_easyqcid_cannot_be_hidden_or_unpinned(qtbot):
     workspace = QtTableWorkspace(_source())
     qtbot.addWidget(workspace)
     before = workspace.applied_state
 
-    hidden = replace(before.columns, hidden=("ezqcid",))
+    hidden = replace(before.columns, hidden=("easyqcid",))
     assert not workspace.apply_column_state(hidden)
     assert workspace.applied_state == before
-    assert "ezqcid" in workspace.error_text
+    assert "easyqcid" in workspace.error_text
 
     unpinned = replace(before.columns, pinned=())
     assert not workspace.apply_column_state(unpinned)
@@ -1443,7 +1443,7 @@ def test_paging_exact_find_and_selection_restore_use_full_result(qtbot):
 
     assert workspace.apply_sort_rules((SortRule("age", False),))
     assert workspace.selected_source_position == 4
-    assert workspace.table_model.row_reference(0).ezqcid == "SUB005"
+    assert workspace.table_model.row_reference(0).easyqcid == "SUB005"
     assert workspace.table_view.selectionModel().selectedRows()[0].row() == 0
     assert "5 / 5" in workspace.count_label.text()
 
@@ -1452,7 +1452,7 @@ def test_filtered_out_selection_never_moves_to_another_subject(qtbot):
     workspace = QtTableWorkspace(_source(), page_size=5)
     qtbot.addWidget(workspace)
     assert workspace.select_source_position(1)
-    assert workspace.table_model.row_reference(1).ezqcid == "SUB002"
+    assert workspace.table_model.row_reference(1).easyqcid == "SUB002"
 
     workspace.begin_filter_edit()
     workspace.set_filter_draft((FilterCondition("site", "==", "A", "site-a"),))
@@ -1480,10 +1480,10 @@ def test_open_qc_accepts_only_current_unique_nonblank_identity(qtbot):
     assert "失效" in workspace.error_text
 
 
-def test_open_qc_blocks_blank_and_duplicate_ezqcid(qtbot):
+def test_open_qc_blocks_blank_and_duplicate_easyqcid(qtbot):
     for source, expected in (
-        (pd.DataFrame({"ezqcid": ["  "], "value": [1]}), "为空"),
-        (pd.DataFrame({"ezqcid": ["SUB001", "SUB001"], "value": [1, 2]}), "不唯一"),
+        (pd.DataFrame({"easyqcid": ["  "], "value": [1]}), "为空"),
+        (pd.DataFrame({"easyqcid": ["SUB001", "SUB001"], "value": [1, 2]}), "不唯一"),
     ):
         opened: list[str] = []
         workspace = QtTableWorkspace(source, on_open_qc=opened.append)
@@ -1526,7 +1526,7 @@ def test_large_table_validation_error_stays_synchronous_and_preserves_result(qtb
     assert workspace.applied_state == before_state
     assert workspace.result is before_result
     assert not workspace.task_controller.busy
-    assert "ezqcid" in workspace.error_text
+    assert "easyqcid" in workspace.error_text
 
 
 def test_large_table_background_error_preserves_last_applied_result(qtbot, monkeypatch):
@@ -1577,9 +1577,9 @@ def test_prepared_source_replacement_preserves_compatible_view_and_identity(qtbo
     assert workspace.apply_sort_rules((SortRule("age", False),))
     assert workspace.apply_column_state(
         ColumnViewState(
-            order=("ezqcid", "age", "site", "passed"),
+            order=("easyqcid", "age", "site", "passed"),
             hidden=("passed",),
-            pinned=("ezqcid", "age"),
+            pinned=("easyqcid", "age"),
         )
     )
     assert workspace.find_identity_exact("SUB003")
@@ -1592,16 +1592,16 @@ def test_prepared_source_replacement_preserves_compatible_view_and_identity(qtbo
         FilterCondition("site", "==", "A", "site-a"),
     )
     assert workspace.applied_state.sort_rules == (SortRule("age", False),)
-    assert workspace.applied_state.columns.pinned == ("ezqcid", "age")
+    assert workspace.applied_state.columns.pinned == ("easyqcid", "age")
     assert workspace.applied_state.columns.hidden == ("passed",)
-    assert workspace.applied_state.columns.order[:2] == ("ezqcid", "age")
-    assert _full_result_frame(workspace)["ezqcid"].tolist() == [
+    assert workspace.applied_state.columns.order[:2] == ("easyqcid", "age")
+    assert _full_result_frame(workspace)["easyqcid"].tolist() == [
         "SUB005",
         "SUB001",
         "SUB003",
     ]
     assert "AnatQC.rater1.score1" in workspace.applied_state.columns.order
-    assert workspace.table_model.row_reference(2).ezqcid == "SUB003"
+    assert workspace.table_model.row_reference(2).easyqcid == "SUB003"
 
 
 def test_optional_list_deletion_actions_use_filter_and_multi_column_dialogs(
@@ -1616,7 +1616,7 @@ def test_optional_list_deletion_actions_use_filter_and_multi_column_dialogs(
         or len(identities),
         delete_columns_callback=lambda columns: deleted_columns.append(columns)
         or len(columns),
-        protected_delete_columns=("ezqcid",),
+        protected_delete_columns=("easyqcid",),
     )
     qtbot.addWidget(workspace)
     prompts = []
@@ -1651,7 +1651,7 @@ def test_optional_list_deletion_actions_use_filter_and_multi_column_dialogs(
     columns_dialog = workspace.open_delete_columns_dialog()
     assert columns_dialog is not None
     assert not bool(
-        columns_dialog.item_for_column("ezqcid").flags() & Qt.ItemIsEnabled
+        columns_dialog.item_for_column("easyqcid").flags() & Qt.ItemIsEnabled
     )
     columns_dialog.item_for_column("site").setCheckState(Qt.Checked)
     columns_dialog.item_for_column("age").setCheckState(Qt.Checked)
@@ -1680,7 +1680,7 @@ def test_list_deletion_zero_match_and_confirmation_cancel_write_nothing(
         delete_rows_callback=lambda identities: deleted.append(identities)
         or len(identities),
         delete_columns_callback=lambda columns: len(columns),
-        protected_delete_columns=("ezqcid",),
+        protected_delete_columns=("easyqcid",),
     )
     qtbot.addWidget(workspace)
     prompts = []
@@ -1724,7 +1724,7 @@ def test_list_deletion_write_failure_stays_in_dialog_and_can_retry(
         _source(),
         delete_rows_callback=fail_delete,
         delete_columns_callback=lambda columns: len(columns),
-        protected_delete_columns=("ezqcid",),
+        protected_delete_columns=("easyqcid",),
     )
     qtbot.addWidget(workspace)
     monkeypatch.setattr(
@@ -1761,7 +1761,7 @@ def test_list_deletion_actions_disable_during_unsafe_state_and_translate(
         _source(),
         delete_rows_callback=lambda identities: len(identities),
         delete_columns_callback=lambda columns: len(columns),
-        protected_delete_columns=("ezqcid",),
+        protected_delete_columns=("easyqcid",),
         language=controller,
     )
     qtbot.addWidget(workspace)
@@ -1797,7 +1797,7 @@ def test_list_deletion_runs_core_write_off_the_qt_thread(
         _source(),
         delete_rows_callback=delayed_delete,
         delete_columns_callback=lambda columns: len(columns),
-        protected_delete_columns=("ezqcid",),
+        protected_delete_columns=("easyqcid",),
     )
     qtbot.addWidget(workspace)
     monkeypatch.setattr(

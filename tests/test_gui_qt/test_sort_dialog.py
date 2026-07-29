@@ -10,7 +10,7 @@ from gui_qt.sort_dialog import SortDialog
 from models.table_view_state import SortRule
 
 
-COLUMNS = ("ezqcid", "site", "age", "passed")
+COLUMNS = ("easyqcid", "site", "age", "passed")
 
 
 def test_sort_editor_real_buttons_preserve_ordered_priority(qtbot):
@@ -39,7 +39,7 @@ def test_sort_editor_real_buttons_preserve_ordered_priority(qtbot):
     qtbot.mouseClick(dialog.editor.add_button, Qt.MouseButton.LeftButton)
     assert dialog.editor.rules() == (
         SortRule("age", False),
-        SortRule("ezqcid", True),
+        SortRule("easyqcid", True),
     )
 
 
