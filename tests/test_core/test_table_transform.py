@@ -35,6 +35,25 @@ def test_filter_rows_supports_structured_conditions() -> None:
     assert result["easyqcid"].tolist() == ["SUB001"]
 
 
+@pytest.mark.parametrize("operator", ("contains", "startswith", "endswith"))
+def test_text_filters_never_turn_missing_values_into_nan_text(
+    operator: str,
+) -> None:
+    source = pd.DataFrame(
+        {
+            "easyqcid": ["MISSING1", "MISSING2", "MISSING3", "TEXT"],
+            "label": pd.Series([pd.NA, None, float("nan"), "nan"], dtype=object),
+        }
+    )
+
+    result = TableTransformEngine().filter_rows(
+        source,
+        [{"column": "label", "operator": operator, "value": "nan"}],
+    )
+
+    assert result["easyqcid"].tolist() == ["TEXT"]
+
+
 def test_filter_rows_supports_expression_condition() -> None:
     result = TableTransformEngine().filter_rows(
         _df(),
@@ -78,6 +97,18 @@ def test_rename_and_drop_columns_validate_column_names() -> None:
         engine.drop_columns(_df(), ["missing"])
 
 
+def test_column_operations_reject_duplicate_output_names() -> None:
+    engine = TableTransformEngine()
+    duplicate_source = pd.DataFrame([[1, 2]], columns=["value", "value"])
+
+    with pytest.raises(TableTransformError, match="重复列"):
+        engine.select_columns(_df(), ["easyqcid", "easyqcid"])
+    with pytest.raises(TableTransformError, match="重复列"):
+        engine.select_columns(duplicate_source, ["value"])
+    with pytest.raises(TableTransformError, match="重复列"):
+        engine.rename_columns(_df(), {"age": "sex"})
+
+
 def test_expression_parser_rejects_arbitrary_python() -> None:
     with pytest.raises(ExpressionError):
         TableTransformEngine().derive_column(_df(), "bad", "__import__('os').system('echo unsafe')")
@@ -94,6 +125,52 @@ def test_merge_tables_validates_how_and_keys() -> None:
     assert result.loc[2, "group"] == "B"
     with pytest.raises(TableTransformError):
         TableTransformEngine().merge_tables(left, right, on=["easyqcid"], how="cross")
+
+
+def test_merge_tables_requires_explicit_many_to_many_authorization() -> None:
+    left = pd.DataFrame(
+        {"easyqcid": ["SUB001", "SUB001"], "visit": [1, 2]}
+    )
+    right = pd.DataFrame(
+        {"easyqcid": ["SUB001", "SUB001"], "site": ["A", "B"]}
+    )
+    engine = TableTransformEngine()
+
+    with pytest.raises(TableTransformError, match="多对多"):
+        engine.merge_tables(left, right, on=["easyqcid"])
+
+    result = engine.merge_tables(
+        left,
+        right,
+        on=["easyqcid"],
+        relationship="many_to_many",
+    )
+
+    assert len(result) == 4
+
+
+def test_merge_tables_enforces_declared_relationship_and_unique_columns() -> None:
+    left = pd.DataFrame(
+        {"easyqcid": ["SUB001", "SUB002"], "site": ["A", "B"]}
+    )
+    duplicate_right = pd.DataFrame(
+        {"easyqcid": ["SUB001", "SUB001"], "group": [1, 2]}
+    )
+    colliding_left = left.assign(site_x=["old-A", "old-B"])
+    overlapping_right = pd.DataFrame(
+        {"easyqcid": ["SUB001", "SUB002"], "site": ["C", "D"]}
+    )
+    engine = TableTransformEngine()
+
+    with pytest.raises(TableTransformError, match="one_to_one"):
+        engine.merge_tables(
+            left,
+            duplicate_right,
+            on=["easyqcid"],
+            relationship="one_to_one",
+        )
+    with pytest.raises(TableTransformError, match="重复列"):
+        engine.merge_tables(colliding_left, overlapping_right, on=["easyqcid"])
 
 
 def test_aggregate_flattens_columns_and_allows_whitelisted_functions() -> None:
@@ -131,7 +208,15 @@ def test_apply_supports_merge_operation() -> None:
 
     result = TableTransformEngine().apply(
         _df()[["easyqcid", "age"]],
-        [{"operation": "merge_tables", "right": right, "on": ["easyqcid"], "how": "left"}],
+        [
+            {
+                "operation": "merge_tables",
+                "right": right,
+                "on": ["easyqcid"],
+                "how": "left",
+                "relationship": "one_to_one",
+            }
+        ],
     )
 
     assert result.loc[0, "site"] == "A"
@@ -139,10 +224,15 @@ def test_apply_supports_merge_operation() -> None:
     assert result.loc[2, "site"] == "B"
 
 
-def test_limit_output_truncates_rows_and_columns_when_configured() -> None:
-    result = TableTransformEngine(max_rows=2, max_columns=3).apply(_df(), [])
+def test_limit_output_rejects_rows_or_columns_instead_of_truncating() -> None:
+    source = _df()
 
-    assert result.shape == (2, 3)
+    with pytest.raises(TableTransformError, match="行数.*超过限制"):
+        TableTransformEngine(max_rows=2).apply(source, [])
+    with pytest.raises(TableTransformError, match="列数.*超过限制"):
+        TableTransformEngine(max_columns=3).apply(source, [])
+
+    assert source.shape == (3, 5)
 
 
 def test_legacy_select_filter_converts_simple_where_conditions() -> None:

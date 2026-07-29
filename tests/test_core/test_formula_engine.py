@@ -61,6 +61,32 @@ def test_each_comparison_operator_preserves_index(
     assert not result.has_errors
 
 
+def test_mixed_comparison_marks_only_the_incomparable_row() -> None:
+    frame = pd.DataFrame(
+        {
+            "left": pd.Series(
+                [2, "z", "bad"],
+                index=[11, 17, 23],
+                dtype=object,
+            ),
+            "right": pd.Series(
+                [1, "a", 0],
+                index=[11, 17, 23],
+                dtype=object,
+            ),
+        },
+        index=[11, 17, 23],
+    )
+
+    result = FormulaEngine().evaluate(frame, "[left] > [right]")
+
+    assert result.values.tolist() == [True, True, False]
+    assert result.values.index.tolist() == [11, 17, 23]
+    assert pd.isna(result.errors.loc[11])
+    assert pd.isna(result.errors.loc[17])
+    assert result.errors.loc[23] == "> 无法比较"
+
+
 def test_division_by_zero_is_a_row_error_not_a_python_exception() -> None:
     result = FormulaEngine().evaluate(_frame(), "[a] / [b]")
 

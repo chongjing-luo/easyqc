@@ -12,7 +12,6 @@ from core.formula_engine import FormulaEngine
 from core.formula_parser import FormulaError
 from models.column_recipe import ColumnRecipe, RecipeStep, RecipeValue
 from models.derived_formula import DerivedColumnFormula
-from utils.logger import log_warning
 
 
 class TableTransformError(ValueError):
@@ -112,6 +111,12 @@ def _legacy_literal_to_value(value: str) -> Any:
 
 class TableTransformEngine:
     ALLOWED_MERGE_HOW = {"left", "right", "inner", "outer"}
+    ALLOWED_MERGE_RELATIONSHIPS = {
+        "one_to_one",
+        "one_to_many",
+        "many_to_one",
+        "many_to_many",
+    }
     ALLOWED_AGGREGATIONS = {"count", "mean", "sum", "min", "max"}
     RECIPE_PARAMETER_SCHEMA = {
         "trim": (frozenset(), frozenset()),
@@ -187,6 +192,7 @@ class TableTransformEngine:
                     operation["right"],
                     on=operation.get("on", []),
                     how=operation.get("how", "left"),
+                    relationship=operation.get("relationship"),
                 )
             elif op_type == "aggregate":
                 result = self.aggregate(
@@ -200,14 +206,17 @@ class TableTransformEngine:
         return self.limit_output(result)
 
     def limit_output(self, df: pd.DataFrame) -> pd.DataFrame:
-        result = df
-        if self.max_rows is not None and len(result) > self.max_rows:
-            log_warning(f"表格行数超过限制 {self.max_rows}，已截断输出", "TableTransformEngine")
-            result = result.iloc[: self.max_rows, :]
-        if self.max_columns is not None and len(result.columns) > self.max_columns:
-            log_warning(f"表格列数超过限制 {self.max_columns}，已截断输出", "TableTransformEngine")
-            result = result.iloc[:, : self.max_columns]
-        return result.copy()
+        self._require_unique_columns(df, context="表格输出")
+        if self.max_rows is not None and len(df) > self.max_rows:
+            raise TableTransformError(
+                f"表格行数 {len(df)} 超过限制 {self.max_rows}，未生成截断结果"
+            )
+        if self.max_columns is not None and len(df.columns) > self.max_columns:
+            raise TableTransformError(
+                f"表格列数 {len(df.columns)} 超过限制 "
+                f"{self.max_columns}，未生成截断结果"
+            )
+        return df.copy()
 
     def select_columns(
         self,
@@ -219,7 +228,9 @@ class TableTransformEngine:
         selected = list(columns)
         if include_rest:
             selected.extend([column for column in df.columns if column not in selected])
-        return df.loc[:, selected].copy()
+        result = df.loc[:, selected].copy()
+        self._require_unique_columns(result, context="选择结果")
+        return result
 
     def filter_rows(
         self,
@@ -802,11 +813,15 @@ class TableTransformEngine:
         self._require_columns(df, list(mapping.keys()))
         if any(not new_name for new_name in mapping.values()):
             raise TableTransformError("新列名不能为空")
-        return df.rename(columns=mapping).copy()
+        result = df.rename(columns=mapping).copy()
+        self._require_unique_columns(result, context="重命名结果")
+        return result
 
     def drop_columns(self, df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
         self._require_columns(df, columns)
-        return df.drop(columns=columns).copy()
+        result = df.drop(columns=columns).copy()
+        self._require_unique_columns(result, context="删除列结果")
+        return result
 
     def merge_tables(
         self,
@@ -814,12 +829,52 @@ class TableTransformEngine:
         right: pd.DataFrame,
         on: list[str],
         how: str = "left",
+        relationship: str | None = None,
     ) -> pd.DataFrame:
         if how not in self.ALLOWED_MERGE_HOW:
             raise TableTransformError(f"不支持的合并方式: {how}")
+        if relationship not in self.ALLOWED_MERGE_RELATIONSHIPS | {None}:
+            raise TableTransformError(f"不支持的合并关系: {relationship}")
+        if not on:
+            raise TableTransformError("合并键不能为空")
+        self._require_unique_columns(left, context="左表")
+        self._require_unique_columns(right, context="右表")
         self._require_columns(left, on)
         self._require_columns(right, on)
-        return pd.merge(left, right, on=on, how=how)
+
+        left_repeated = bool(left.duplicated(subset=on, keep=False).any())
+        right_repeated = bool(right.duplicated(subset=on, keep=False).any())
+        if relationship is None:
+            if left_repeated and right_repeated:
+                raise TableTransformError(
+                    "检测到多对多合并；必须显式声明 relationship='many_to_many'"
+                )
+            if left_repeated:
+                relationship = "many_to_one"
+            elif right_repeated:
+                relationship = "one_to_many"
+            else:
+                relationship = "one_to_one"
+
+        try:
+            result = pd.merge(
+                left,
+                right,
+                on=on,
+                how=how,
+                validate=relationship,
+            )
+        except pd.errors.MergeError as exc:
+            message = str(exc)
+            if "suffix" in message.lower() or "duplicate column" in message.lower():
+                raise TableTransformError(
+                    f"合并结果包含重复列: {message}"
+                ) from exc
+            raise TableTransformError(
+                f"合并关系 {relationship} 不成立: {message}"
+            ) from exc
+        self._require_unique_columns(result, context="合并结果")
+        return result
 
     def aggregate(
         self,
@@ -840,6 +895,7 @@ class TableTransformEngine:
             column if isinstance(column, str) else "_".join(str(part) for part in column if part)
             for column in result.columns
         ]
+        self._require_unique_columns(result, context="聚合结果")
         return result
 
     def _condition_to_mask(self, df: pd.DataFrame, condition: dict[str, Any]) -> pd.Series:
@@ -875,11 +931,15 @@ class TableTransformEngine:
         if operator in {"not_in", "not in"}:
             return ~series.isin(value)
         if operator == "contains":
-            return series.astype(str).str.contains(str(value), regex=False, na=False)
+            return _string_series(series).str.contains(
+                str(value),
+                regex=False,
+                na=False,
+            )
         if operator == "startswith":
-            return series.astype(str).str.startswith(str(value), na=False)
+            return _string_series(series).str.startswith(str(value), na=False)
         if operator == "endswith":
-            return series.astype(str).str.endswith(str(value), na=False)
+            return _string_series(series).str.endswith(str(value), na=False)
         if operator == "isna":
             return series.isna()
         if operator == "notna":
@@ -891,6 +951,21 @@ class TableTransformEngine:
         missing = [column for column in columns if column not in df.columns]
         if missing:
             raise TableTransformError(f"列不存在: {missing}")
+
+    @staticmethod
+    def _require_unique_columns(
+        df: pd.DataFrame,
+        *,
+        context: str,
+    ) -> None:
+        duplicates = list(
+            dict.fromkeys(
+                column
+                for column in df.columns[df.columns.duplicated(keep=False)]
+            )
+        )
+        if duplicates:
+            raise TableTransformError(f"{context}包含重复列: {duplicates}")
 
 
 __all__ = [

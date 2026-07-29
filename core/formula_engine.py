@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import operator as scalar_operator
 from dataclasses import dataclass
 from typing import Final
 
@@ -308,40 +309,55 @@ class FormulaEngine:
         left_blank = left.values.isna()
         right_blank = right.values.isna()
         both_present = usable & ~left_blank & ~right_blank
-        values = pd.Series(False, index=left.values.index, dtype=bool)
+        compared_values = pd.Series(
+            False,
+            index=left.values.index,
+            dtype=bool,
+        )
+        method = {
+            "=": "eq",
+            "<>": "eq",
+            "<": "lt",
+            "<=": "le",
+            ">": "gt",
+            ">=": "ge",
+        }[operator]
+        comparator = {
+            "=": scalar_operator.eq,
+            "<>": scalar_operator.eq,
+            "<": scalar_operator.lt,
+            "<=": scalar_operator.le,
+            ">": scalar_operator.gt,
+            ">=": scalar_operator.ge,
+        }[operator]
+        try:
+            compared = getattr(
+                left.values.loc[both_present],
+                method,
+            )(right.values.loc[both_present])
+            compared_values.loc[both_present] = compared.fillna(False).astype(bool)
+        except (TypeError, ValueError):
+            positions = [
+                position
+                for position, present in enumerate(both_present.to_numpy())
+                if bool(present)
+            ]
+            for position in positions:
+                try:
+                    scalar_result = comparator(
+                        left.values.iloc[position],
+                        right.values.iloc[position],
+                    )
+                    compared_values.iloc[position] = bool(scalar_result)
+                except (TypeError, ValueError):
+                    errors.iloc[position] = f"{operator} 无法比较"
 
         if operator in {"=", "<>"}:
-            equal = pd.Series(False, index=left.values.index, dtype=bool)
+            equal = compared_values
             equal.loc[usable & left_blank & right_blank] = True
-            try:
-                compared = left.values.loc[both_present].eq(
-                    right.values.loc[both_present]
-                )
-                equal.loc[both_present] = compared.fillna(False).astype(bool)
-            except (TypeError, ValueError):
-                errors = errors.mask(
-                    both_present & errors.isna(),
-                    f"{operator} 无法比较",
-                )
             values = equal if operator == "=" else (~equal & usable)
         else:
-            method = {
-                "<": "lt",
-                "<=": "le",
-                ">": "gt",
-                ">=": "ge",
-            }[operator]
-            try:
-                compared = getattr(
-                    left.values.loc[both_present],
-                    method,
-                )(right.values.loc[both_present])
-                values.loc[both_present] = compared.fillna(False).astype(bool)
-            except (TypeError, ValueError):
-                errors = errors.mask(
-                    both_present & errors.isna(),
-                    f"{operator} 无法比较",
-                )
+            values = compared_values
         return FormulaEvaluation(values.mask(errors.notna(), False), errors)
 
     @staticmethod

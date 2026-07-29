@@ -36,7 +36,13 @@ def test_validate_transform_operation_checks_required_fields() -> None:
         {"operation": "derive_column", "name": "qc_pass", "expression": "score >= 3"}
     )
     assert validate_transform_operation(
-        {"operation": "merge_tables", "right": object(), "on": ["easyqcid"], "how": "left"}
+        {
+            "operation": "merge_tables",
+            "right": object(),
+            "on": ["easyqcid"],
+            "how": "left",
+            "relationship": "one_to_many",
+        }
     )
     assert validate_transform_operation(
         {"operation": "aggregate", "group_by": ["site"], "metrics": {"score": ["mean"]}}
@@ -50,5 +56,13 @@ def test_validate_transform_operation_checks_required_fields() -> None:
     assert not validate_transform_operation({"operation": "rename_columns", "mapping": {"old": ""}})
     assert not validate_transform_operation({"operation": "merge_tables", "on": ["easyqcid"], "how": "left"})
     assert not validate_transform_operation({"operation": "merge_tables", "on": ["easyqcid"], "how": "cross"})
+    assert not validate_transform_operation(
+        {
+            "operation": "merge_tables",
+            "right": object(),
+            "on": ["easyqcid"],
+            "relationship": "sometimes",
+        }
+    )
     assert not validate_transform_operation({"operation": "aggregate", "group_by": ["site"], "metrics": {"score": "mean"}})
     assert not validate_transform_operation({"operation": "unknown"})

@@ -76,6 +76,14 @@ def validate_transform_operation(op: dict[str, Any]) -> bool:
             "right" in op
             and _is_string_list(op.get("on"))
             and op.get("how", "left") in {"left", "right", "inner", "outer"}
+            and op.get("relationship")
+            in {
+                None,
+                "one_to_one",
+                "one_to_many",
+                "many_to_one",
+                "many_to_many",
+            }
         )
     if operation == "aggregate":
         metrics = op.get("metrics")
