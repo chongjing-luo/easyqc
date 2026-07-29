@@ -255,7 +255,7 @@ case-insensitive 规则保持唯一，原始大小写仍保留。CSV/Excel 导�
 同理，已有评分所引用的 rater 或 `easyqcid` 不能在原位置重新指代另一人或
 另一条记录。
 
-当前程序只接受 `settings version: 3`、`schema_version: 3`、
+当前程序只接受 settings 与 rating 的 `schema_version: 3`、
 `easyqcid` 和 `easyqc_*.csv`。旧 `ezqc`/`ezqcid` 项目、旧评分文件名和
 schema 0/1/2 评分不会被自动读取或迁移；需要继续使用旧项目时，应启动迁移前
 备份版本。这个明确断代避免了双格式分支长期污染保存、扫描和聚合逻辑。
