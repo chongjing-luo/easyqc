@@ -9,6 +9,7 @@ from utils.validators import (
 
 def test_validate_score_matches_legacy_formats() -> None:
     assert validate_score("Poor,Fair,Good") == ["Poor", "Fair", "Good"]
+    assert validate_score("差,中,良,优") == ["差", "中", "良", "优"]
     assert validate_score("0-3") == "0,1,2,3"
     assert validate_score("3") == "1,2,3"
 

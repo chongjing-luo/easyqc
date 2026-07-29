@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QCursor, QGuiApplication, QScreen
 from PySide6.QtWidgets import (
     QFrame,
     QLabel,
@@ -68,6 +69,23 @@ class QtStartupScreen(QWidget):
         self.setAccessibleName(self.language.tr("startup.accessible"))
         self.subtitle_label.setText(self.language.tr("startup.subtitle"))
         self.status_label.setText(self.language.tr(self._status_key))
+
+    def center_on_screen(self, screen: QScreen | None = None) -> None:
+        """Center the splash inside one screen's usable desktop rectangle."""
+
+        target = screen or QGuiApplication.screenAt(QCursor.pos())
+        if target is None:
+            target = QGuiApplication.primaryScreen()
+        if target is None:
+            raise RuntimeError("EasyQC 启动时没有可用屏幕")
+        available = target.availableGeometry()
+        if not available.isValid() or available.isEmpty():
+            raise RuntimeError("EasyQC 启动屏幕没有有效的可用区域")
+        self.move(available.center() - self.rect().center())
+
+    def showEvent(self, event) -> None:
+        self.center_on_screen()
+        super().showEvent(event)
 
     def closeEvent(self, event) -> None:
         self.language.unregister_root(self)

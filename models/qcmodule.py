@@ -48,7 +48,7 @@ class Score:
 
     PATTERNS: ClassVar[dict[str, str]] = {
         "range": r"^\s*(\d+)\s*-\s*(\d+)\s*$",
-        "labels": r"^\s*[a-zA-Z0-9_ ]+\s*(,\s*[a-zA-Z0-9_ ]+\s*)*,?\s*$",
+        "labels": r"^[^,\r\n]+(?:,[^,\r\n]+)+$",
         "single": r"^\s*(\d+)\s*$",
     }
 
@@ -58,8 +58,12 @@ class Score:
         if not value:
             return None
 
-        if re.fullmatch(Score.PATTERNS["labels"], value) and "," in value:
+        if "," in value:
+            if re.fullmatch(Score.PATTERNS["labels"], value) is None:
+                return None
             labels = [label.strip() for label in value.split(",")]
+            if any(not label for label in labels):
+                return None
             if len(labels) != len(set(labels)):
                 return None
             return labels

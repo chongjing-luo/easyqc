@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QRect, QSettings
 from PySide6.QtWidgets import QLabel, QProgressBar
 
 from gui_qt.i18n import LanguageController
@@ -39,3 +39,33 @@ def test_startup_screen_retranslates_current_status_in_place(qtbot, tmp_path):
     assert screen.accessibleName() == "EasyQC startup"
     assert screen.status_label.text() == "Loading project data…"
     assert screen.subtitle_label.text() == "Reliable quality control, focused on the work."
+
+
+def test_startup_screen_centers_in_offset_available_geometry(qtbot, tmp_path):
+    class SyntheticScreen:
+        @staticmethod
+        def availableGeometry():
+            return QRect(1600, 80, 1200, 800)
+
+    startup = QtStartupScreen(_controller(tmp_path))
+    qtbot.addWidget(startup)
+
+    startup.center_on_screen(SyntheticScreen())
+
+    assert startup.x() == 1940
+    assert startup.y() == 354
+
+
+def test_startup_show_event_invokes_centering(qtbot, tmp_path, monkeypatch):
+    startup = QtStartupScreen(_controller(tmp_path))
+    qtbot.addWidget(startup)
+    calls = []
+    monkeypatch.setattr(
+        startup,
+        "center_on_screen",
+        lambda _screen=None: calls.append("center"),
+    )
+
+    startup.show()
+
+    assert calls == ["center"]

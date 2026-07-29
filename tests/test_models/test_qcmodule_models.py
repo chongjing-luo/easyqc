@@ -16,6 +16,12 @@ def test_score_and_tag_round_trip() -> None:
     assert tag.to_legacy_dict() == {"label": "Artifact", "value": True}
 
 
+def test_score_parser_accepts_unique_unicode_labels() -> None:
+    assert Score.parse_num("差,中,良,优") == ["差", "中", "良", "优"]
+    assert Score.parse_num("差,差") is None
+    assert Score.parse_num("差,\n优") is None
+
+
 @pytest.mark.parametrize("value", ("False", "True", 0, 1, None))
 def test_tag_rejects_non_boolean_values(value) -> None:
     with pytest.raises(ValueError, match="Boolean"):
