@@ -10,7 +10,7 @@ from core.configuration_service import ConfigurationError, ConfigurationService
 from core.event_bus import EventType
 from core.module_filter import resolve_module_filter_identities
 from core.project_service import ProjectService
-from core.table_service import TableService
+from core.table_service import TableService, TableStateConflictError
 from core.table_view_service import TableViewService
 from models.derived_formula import DerivedColumnFormula
 from models.table_view_state import (
@@ -71,6 +71,42 @@ def test_project_and_subject_configuration_use_temporary_atomic_files(tmp_path) 
     assert projects.current_project.name == "SAMPLE"
     assert projects.current_project.settings_path.exists()
     assert (projects.current_project.table_dir / "easyqc_all.csv").exists()
+
+
+def test_replace_subjects_rejects_a_concurrent_newer_table(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    service, projects = _service(tmp_path)
+    service.replace_subjects(_subjects(), notify=False)
+    real_validate = service.validate_subjects
+    raced = False
+    newer = pd.DataFrame(
+        {
+            "easyqcid": ["SUB001", "SUB002"],
+            "site": ["NEW", "NEW"],
+            "age": [40, 41],
+        }
+    )
+
+    def validate_during_concurrent_write(frame):
+        nonlocal raced
+        validated = real_validate(frame)
+        if not raced:
+            raced = True
+            service.table_service.save_table(
+                projects.current_project,
+                "easyqc_all",
+                newer,
+            )
+        return validated
+
+    monkeypatch.setattr(service, "validate_subjects", validate_during_concurrent_write)
+
+    with pytest.raises(TableStateConflictError, match="stale"):
+        service.replace_subjects(_subjects().assign(site=["OLD", "OLD"]))
+
+    pd.testing.assert_frame_equal(service.subjects(), newer)
 
 
 def test_derive_subject_column_persists_values_once_and_publishes_change(

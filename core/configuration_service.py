@@ -25,7 +25,7 @@ from core.rating_identity import (
     validate_module_name,
     validate_rater,
 )
-from core.table_service import TABLE_ALL, TableService
+from core.table_service import TABLE_ALL, TableService, TableSnapshot
 from core.table_transform import TableTransformEngine, TableTransformError
 from core.table_view_service import TableViewError
 from models.derived_formula import DerivedColumnFormula
@@ -42,6 +42,9 @@ from utils.file_utils import FileUtils
 
 class ConfigurationError(ValueError):
     """Raised when a project configuration candidate is unsafe."""
+
+
+_CAPTURE_CURRENT_TABLE_REVISION = object()
 
 
 @dataclass(frozen=True)
@@ -339,6 +342,18 @@ class ConfigurationService:
         table = self.table_service.load_table(self._require_project(), TABLE_ALL)
         return table.copy(deep=True) if table is not None else pd.DataFrame(columns=["easyqcid"])
 
+    def _subjects_snapshot(self) -> TableSnapshot:
+        snapshot = self.table_service.load_table_snapshot(
+            self._require_project(),
+            TABLE_ALL,
+        )
+        if snapshot.dataframe is not None:
+            return snapshot
+        return TableSnapshot(
+            dataframe=pd.DataFrame(columns=["easyqcid"]),
+            revision=snapshot.revision,
+        )
+
     def snapshot(self) -> ConfigurationSnapshot:
         """Read one detached configuration view for UI-thread rendering."""
         project = self.current_project
@@ -410,9 +425,27 @@ class ConfigurationService:
             )
         return result
 
-    def replace_subjects(self, frame: pd.DataFrame, *, notify: bool = True) -> None:
+    def replace_subjects(
+        self,
+        frame: pd.DataFrame,
+        *,
+        notify: bool = True,
+        expected_revision: str | None | object = _CAPTURE_CURRENT_TABLE_REVISION,
+    ) -> None:
+        if expected_revision is _CAPTURE_CURRENT_TABLE_REVISION:
+            expected_revision = self._subjects_snapshot().revision
+        elif expected_revision is not None and not isinstance(
+            expected_revision,
+            str,
+        ):
+            raise TypeError("expected_revision must be a revision string or None")
         validated = self.validate_subjects(frame)
-        self.table_service.save_table(self._require_project(), TABLE_ALL, validated)
+        self.table_service.save_table(
+            self._require_project(),
+            TABLE_ALL,
+            validated,
+            expected_revision=expected_revision,
+        )
         if notify:
             self.publish_subjects_changed()
 
@@ -440,7 +473,9 @@ class ConfigurationService:
             raise ConfigurationError("删除名单行必须提供非空 easyqcid")
         if len(set(normalized)) != len(normalized):
             raise ConfigurationError("删除名单行包含重复 easyqcid")
-        frame = self.validate_subjects(self.subjects())
+        snapshot = self._subjects_snapshot()
+        assert snapshot.dataframe is not None
+        frame = self.validate_subjects(snapshot.dataframe)
         available = set(frame["easyqcid"])
         missing = tuple(value for value in normalized if value not in available)
         if missing:
@@ -448,7 +483,11 @@ class ConfigurationService:
         candidate = frame.loc[~frame["easyqcid"].isin(normalized)].reset_index(
             drop=True
         )
-        self.replace_subjects(candidate, notify=notify)
+        self.replace_subjects(
+            candidate,
+            notify=notify,
+            expected_revision=snapshot.revision,
+        )
         return len(normalized)
 
     def delete_subject_columns(
@@ -476,7 +515,9 @@ class ConfigurationService:
             raise ConfigurationError("删除名单列包含重复列名")
         if "easyqcid" in normalized:
             raise ConfigurationError("质控前名单不能删除 easyqcid")
-        frame = self.validate_subjects(self.subjects())
+        snapshot = self._subjects_snapshot()
+        assert snapshot.dataframe is not None
+        frame = self.validate_subjects(snapshot.dataframe)
         missing = tuple(value for value in normalized if value not in frame.columns)
         if missing:
             raise ConfigurationError(f"质控前名单列不存在或已变化: {missing}")
@@ -487,7 +528,11 @@ class ConfigurationService:
             )
         except TableTransformError as exc:
             raise ConfigurationError(str(exc)) from exc
-        self.replace_subjects(candidate, notify=notify)
+        self.replace_subjects(
+            candidate,
+            notify=notify,
+            expected_revision=snapshot.revision,
+        )
         return len(normalized)
 
     def derive_subject_column(
@@ -501,7 +546,9 @@ class ConfigurationService:
         if not isinstance(request, DerivedColumnFormula):
             raise ConfigurationError("新增列请求必须是 DerivedColumnFormula")
         column_name = request.name
-        frame = self.subjects()
+        snapshot = self._subjects_snapshot()
+        assert snapshot.dataframe is not None
+        frame = snapshot.dataframe
         if column_name in frame.columns:
             raise ConfigurationError(f"列已存在: {column_name}")
         try:
@@ -516,6 +563,7 @@ class ConfigurationService:
             self._require_project(),
             TABLE_ALL,
             frame,
+            expected_revision=snapshot.revision,
         )
         if notify:
             self.publish_subjects_changed()
@@ -569,12 +617,19 @@ class ConfigurationService:
         ``TABLE_ALL`` replacement followed by an optional success event.
         """
 
+        snapshot = self._subjects_snapshot()
+        assert snapshot.dataframe is not None
         candidate, summary = self._subject_import_candidate(
             incoming,
             mode=mode,
             conflict_policy=conflict_policy,
+            current=snapshot.dataframe,
         )
-        self.replace_subjects(candidate, notify=notify)
+        self.replace_subjects(
+            candidate,
+            notify=notify,
+            expected_revision=snapshot.revision,
+        )
         return summary
 
     def _subject_import_candidate(
@@ -583,6 +638,7 @@ class ConfigurationService:
         *,
         mode: str,
         conflict_policy: str | None,
+        current: pd.DataFrame | None = None,
     ) -> tuple[pd.DataFrame, SubjectImportSummary]:
         policies = {
             "replace": {None},
@@ -596,7 +652,9 @@ class ConfigurationService:
                 f"质控名单导入方式 {mode} 不支持冲突策略: {conflict_policy}"
             )
         incoming = self.validate_subjects(incoming)
-        current = self.validate_subjects(self.subjects())
+        current = self.validate_subjects(
+            self.subjects() if current is None else current
+        )
         current_ids = current["easyqcid"].tolist()
         incoming_ids = incoming["easyqcid"].tolist()
         current_id_set = set(current_ids)
@@ -746,9 +804,15 @@ class ConfigurationService:
         notify: bool = True,
     ) -> None:
         incoming = self.validate_subjects(incoming)
-        current = self.subjects()
+        snapshot = self._subjects_snapshot()
+        assert snapshot.dataframe is not None
+        current = snapshot.dataframe
         if current.empty and tuple(current.columns) == ("easyqcid",):
-            self.replace_subjects(incoming, notify=notify)
+            self.replace_subjects(
+                incoming,
+                notify=notify,
+                expected_revision=snapshot.revision,
+            )
             return
         if mode == "rows":
             if set(current.columns) != set(incoming.columns):
@@ -764,7 +828,11 @@ class ConfigurationService:
             candidate = current.merge(incoming, on="easyqcid", how="outer", validate="one_to_one")
         else:
             raise ConfigurationError(f"Unsupported list merge mode: {mode}")
-        self.replace_subjects(candidate, notify=notify)
+        self.replace_subjects(
+            candidate,
+            notify=notify,
+            expected_revision=snapshot.revision,
+        )
 
     def constants(self) -> dict[str, Any]:
         if self.current_project is None:

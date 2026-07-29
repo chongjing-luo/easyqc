@@ -15,28 +15,36 @@ def test_subject_table_from_dataframe_requires_easyqcid_column() -> None:
     assert "easyqcid" in str(exc.value)
 
 
-def test_subject_table_rejects_all_nan_easyqcid() -> None:
-    """F-IMP-5: an all-empty easyqcid column is useless for joins."""
-    df = pd.DataFrame({"easyqcid": [None, None], "site": ["a", "b"]})
-    with pytest.raises(ValueError):
+@pytest.mark.parametrize(
+    "identities",
+    [
+        ["S1", None],
+        ["S1", ""],
+        ["S1", " "],
+    ],
+)
+def test_subject_table_rejects_any_missing_or_blank_easyqcid(identities) -> None:
+    df = pd.DataFrame({"easyqcid": identities, "site": ["a", "b"]})
+    with pytest.raises(ValueError, match="easyqcid"):
         SubjectTable.from_dataframe(df)
 
 
-def test_subject_table_coerces_easyqcid_to_string() -> None:
-    """F-IMP-5 / AC-9: numeric-looking IDs must be string (stable join)."""
+def test_subject_table_rejects_non_string_easyqcid_instead_of_coercing() -> None:
     df = pd.DataFrame({"easyqcid": pd.array([1, 2, 3], dtype="int64")})
-    table = SubjectTable.from_dataframe(df)
-    assert all(isinstance(v, str) for v in table.dataframe["easyqcid"])
-    assert list(table.dataframe["easyqcid"]) == ["1", "2", "3"]
+    with pytest.raises(ValueError, match="字符串"):
+        SubjectTable.from_dataframe(df)
 
 
-def test_subject_table_warns_on_duplicate_easyqcid_but_does_not_raise() -> None:
-    """F-IMP-5: duplicate easyqcid is warned (real data may have legitimate
-    duplicate rows), not fatal — but it must be visible."""
+def test_subject_table_rejects_duplicate_easyqcid() -> None:
     df = pd.DataFrame({"easyqcid": ["S1", "S1", "S2"]})
-    with pytest.warns(RuntimeWarning, match="1 个重复 easyqcid"):
-        table = SubjectTable.from_dataframe(df)
-    assert len(table.dataframe) == 3
+    with pytest.raises(ValueError, match="重复"):
+        SubjectTable.from_dataframe(df)
+
+
+def test_subject_table_rejects_case_only_easyqcid_collision() -> None:
+    df = pd.DataFrame({"easyqcid": ["Sub01", "sub01"]})
+    with pytest.raises(ValueError, match="case-only"):
+        SubjectTable.from_dataframe(df)
 
 
 def test_subject_table_from_csv_round_trip(tmp_path) -> None:

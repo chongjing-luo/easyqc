@@ -13,9 +13,12 @@ project-internal module.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import warnings
+import re
 
 import pandas as pd
+
+
+_EASYQCID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 
 
 @dataclass
@@ -30,20 +33,42 @@ class SubjectTable:
             raise ValueError(
                 f"受试者表缺少必需列 'easyqcid';现有列: {list(df.columns)}"
             )
-        if df["easyqcid"].isna().all():
-            raise ValueError("受试者表的 'easyqcid' 列全为空,无法用作 join key")
-
         normalized = df.copy()
-        # Coerce to string with NaN -> "" so a partial-NaN column is still
-        # joinable (the rows with empty id simply won't match any rating).
-        normalized["easyqcid"] = normalized["easyqcid"].astype(str)
+        identities = normalized["easyqcid"].tolist()
+        if not identities:
+            raise ValueError("受试者表的 'easyqcid' 列为空,无法用作 join key")
+        for row, value in enumerate(identities, start=1):
+            if not isinstance(value, str):
+                raise ValueError(
+                    f"受试者表第 {row} 行 easyqcid 必须是字符串: {value!r}"
+                )
+            if (
+                _EASYQCID_PATTERN.fullmatch(value) is None
+                or value in {".", ".."}
+            ):
+                raise ValueError(
+                    f"受试者表第 {row} 行 easyqcid 不合法: {value!r}"
+                )
 
-        dup_count = int(normalized["easyqcid"].duplicated().sum())
-        if dup_count:
-            warnings.warn(
-                f"受试者表有 {dup_count} 个重复 easyqcid(可能为合法重复行,仅警告)",
-                RuntimeWarning,
-                stacklevel=2,
+        duplicates = sorted(
+            normalized.loc[
+                normalized["easyqcid"].duplicated(keep=False),
+                "easyqcid",
+            ].unique()
+        )
+        if duplicates:
+            raise ValueError(f"受试者表包含重复 easyqcid: {duplicates}")
+
+        casefolded: dict[str, str] = {}
+        collisions: set[tuple[str, str]] = set()
+        for identity in identities:
+            prior = casefolded.setdefault(identity.casefold(), identity)
+            if prior != identity:
+                collisions.add(tuple(sorted((prior, identity))))
+        if collisions:
+            raise ValueError(
+                "受试者表包含 case-only easyqcid 冲突: "
+                f"{sorted(collisions)}"
             )
 
         return cls(dataframe=normalized)

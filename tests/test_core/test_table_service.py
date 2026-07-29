@@ -1,6 +1,17 @@
-import pandas as pd
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+import threading
+import time
 
-from core.table_service import TABLE_ALL, TABLE_QCTABLE, TableService
+import pandas as pd
+import pytest
+
+from core.table_service import (
+    TABLE_ALL,
+    TABLE_QCTABLE,
+    TableService,
+    TableStateConflictError,
+)
 from models.project import Project
 
 
@@ -70,6 +81,136 @@ def test_table_service_atomic_write_keeps_original_when_replace_fails(monkeypatc
 
     result = service.load_table(project, TABLE_ALL)
     pd.testing.assert_frame_equal(result, original)
+
+
+def test_table_service_uses_a_unique_temporary_path_for_every_write(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    service = TableService()
+    project = Project("SAMPLE", tmp_path / "easyqc_SAMPLE")
+    observed: list[Path] = []
+    real_to_csv = pd.DataFrame.to_csv
+
+    def capture_path(frame, path, *args, **kwargs):
+        observed.append(Path(path))
+        return real_to_csv(frame, path, *args, **kwargs)
+
+    monkeypatch.setattr(pd.DataFrame, "to_csv", capture_path)
+
+    service.save_table(
+        project,
+        TABLE_ALL,
+        pd.DataFrame({"easyqcid": ["SUB001"]}),
+    )
+    service.save_table(
+        project,
+        TABLE_ALL,
+        pd.DataFrame({"easyqcid": ["SUB002"]}),
+    )
+
+    assert len(observed) == 2
+    assert observed[0].name != observed[1].name
+    assert all(path.parent == project.table_dir for path in observed)
+    assert list(project.table_dir.glob("*.tmp.*")) == []
+
+
+def test_table_service_serializes_same_process_concurrent_writers(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    service = TableService()
+    project = Project("SAMPLE", tmp_path / "easyqc_SAMPLE")
+    start = threading.Barrier(3)
+    counter_lock = threading.Lock()
+    active_replaces = 0
+    max_active_replaces = 0
+    real_replace = __import__("os").replace
+
+    def tracked_replace(source, destination):
+        nonlocal active_replaces, max_active_replaces
+        with counter_lock:
+            active_replaces += 1
+            max_active_replaces = max(max_active_replaces, active_replaces)
+        try:
+            time.sleep(0.03)
+            return real_replace(source, destination)
+        finally:
+            with counter_lock:
+                active_replaces -= 1
+
+    monkeypatch.setattr("core.table_service.os.replace", tracked_replace)
+
+    def write(identity: str) -> None:
+        start.wait()
+        service.save_table(
+            project,
+            TABLE_ALL,
+            pd.DataFrame(
+                {
+                    "easyqcid": [identity] * 20,
+                    "value": [identity] * 20,
+                }
+            ),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(write, identity) for identity in ("A", "B")]
+        start.wait()
+        for future in futures:
+            future.result()
+
+    assert max_active_replaces == 1
+    result = service.load_table(project, TABLE_ALL)
+    assert result is not None
+    assert result["easyqcid"].tolist() in [["A"] * 20, ["B"] * 20]
+    assert result["value"].tolist() == result["easyqcid"].tolist()
+
+
+def test_table_service_rejects_stale_revision_without_overwriting_newer_table(
+    tmp_path,
+) -> None:
+    service = TableService()
+    project = Project("SAMPLE", tmp_path / "easyqc_SAMPLE")
+    service.save_table(
+        project,
+        TABLE_ALL,
+        pd.DataFrame({"easyqcid": ["SUB001"], "value": ["old"]}),
+    )
+    stale = service.load_table_snapshot(project, TABLE_ALL)
+    service.save_table(
+        project,
+        TABLE_ALL,
+        pd.DataFrame({"easyqcid": ["SUB001"], "value": ["new"]}),
+    )
+
+    with pytest.raises(TableStateConflictError, match="stale"):
+        service.save_table(
+            project,
+            TABLE_ALL,
+            pd.DataFrame({"easyqcid": ["SUB001"], "value": ["stale"]}),
+            expected_revision=stale.revision,
+        )
+
+    current = service.load_table(project, TABLE_ALL)
+    assert current is not None
+    assert current["value"].tolist() == ["new"]
+
+
+def test_unconditional_table_replacement_does_not_parse_damaged_old_csv(
+    tmp_path,
+) -> None:
+    service = TableService()
+    project = Project("SAMPLE", tmp_path / "easyqc_SAMPLE")
+    path = service.table_path(project, TABLE_ALL)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"")
+    replacement = pd.DataFrame({"easyqcid": ["SUB001"], "value": ["recovered"]})
+
+    service.save_table(project, TABLE_ALL, replacement)
+
+    current = service.load_table(project, TABLE_ALL)
+    pd.testing.assert_frame_equal(current, replacement)
 
 
 def test_table_service_load_all_tables(tmp_path) -> None:
