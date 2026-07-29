@@ -70,8 +70,8 @@ class gui_qcpage:
         """
         try:
             self.close_current_process()
-        except:
-            pass
+        except Exception as exc:
+            log_warning(f"gui_qcpage析构清理失败: {exc}")
 
     def _call_table_method(self, method_name, *args, **kwargs):
         """调用TableDisplay的方法，避免循环导入"""

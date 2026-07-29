@@ -87,6 +87,22 @@ def _rating_dir(tmp_path):
     return tmp_path / "RatingFiles" / "example" / "rater1"
 
 
+def test_destructor_reports_viewer_cleanup_failure(monkeypatch) -> None:
+    page = object.__new__(gui_qcpage)
+    messages = []
+
+    def fail_cleanup() -> None:
+        raise RuntimeError("viewer cleanup failed")
+
+    page.close_current_process = fail_cleanup
+    monkeypatch.setattr(gui_qcpage_module, "log_warning", messages.append)
+
+    page.__del__()
+
+    assert messages == ["gui_qcpage析构清理失败: viewer cleanup failed"]
+    page.close_current_process = lambda: None
+
+
 def test_save_rating_writes_canonical_current_snapshot(tmp_path) -> None:
     page = _page(tmp_path)
 
