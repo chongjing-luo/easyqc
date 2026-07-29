@@ -271,8 +271,6 @@ verify_installation() {
     
     VENV_PATH="$ENV_DIR"
     source "$VENV_PATH/bin/activate"
-    export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/easyqc_matplotlib_cache_${USER:-user}}"
-    mkdir -p "$MPLCONFIGDIR"
     
     # 验证tkinter
     echo "验证tkinter..."
@@ -286,14 +284,9 @@ verify_installation() {
     if ! python -c "
 import numpy; print('✓ numpy 可用')
 import pandas; print('✓ pandas 可用')
+import lark; print('✓ lark 可用')
+import platformdirs; print('✓ platformdirs 可用')
 from PySide6.QtWidgets import QApplication; print('✓ PySide6/Qt Widgets 可用')
-import scipy; print('✓ scipy 可用')
-import matplotlib; print('✓ matplotlib 可用')
-import seaborn; print('✓ seaborn 可用')
-import sklearn; print('✓ scikit-learn 可用')
-import nibabel; print('✓ nibabel 可用')
-import pydicom; print('✓ pydicom 可用')
-import PIL; print('✓ Pillow 可用')
 print('所有依赖验证完成')
 "; then
         echo "错误：部分依赖验证失败"

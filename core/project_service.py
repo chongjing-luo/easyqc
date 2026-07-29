@@ -77,6 +77,11 @@ class ProjectService:
         project_path = Path(path)
         if project_path.name != f"easyqc_{name}":
             project_path = project_path / f"easyqc_{name}"
+        if project_path.exists():
+            if not project_path.is_dir():
+                raise ValueError(f"项目目标不是目录: {project_path}")
+            if next(project_path.iterdir(), None) is not None:
+                raise ValueError(f"项目目标目录非空: {project_path}")
         project_path.mkdir(parents=True, exist_ok=True)
         (project_path / "Table").mkdir(exist_ok=True)
         (project_path / "RatingFiles").mkdir(exist_ok=True)
@@ -98,7 +103,11 @@ class ProjectService:
 
         if name not in self.registry.projects:
             raise KeyError(name)
-        project = self.registry.projects[name]
+        return self._prepare_project(self.registry.projects[name])
+
+    def _prepare_project(self, project: Project) -> PreparedProjectLoad:
+        """Validate one project directory without registry or active-state writes."""
+
         if not project.settings_path.exists():
             raise FileNotFoundError(project.settings_path)
 
@@ -354,27 +363,57 @@ class ProjectService:
         """Rows for the project combo/list: (name,) tuples."""
         return [(name,) for name in self.registry.projects]
 
-    def import_project_from_dir(self, output_dir, *, notify: bool = True) -> None:
-        """Import a project from a directory containing settings_<name>.json.
-        Registers it in the registry and loads it (no copy)."""
+    def import_project_from_dir(
+        self,
+        output_dir,
+        *,
+        notify: bool = True,
+    ) -> Project:
+        """Validate and register exactly one existing schema-v3 project."""
+
         output_dir = Path(output_dir)
-        settings_file = None
-        for f in output_dir.iterdir():
-            if f.name.startswith("settings_") and f.name.endswith(".json"):
-                project_name = f.name[9:-5]
-                settings_file = f
-                break
-        if settings_file is None or not settings_file.exists():
+        if not output_dir.is_dir():
+            raise FileNotFoundError(f"项目目录不存在: {output_dir}")
+        settings_files = sorted(
+            path
+            for path in output_dir.iterdir()
+            if path.is_file()
+            and path.name.startswith("settings_")
+            and path.name.endswith(".json")
+        )
+        if not settings_files:
             raise FileNotFoundError(
                 f"目录 {output_dir} 不是合法项目路径（缺少 settings_*.json）"
             )
+        if len(settings_files) != 1:
+            raise ValueError(
+                f"项目目录必须包含唯一的 settings_*.json: {output_dir}"
+            )
+        settings_file = settings_files[0]
+        project_name = settings_file.name[9:-5]
+        if not validate_project_name(project_name):
+            raise ValueError(f"项目名不合法: {project_name}")
+        if project_name in self.registry.projects:
+            raise ValueError(f"项目已存在: {project_name}")
+        resolved_candidate = output_dir.resolve()
+        if any(
+            existing.path.resolve() == resolved_candidate
+            for existing in self.registry.projects.values()
+        ):
+            raise ValueError(f"项目路径已登记: {output_dir}")
+
         project = Project(name=project_name, path=output_dir)
+        prepared = self._prepare_project(project)
+        previous_registry = deepcopy(self.registry)
         self.registry.projects[project_name] = project
-        self.registry.last_project = project_name
-        self._save_registry()
-        self.load(project_name, notify=notify)
+        try:
+            loaded = self.commit_load(prepared, notify=False)
+        except Exception:
+            self.registry = previous_registry
+            raise
         if notify:
             self._notify("project_changed")
+        return loaded
 
     def constants(self) -> dict[str, Any]:
         """Return the constants dict (mutable view for read checks)."""

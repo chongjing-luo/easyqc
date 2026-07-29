@@ -216,6 +216,24 @@ def test_project_service_rejects_duplicate_and_invalid_names(tmp_path) -> None:
         service.create("../bad", tmp_path)
 
 
+def test_project_create_rejects_nonempty_target_without_mutation(tmp_path) -> None:
+    registry_path = tmp_path / "projects.json"
+    target = tmp_path / "easyqc_SAMPLE"
+    target.mkdir()
+    sentinel = target / "keep-me.txt"
+    sentinel.write_bytes(b"user data")
+    service = ProjectService(registry_path)
+
+    with pytest.raises(ValueError, match="非空"):
+        service.create("SAMPLE", target)
+
+    assert sentinel.read_bytes() == b"user data"
+    assert sorted(path.name for path in target.iterdir()) == ["keep-me.txt"]
+    assert not registry_path.exists()
+    assert service.list_all() == []
+    assert service.current_project is None
+
+
 def test_project_service_add_update_remove_module(tmp_path) -> None:
     service = ProjectService(tmp_path / "projects.json")
     service.create("SAMPLE", tmp_path)
@@ -680,6 +698,72 @@ def test_project_service_import_invalid_dir_raises(tmp_path) -> None:
     empty_dir.mkdir()
     with pytest.raises(FileNotFoundError):
         s.import_project_from_dir(empty_dir)
+
+
+def test_project_service_import_rejects_ambiguous_settings_without_state_change(
+    tmp_path,
+) -> None:
+    creator = ProjectService(tmp_path / "source-projects.json")
+    source = creator.create("SOURCE", tmp_path / "source-root")
+    (source.path / "settings_OTHER.json").write_bytes(
+        source.settings_path.read_bytes()
+    )
+
+    service = ProjectService(tmp_path / "projects.json")
+    active = service.create("ACTIVE", tmp_path / "active-root")
+    registry_before = service.registry_path.read_bytes()
+    settings_before = dict(service.settings)
+
+    with pytest.raises(ValueError, match="唯一"):
+        service.import_project_from_dir(source.path)
+
+    assert service.registry_path.read_bytes() == registry_before
+    assert service.current_project == active
+    assert dict(service.settings) == settings_before
+    assert service.list_all() == ["ACTIVE"]
+
+
+def test_project_service_import_invalid_schema_rolls_back_registry_and_state(
+    tmp_path,
+) -> None:
+    creator = ProjectService(tmp_path / "source-projects.json")
+    source = creator.create("SOURCE", tmp_path / "source-root")
+    invalid = json.loads(source.settings_path.read_text(encoding="utf-8"))
+    invalid["schema_version"] = 2
+    FileUtils.safe_json_save(source.settings_path, invalid)
+
+    service = ProjectService(tmp_path / "projects.json")
+    active = service.create("ACTIVE", tmp_path / "active-root")
+    registry_before = service.registry_path.read_bytes()
+    settings_before = dict(service.settings)
+
+    with pytest.raises(ValueError, match="schema_version 3"):
+        service.import_project_from_dir(source.path)
+
+    assert service.registry_path.read_bytes() == registry_before
+    assert service.current_project == active
+    assert dict(service.settings) == settings_before
+    assert service.list_all() == ["ACTIVE"]
+
+
+def test_project_service_import_rejects_duplicate_name_without_rebinding(
+    tmp_path,
+) -> None:
+    service = ProjectService(tmp_path / "projects.json")
+    registered = service.create("SAMPLE", tmp_path / "registered-root")
+
+    creator = ProjectService(tmp_path / "source-projects.json")
+    candidate = creator.create("SAMPLE", tmp_path / "candidate-root")
+    registry_before = service.registry_path.read_bytes()
+    settings_before = dict(service.settings)
+
+    with pytest.raises(ValueError, match="项目已存在"):
+        service.import_project_from_dir(candidate.path)
+
+    assert service.registry_path.read_bytes() == registry_before
+    assert service.current_project == registered
+    assert dict(service.settings) == settings_before
+    assert service.registry.projects["SAMPLE"] == registered
 
 
 def test_project_service_constants_returns_dict(tmp_path) -> None:
