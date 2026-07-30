@@ -1,16 +1,12 @@
-"""SessionState — pure in-memory GUI session-state buffer (P2-A2).
+"""SessionState — pure in-memory presentation-state buffer.
 
-Replaces the dt.var/dt.tab session-state role of LegacyGUIStateAdapter /
-DataContainer WITHOUT depending on ProjectManager. Holds two DataFrame
-dictionaries (variable drafts + result tables) and a rating dict.
+Holds variable drafts, result tables and a rating dictionary without depending
+on a GUI toolkit or project manager.
 
-Layer: core. Depends only on pandas + utils.logger. MUST NOT import tkinter
+Layer: core. Depends only on pandas + utils.logger. MUST NOT import a GUI
 or ProjectManager. Persistence (CSV writes) is NOT done here — that is the
 caller's job (TableService.save_table). This class only manages the in-memory
-session buffers so the GUI can work with draft/intermediate tables.
-
-The contracts mirror LegacyGUIStateAdapter's variable/result methods so the GUI
-can migrate gui_state.X → session_state.X with unchanged behavior.
+session buffers so the Qt presentation can work with draft/intermediate tables.
 """
 
 from __future__ import annotations

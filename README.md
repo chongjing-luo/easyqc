@@ -73,7 +73,6 @@ pip install -r requirements.txt
 ### Windows 特别说明
 
 - 推荐使用 [Python 官方安装包](https://www.python.org/downloads/)（勾选 "Add Python to PATH"）
-- tkinter 随官方 Python 一起安装，无需额外操作
 - 启动方式：`python easyqc.py`
 
 ### 项目布局说明（flat layout）
@@ -99,23 +98,15 @@ EasyQC 采用 **flat layout**：`easyqc/` 目录本身**不是**可安装的 Pyt
 python easyqc.py             # 所有平台
 ```
 
-当前稳定入口仍是 tkinter。PySide6/Qt 迁移采用显式预览入口，避免在工作流
-尚未完成迁移时影响真实项目：
-
-```bash
-python easyqc.py --ui qt-preview   # Qt Table/QC/配置迁移预览
-python easyqc.py --ui tk           # 显式使用当前稳定 GUI（迁移期回退）
-```
-
-Qt Preview 已包含共享 Core 服务和不直接修改源表的专业 Table 工作区：类型感知的可视化
+PySide6/Qt Widgets 是 EasyQC 的唯一图形界面；默认入口无需 GUI 选择参数。
+应用包含共享 Core 服务和不直接修改源表的专业 Table 工作区：类型感知的可视化
 Filter Builder、多列排序、列显示/重排、固定 `easyqcid`、完整结果计数、分页、
 精确查找和安全的 QC 身份校验。筛选与排序界面不显示或要求编辑 JSON。Qt 的
 Table、QC 与项目配置现已通过同一个共享 Core 上下文接通真实项目，耗时
-query/load/export 已移出 GUI 线程；但四个平台的真实 CI、三平台原生安装/UI
-与人工可访问性门禁尚未完成，因此仍需显式选择 Preview，默认入口继续使用 tkinter。
-两种 GUI 读取同一套现有 JSON/CSV 事实，Qt 层不会另建权威数据库。
+query/load/export 已移出 GUI 线程。GUI 读取现有 JSON/CSV 权威事实，不会另建
+数据库。
 
-Qt Preview 的七个导航页依次为：跨项目设置、项目选择、质控名单导入、
+Qt GUI 的七个导航页依次为：跨项目设置、项目选择、质控名单导入、
 质控前名单、常量设置、质控模块和质控结果。首个页面集中管理当前 EasyQC
 安装的常量模板、质控模块模板和命令执行模式；它不会把模板隐式注入项目。
 
@@ -181,7 +172,7 @@ easyqc_<project>/
 
 常量在命令模板中通过占位符 `$变量名` / `${变量名}` / `{变量名}` 引用。
 
-Qt Preview 还可在 **跨项目设置 → 常量模板** 中保存常用起点，再在
+Qt GUI 还可在 **跨项目设置 → 常量模板** 中保存常用起点，再在
 **常量设置 → 从模板添加** 中复制到当前项目。复制前可以修改名称和值；
 复制成功后它就是普通的项目常量，与原模板完全脱离。模板不会自动应用、
 同步或参与 View 命令的变量解析。
@@ -426,26 +417,16 @@ easyqc/
 │   ├── qcmodule.py             # QCModule / Score / Tag
 │   └── rating.py               # Rating（序列化/反序列化）
 │
-├── gui/                        # 图形界面
-│   ├── app.py                  # 应用入口（组装 services + 启动主窗口）
-│   ├── main_window.py          # 主窗口（项目管理、模块列表、菜单）
-│   ├── qc_page.py              # QC 评分页运行时上下文
-│   ├── gui_qcpage.py           # QC 评分页 GUI（启动命令、记录评分）
-│   ├── table_view.py           # 表格浏览与操作
-│   ├── gui_table.py            # 表格显示组件
-│   ├── state_adapter.py        # tkinter 状态到共享 models/services 的适配层
-│   ├── dialog_main.py          # 对话框（设置变量、命令模板、筛选等）
-│   ├── dialogs.py              # 新对话框组件
-│   └── widgets.py              # 通用 GUI 组件
-│
-├── gui_qt/                     # PySide6/Qt Widgets 迁移目标
+├── gui_qt/                     # 唯一的 PySide6/Qt Widgets 图形界面
+│   ├── application.py          # QApplication、启动页、产品/CLI-QC 入口
 │   ├── main_window.py          # 七页导航与共享应用上下文
+│   ├── table_workspace.py      # 虚拟化表格、筛选/排序/列/新增列
+│   ├── qc_workspace.py         # 评分、标签、备注、查看器与名单导航
 │   ├── cross_project_settings_page.py # 模板库和命令执行设置
 │   └── template_copy_dialogs.py # 从模板添加到项目
 │
 ├── utils/                      # 工具模块
 │   ├── data_manager.py         # 数据管理（主表构建、导入）
-│   ├── projects_manager.py     # tkinter 项目管理适配器
 │   ├── file_utils.py           # 文件操作（原子写入、JSON 安全读写）
 │   ├── validators.py           # 输入验证（score 解析、名称校验）
 │   └── logger.py               # 统一日志系统
@@ -455,10 +436,9 @@ easyqc/
 ├── tests/                      # pytest 自动化测试
 │   ├── test_core/              # 核心服务测试
 │   ├── test_models/            # 数据模型测试
-│   ├── test_gui/               # GUI 组件测试
+│   ├── test_gui_qt/            # Qt GUI 组件与工作流测试
 │   ├── test_utils/             # 工具模块测试
-│   ├── test_integration/       # 跨服务与入口集成测试
-│   └── test_characterization/  # 重构行为特征守卫
+│   └── test_integration/       # 跨服务与入口集成测试
 │
 └── logs/                       # 日志文件
 ```
@@ -468,11 +448,11 @@ easyqc/
 ## 测试
 
 ```bash
-# 完整/发布测试：非 GUI、tkinter、Qt 分别运行在独立进程
+# 完整/发布测试：无 GUI 依赖与 Qt 测试分别运行在独立进程
 .venv/bin/python scripts/run_test_matrix.py
 
-# 单进程 pytest 仅用于本地诊断（无显示器 Linux 需提供虚拟 X）
-xvfb-run -a .venv/bin/python -m pytest
+# 单进程 pytest 仅用于本地诊断
+.venv/bin/python -m pytest
 
 # 运行特定模块测试
 .venv/bin/python -m pytest tests/test_core/
@@ -481,13 +461,12 @@ xvfb-run -a .venv/bin/python -m pytest
 .venv/bin/python -m pytest -v
 ```
 
-测试矩阵会完整执行三个分组；任一分组失败都会返回非零状态，但不会阻止后续
-分组运行。无显示器的 Linux 环境只为 tkinter 分组调用 `xvfb-run`，Qt 分组
-显式使用 offscreen 平台，从而避免迁移期在同一 Python 进程混用两个 GUI
-runtime。普通 `pytest` 保留为诊断手段，不作为双 GUI 迁移期的完整发布证据。
+测试矩阵会完整执行两个分组；任一分组失败都会返回非零状态，但不会阻止后续
+分组运行。Qt 分组显式使用 offscreen 平台并单独加载 pytest-qt，避免第三方
+插件污染无 GUI 依赖的 Core 测试进程。
 
 测试覆盖：核心服务（项目 CRUD、评分聚合、命令执行、表格转换）、schema-v3
-数据模型序列化/反序列化、输入验证、GUI 状态适配，以及 Qt/tkinter 隔离入口。
+数据模型序列化/反序列化、输入验证、Qt 工作流以及默认/CLI 入口。
 
 ---
 
@@ -535,7 +514,7 @@ sysroot；PyInstaller 只能接收验证后的 `libxcb-cursor.so.0`。产物还�
 已验证的 Ubuntu 诊断产物可在兼容环境中运行，但不能据此承诺其他系统或未来
 发行版。`build.py` 会验证最终 cursor 哈希、MIT/X notice、provenance、精确的
 platformdirs 4.10.1 metadata/notice 与 `libqxcb.so` 的产物内 `ldd` 闭包，再
-运行 `--help`、offscreen 以及 Linux native xcb Qt Preview 事件循环 smoke；
+运行 `--help`、offscreen 以及 Linux native xcb Qt 事件循环 smoke；
 运行时会主动移除外部 `LD_LIBRARY_PATH`。打包 smoke 前后完整 artifact
 manifest 必须一致；出现 `_internal/logs/` 或任何其他候选产物变化都会直接
 失败，不会通过事后删除伪装成干净产物。Windows/macOS 不能由 Linux 交叉构建
@@ -548,7 +527,7 @@ manifest 必须一致；出现 `_internal/logs/` 或任何其他候选产物变�
 - **外部查看器**：需用户单独安装（FreeSurfer freeview、wb_view 等），打包文件不包含它们
 - **项目文件**：`projects.json`、项目目录、日志等运行时数据不打包在内，由用户运行时动态创建
 - **运行时日志**：默认写入操作系统的用户日志目录；文件日志不可用时继续 QC，并由当前 GUI 显示一次明确警告
-- **迁移期默认入口**：仍为 tkinter；Qt 完成 Table/QC/配置和三平台验证后才切换默认值
+- **GUI 入口**：PySide6/Qt Widgets 是唯一支持的图形界面
 
 ---
 

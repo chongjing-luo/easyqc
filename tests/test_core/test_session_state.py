@@ -1,8 +1,4 @@
-"""Tests for core.session_state — P2-A2: GUI session-state buffer (no ProjectManager).
-
-Mirrors the LegacyGUIStateAdapter variable/result-table contracts so SessionState
-can replace dt.var/dt.tab session-state without behavior change.
-"""
+"""Tests for the toolkit-neutral variable/result session-state buffer."""
 
 import pandas as pd
 from types import SimpleNamespace

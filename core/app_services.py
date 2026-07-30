@@ -36,7 +36,7 @@ class AppServices:
 
 
 def build_app_services(registry_path: Path | None = None) -> AppServices:
-    """Build the one service graph consumed by CLI, tkinter and Qt adapters.
+    """Build the one service graph consumed by the CLI and Qt presentation.
 
     Input: an optional project-registry path.
     Output: one immutable :class:`AppServices` context.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import os
 import subprocess
 import sys
@@ -17,7 +18,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QTableView
 from core.app_services import build_app_services
 from gui_qt import application as application_module
 from gui_qt.application import (
-    build_preview_window,
+    build_table_window,
     get_or_create_qapplication,
 )
 from gui_qt.i18n import LanguageController
@@ -62,7 +63,7 @@ def test_preview_window_renders_injected_core_table_and_closes_cleanly(qtbot, tm
     )
     original = source.copy(deep=True)
 
-    window = build_preview_window(services, source)
+    window = build_table_window(services, source)
     qtbot.addWidget(window)
     window.show()
     qtbot.waitExposed(window)
@@ -93,12 +94,12 @@ def test_product_preview_event_loop_exits_cleanly_offscreen(tmp_path, easyqc_roo
         import pandas as pd
 
         from core.app_services import build_app_services
-        from gui_qt.application import run_qt_preview
+        from gui_qt.application import run_qt_application
 
         services = build_app_services(Path(os.environ["EASYQC_TEST_REGISTRY"]))
         source = pd.DataFrame({"easyqcid": ["SUB001"], "status": ["pending"]})
         raise SystemExit(
-            run_qt_preview(
+            run_qt_application(
                 ["easyqc-test"],
                 services,
                 source,
@@ -120,9 +121,66 @@ def test_product_preview_event_loop_exits_cleanly_offscreen(tmp_path, easyqc_roo
     assert completed.returncode == 0, completed.stderr
 
 
+def test_direct_qt_qc_uses_cli_rater_and_exits_cleanly(
+    sample_project_dir,
+    tmp_path,
+    easyqc_root,
+) -> None:
+    registry = tmp_path / "projects.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "projects": {"SAMPLE": str(sample_project_dir)},
+                "last_project": "SAMPLE",
+            }
+        ),
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    environment["QT_QPA_PLATFORM"] = "offscreen"
+    environment["EASYQC_TEST_REGISTRY"] = str(registry)
+    program = textwrap.dedent(
+        """
+        import os
+        from pathlib import Path
+
+        from core.app_services import build_app_services
+        from gui_qt.application import run_qt_qc
+
+        registry = Path(os.environ["EASYQC_TEST_REGISTRY"])
+        services = build_app_services(registry)
+        raise SystemExit(
+            run_qt_qc(
+                ["easyqc-test", "SAMPLE", "example", "cli_rater", "SUB001"],
+                services,
+                project="SAMPLE",
+                module="example",
+                rater="cli_rater",
+                easyqcid="SUB001",
+                exit_after_ms=0,
+            )
+        )
+        """
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", program],
+        cwd=easyqc_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert not (
+        sample_project_dir / "RatingFiles" / "example" / "cli_rater"
+    ).exists()
+
+
 def test_empty_preview_explains_that_no_project_table_is_connected(qtbot, tmp_path):
     services = build_app_services(tmp_path / "projects.json")
-    window = build_preview_window(
+    window = build_table_window(
         services,
         pd.DataFrame(columns=["easyqcid", "status"]),
     )
@@ -254,7 +312,7 @@ def test_qt_event_loop_consumes_current_logging_status_once(monkeypatch):
     )
 
     assert (
-        application_module.run_qt_preview(
+        application_module.run_qt_application(
             ["easyqc-test"],
             object(),
             startup_minimum_ms=0,
@@ -344,7 +402,7 @@ def test_qt_event_loop_shows_startup_before_constructing_and_showing_main(
     )
 
     assert (
-        application_module.run_qt_preview(
+        application_module.run_qt_application(
             ["easyqc-test"],
             object(),
             pd.DataFrame({"easyqcid": ["A"]}),
@@ -454,7 +512,7 @@ def test_qt_event_loop_closes_startup_and_shows_main_error_after_initialization_
     )
 
     assert (
-        application_module.run_qt_preview(
+        application_module.run_qt_application(
             ["easyqc-test"],
             object(),
             startup_minimum_ms=0,
@@ -533,7 +591,7 @@ def test_synchronous_main_window_construction_failure_closes_startup_and_is_visi
     )
 
     assert (
-        application_module.run_qt_preview(
+        application_module.run_qt_application(
             ["easyqc-test"],
             object(),
             startup_minimum_ms=0,
@@ -600,7 +658,7 @@ def test_synchronous_construction_failure_delivers_startup_deferred_delete(
     )
 
     assert (
-        application_module.run_qt_preview(
+        application_module.run_qt_application(
             ["easyqc-test"],
             object(),
             startup_minimum_ms=0,

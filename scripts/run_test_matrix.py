@@ -1,7 +1,7 @@
-"""Run the complete EasyQC suite without mixing GUI runtimes in one process.
+"""Run the complete EasyQC suite with Qt isolated from toolkit-free tests.
 
 Input: the repository test tree and the invoking Python executable.
-Output: one result per non-GUI, tkinter, and Qt pytest child plus an aggregate
+Output: one result per non-GUI and Qt pytest child plus an aggregate
 exit status. The script only starts child processes and writes no project data.
 """
 
@@ -11,23 +11,17 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import os
 from pathlib import Path
-import platform
 import shlex
-import shutil
 import subprocess
 import sys
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-TK_TARGETS = (
-    "tests/test_gui",
-    "tests/test_characterization",
-)
 QT_TARGETS = (
     "tests/test_gui_qt",
-    "tests/test_scripts/test_qt_preview_entry.py",
+    "tests/test_scripts/test_qt_entry.py",
 )
-NON_GUI_IGNORES = (*TK_TARGETS, *QT_TARGETS)
+NON_GUI_IGNORES = QT_TARGETS
 
 
 @dataclass(frozen=True)
@@ -37,14 +31,12 @@ class TestLane:
     name: str
     targets: tuple[str, ...]
     ignores: tuple[str, ...] = ()
-    needs_tk_display: bool = False
     qt_offscreen: bool = False
     pytest_plugins: tuple[str, ...] = ()
 
 
 LANES = (
     TestLane("non_gui", ("tests",), ignores=NON_GUI_IGNORES),
-    TestLane("tk", TK_TARGETS, needs_tk_display=True),
     TestLane(
         "qt",
         QT_TARGETS,
@@ -64,27 +56,11 @@ def _validate_targets(project_root: Path) -> None:
             raise ValueError(f"missing test target: {target}")
 
 
-def _resolve_xvfb(
-    *,
-    platform_name: str,
-    environ: Mapping[str, str],
-    which: Callable[[str], str | None],
-) -> str | None:
-    if platform_name != "Linux" or environ.get("DISPLAY"):
-        return None
-    executable = which("xvfb-run")
-    if executable is None:
-        raise ValueError("headless Linux tkinter tests require xvfb-run")
-    return executable
-
-
-def _command_for(lane: TestLane, python: Path, xvfb_run: str | None) -> list[str]:
+def _command_for(lane: TestLane, python: Path) -> list[str]:
     command = [str(python), "-m", "pytest", *lane.targets]
     command.extend(f"--ignore={target}" for target in lane.ignores)
     for plugin in lane.pytest_plugins:
         command.extend(("-p", plugin))
-    if lane.needs_tk_display and xvfb_run is not None:
-        command = [xvfb_run, "-a", *command]
     return command
 
 
@@ -93,33 +69,25 @@ def run_test_matrix(
     project_root: Path = PROJECT_ROOT,
     python: Path = Path(sys.executable),
     environ: Mapping[str, str] | None = None,
-    platform_name: str | None = None,
-    which: Callable[[str], str | None] = shutil.which,
     runner: Callable[..., subprocess.CompletedProcess[object]] = subprocess.run,
 ) -> int:
     """Run every matrix lane and return 0, 1 for tests, or 2 for preflight."""
 
     project_root = project_root.resolve()
     base_environment = dict(os.environ if environ is None else environ)
-    detected_platform = platform.system() if platform_name is None else platform_name
     try:
         _validate_targets(project_root)
-        xvfb_run = _resolve_xvfb(
-            platform_name=detected_platform,
-            environ=base_environment,
-            which=which,
-        )
     except ValueError as error:
         print(f"ERROR test matrix preflight: {error}", file=sys.stderr)
         return 2
 
     failed_lanes: list[str] = []
     for lane in LANES:
-        command = _command_for(lane, python, xvfb_run)
+        command = _command_for(lane, python)
         child_environment = base_environment.copy()
         # Third-party pytest entry points can import GUI bindings before test
-        # collection.  Make plugin loading deterministic and prevent caller
-        # options from injecting pytest-qt into the tkinter process.
+        # collection. Make plugin loading deterministic and prevent caller
+        # options from injecting pytest-qt into the toolkit-free process.
         child_environment.pop("PYTEST_ADDOPTS", None)
         child_environment.pop("PYTEST_PLUGINS", None)
         child_environment["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"

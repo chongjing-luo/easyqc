@@ -61,9 +61,8 @@ def test_setup_detects_stale_copied_virtualenv_paths(easyqc_root: Path) -> None:
 def test_setup_verification_fails_loudly_on_missing_dependencies(easyqc_root: Path) -> None:
     source = (easyqc_root / "setup.sh").read_text(encoding="utf-8")
 
-    assert "错误：tkinter 不可用" in source
     assert "错误：部分依赖验证失败" in source
-    assert 'python -c "import tkinter; print' in source
+    assert "from PySide6.QtWidgets import QApplication" in source
     assert "|| echo \"⚠ 部分依赖验证失败\"" not in source
 
 
@@ -74,7 +73,7 @@ def test_setup_verifies_only_required_dependencies(easyqc_root: Path) -> None:
     assert "所有依赖验证完成" in source
 
 
-def test_setup_and_build_verify_the_qt_preview_runtime(easyqc_root: Path) -> None:
+def test_setup_and_build_verify_the_qt_runtime(easyqc_root: Path) -> None:
     setup_source = (easyqc_root / "setup.sh").read_text(encoding="utf-8")
     build_source = (easyqc_root / "build.py").read_text(encoding="utf-8")
     requirements = (easyqc_root / "requirements.txt").read_text(encoding="utf-8")
@@ -122,11 +121,11 @@ def test_setup_and_build_fail_loudly_on_missing_linux_qt_runtime(
         build_script.check_qt_platform_dependencies()
 
 
-def test_build_smoke_starts_packaged_qt_preview_offscreen(easyqc_root: Path) -> None:
+def test_build_smoke_starts_packaged_qt_offscreen(easyqc_root: Path) -> None:
     build_source = (easyqc_root / "build.py").read_text(encoding="utf-8")
 
     assert '"QT_QPA_PLATFORM": "offscreen"' in build_source
-    assert '"--ui", "qt-preview"' in build_source
+    assert '[str(binary)]' in build_source
     assert "subprocess.Popen" in build_source
 
 
@@ -470,7 +469,7 @@ def test_linux_native_smoke_removes_external_library_path(
     assert native_env["QT_QPA_PLATFORM"] == "xcb"
     assert native_env.get("LD_LIBRARY_PATH") is None
     assert native_env.get("LD_PRELOAD") is None
-    assert native_label == "Qt Preview native xcb"
+    assert native_label == "Qt native xcb"
 
 
 def test_common_bundle_writes_and_verifies_platformdirs_notice_and_metadata(
@@ -618,12 +617,12 @@ def test_verify_output_keeps_missing_binary_failure_loud(
     assert "未找到可执行文件" in capsys.readouterr().out
 
 
-def test_readme_documents_explicit_qt_preview_and_tk_rollback(easyqc_root: Path) -> None:
+def test_readme_documents_qt_only_product_and_runtime_contract(easyqc_root: Path) -> None:
     readme = (easyqc_root / "README.md").read_text(encoding="utf-8")
     requirements = (easyqc_root / "requirements.txt").read_text(encoding="utf-8")
 
-    assert "python easyqc.py --ui qt-preview" in readme
-    assert "python easyqc.py --ui tk" in readme
+    assert "python easyqc.py             # 所有平台" in readme
+    assert "唯一图形界面" in readme
     assert "JSON/CSV" in readme
     assert "libxcb-cursor0" in readme
     assert "533.219 MiB" in readme

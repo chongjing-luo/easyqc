@@ -1,7 +1,7 @@
 """Typed publish/subscribe event bus (ADR-002, AC-10).
 
 Single-threaded, in-process, zero third-party dependency. Core layer — must NOT
-import tkinter or any GUI module.
+import any GUI module.
 
 Lifecycle contract:
 - Subscribers subscribe in their owner's ``__init__``.
@@ -57,7 +57,7 @@ Subscriber = Callable[[Event], None]
 class EventBus:
     """A typed event bus.
 
-    Single-threaded use only (tkinter main loop). No locking; ``emit`` may
+    Single-threaded presentation use only. No locking; ``emit`` may
     recurse safely if a handler emits another event.
     """
 

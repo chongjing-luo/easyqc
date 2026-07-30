@@ -228,7 +228,7 @@ class TableService:
         project: Project,
         module_names: list[str] | tuple[str, ...] | None = None,
     ) -> LoadedProjectTables:
-        """Load project tables in the shape expected by the legacy GUI state."""
+        """Load project tables into the toolkit-neutral session-state shape."""
 
         variables: dict[str, pd.DataFrame | None] = {
             TABLE_ALL: self.load_table(project, TABLE_ALL),

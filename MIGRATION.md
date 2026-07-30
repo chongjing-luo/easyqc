@@ -25,30 +25,22 @@ source .venv/bin/activate
 python easyqc.py
 ```
 
-### PySide6/Qt 渐进迁移
+### PySide6/Qt 图形界面
 
-迁移期间默认界面仍为已验证的 tkinter 实现。新的 Qt 路径必须显式选择：
+PySide6/Qt Widgets 是当前版本的唯一图形界面，直接运行：
 
 ```bash
-python easyqc.py --ui qt-preview
+python easyqc.py
 ```
 
-当前 Preview 已提供“共享 Core 服务 → 完整数据筛选/多列排序 → 有界行窗口 →
+当前 GUI 提供“共享 Core 服务 → 完整数据筛选/多列排序 → 有界行窗口 →
 QAbstractTableModel/QTableView”的专业只读 Table 工作区。Filter/Sort/Columns
 均为类型化可视控件，不再以 JSON 作为用户输入界面；同时包含固定 `easyqcid`、
 计数、分页、精确查找、稳定选择和 QC 身份安全门。Qt 的 Table、QC 与项目配置
-已通过同一个共享 Core 上下文接通真实项目；仍保持显式 Preview，是因为完整
-第三方组件清单、三平台原生包和人工可访问性门禁尚未完成，而不是缺少产品路由。
-需要恢复当前生产界面时使用：
+已通过同一个共享 Core 上下文接通真实项目。JSON/CSV 与完整评分 payload
+始终是权威事实，图形界面不会转换或另存一套项目数据。
 
-```bash
-python easyqc.py --ui tk
-```
-
-该切换不转换项目文件；JSON/CSV 与完整旧版评分 payload 始终是权威事实。
-Qt 在 Table、QC、配置、打包及真机验证全部通过前不会成为默认入口。
-
-Linux 使用 Qt Preview 或构建 Qt 包前，Ubuntu/Debian 需要：
+Linux 使用 Qt 或构建 Qt 包前，Ubuntu/Debian 需要：
 
 ```bash
 sudo apt install libxcb-cursor0

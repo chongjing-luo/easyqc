@@ -128,7 +128,7 @@ check_environment() {
     
     # 检查关键依赖是否已安装
     echo "检查关键依赖..."
-    if ! python -c "import pandas, numpy, tkinter; from PySide6.QtWidgets import QApplication" >/dev/null 2>&1; then
+    if ! python -c "import pandas, numpy; from PySide6.QtWidgets import QApplication" >/dev/null 2>&1; then
         echo "关键依赖缺失，需要重新安装"
         return 1
     fi
@@ -271,13 +271,6 @@ verify_installation() {
     
     VENV_PATH="$ENV_DIR"
     source "$VENV_PATH/bin/activate"
-    
-    # 验证tkinter
-    echo "验证tkinter..."
-    if ! python -c "import tkinter; print('✓ tkinter 可用')"; then
-        echo "错误：tkinter 不可用，请安装系统 tkinter 包后重试"
-        return 1
-    fi
     
     # 验证主要依赖
     echo "验证主要依赖..."

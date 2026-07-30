@@ -1,4 +1,4 @@
-"""A lightweight, localized startup surface for the Qt preview."""
+"""A lightweight, localized startup surface for the Qt product."""
 
 from __future__ import annotations
 

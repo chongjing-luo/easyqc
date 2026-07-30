@@ -591,6 +591,7 @@ class ProjectContextService:
         module_name: str,
         initial_easyqcid: str,
         navigation_ids: tuple[str, ...] | None = None,
+        rater_override: str | None = None,
     ) -> QcWorkflowService:
         """Create one workflow from a validated snapshot and ordered identity queue."""
 
@@ -599,9 +600,18 @@ class ProjectContextService:
             module_key = validate_module_name(module_name)
         except RatingIdentityError as exc:
             raise ProjectContextError(str(exc)) from exc
-        module = next((item for item in snapshot.modules if item.name == module_key), None)
-        if module is None:
+        configured_module = next(
+            (item for item in snapshot.modules if item.name == module_key),
+            None,
+        )
+        if configured_module is None:
             raise ProjectContextError(f"Unknown QC module in current project: {module_name}")
+        module = deepcopy(configured_module)
+        if rater_override is not None:
+            try:
+                module.rater = validate_rater(rater_override)
+            except RatingIdentityError as exc:
+                raise ProjectContextError(str(exc)) from exc
 
         source_ids = tuple(
             self._normalize_identity(value) for value in snapshot.subjects["easyqcid"]

@@ -1,4 +1,4 @@
-"""Runtime localization for the Qt preview without touching business data."""
+"""Runtime localization for the Qt product without touching business data."""
 
 from __future__ import annotations
 
@@ -648,7 +648,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
         "The module import task returned an invalid module list."
     ),
     "质控结果刷新请求未启动": "The QC-results refresh did not start.",
-    "Qt 预览模式不能打开质控": "Qt preview mode cannot start QC.",
+    "当前只读表格不能打开质控": "This read-only table cannot start QC.",
     "当前状态无法启动质控": "QC cannot start in the current state.",
     "当前质控控制器已关闭": "The current QC controller is closed.",
     "启动失败：当前界面无法启动质控": (

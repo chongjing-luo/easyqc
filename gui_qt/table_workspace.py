@@ -1976,7 +1976,7 @@ class QtTableWorkspace(QWidget):
             self._set_error(str(exc))
             return False
         if self.on_open_qc is None:
-            self._set_error("Qt 预览模式不能打开质控")
+            self._set_error("当前只读表格不能打开质控")
             return False
         self._set_error("")
         self.on_open_qc(identity)

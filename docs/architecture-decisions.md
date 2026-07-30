@@ -8,8 +8,8 @@
 
 | ADR | 决策 | 当前状态 | 结果 |
 |-----|------|----------|------|
-| 001 | GUI 框架 | 已采纳（已更新） | PySide6/Qt Widgets 为目标；tkinter 在发布门禁完成前保持默认和回滚能力 |
-| 002 | 状态管理 | 部分采纳，迁移中 | 引入 `core/` service、`models/` 和 `LegacyGUIStateAdapter`，仍保留少量 legacy fallback |
+| 001 | GUI 框架 | 已采纳（已完成） | PySide6/Qt Widgets 是唯一 GUI；旧 GUI 由 Git 标签保留，不在产品树保留回滚代码 |
+| 002 | 状态管理 | 已采纳 | `core/` services + `models/` + Qt presentation；无 GUI 状态兼容适配器 |
 | 003 | 用户代码执行 | 已被 ADR-013 取代 | 原 basename allowlist 与强制 `shell=False` 不再是当前产品边界 |
 | 004 | 存储后端 | 已采纳 | 继续 CSV/JSON，不引入数据库 |
 | 005 | 源码布局 | 已采纳 | `easyqc_back/` 为只读参照，`easyqc/` 为主线 |
@@ -25,10 +25,10 @@
 
 ## 关键约束
 
-- Qt 是目标 GUI；在真实 CI、原生安装/UI 和明确切换审批完成前，tkinter
-  继续作为默认入口和回滚适配器。
+- PySide6/Qt Widgets 是唯一 GUI，默认入口和 CLI 直达 QC 都使用同一套 Qt
+  presentation + Core services。
 - 日常入口是 `easyqc/`，不是 `easyqc_back/`。
-- `easyqc_back/` 只用于查旧逻辑、构建 characterization tests 和对比 legacy 输出。
+- `easyqc_back/` 只用于只读历史对照，不参与产品运行或测试依赖。
 - 项目数据继续使用 CSV/JSON 文件，保持人类可读和易备份。
 - 表格处理不恢复 SQL 执行引擎；内部使用类型化操作，用户通过 Filter/Sort/
   Columns 标准控件操作，不编辑 JSON。
@@ -43,15 +43,13 @@
 
 ---
 
-## 当前仍未完全收敛的边界
+## 当前仍需补充的跨平台证据
 
-- Qt 的 Table、QC、配置、后台任务、托管运行时和验证工具已经实现；完整回归
-  当前为 1,020 passed、4 个声明的受保护 fixture skip。
+- Qt 的 Table、QC、配置、后台任务、托管运行时和验证工具已经实现。
 - 100,000×300 混合类型基准已通过本机阈值，但该结果不代表 Windows/macOS
   原生性能。
-- 四个 GitHub-hosted 任务尚未真实运行；Ubuntu 图形桌面、Windows 11 VM 和
-  macOS 13+ arm64 原生 UI/安装证据仍待补充。
-- Qt 默认切换尚未批准；tkinter 删除尚未开始。
+- Ubuntu 图形桌面、Windows 11 和 macOS 13+ arm64 的真实查看器/人工 UI
+  验证仍需随发布环境补充；这不改变 Qt-only 产品边界。
 
 ---
 

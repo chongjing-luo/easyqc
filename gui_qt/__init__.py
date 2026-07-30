@@ -4,13 +4,15 @@ The package may depend on Core and Models. Core and Models must never import it.
 """
 
 from gui_qt.application import (
-    build_preview_window,
+    build_table_window,
     get_or_create_qapplication,
-    launch_qt_preview,
+    launch_qt,
+    launch_qt_qc,
 )
 
 __all__ = [
-    "build_preview_window",
+    "build_table_window",
     "get_or_create_qapplication",
-    "launch_qt_preview",
+    "launch_qt",
+    "launch_qt_qc",
 ]

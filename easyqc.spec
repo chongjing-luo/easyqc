@@ -49,11 +49,7 @@ elif _linux_cursor_input:
 
 # ============== hidden imports ==============
 hiddenimports = [
-    # --- tkinter 子模块 (PyInstaller 有时检测不到) ---
-    "tkinter", "tkinter.ttk", "tkinter.scrolledtext",
-    "tkinter.messagebox", "tkinter.filedialog", "tkinter.simpledialog",
-    "_tkinter",
-    # --- Qt Preview / future default GUI ---
+    # --- sole Qt GUI ---
     "PySide6", "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets",
     # --- pandas ---
     "pandas._libs.tslibs",
@@ -71,7 +67,6 @@ if _template.exists():
 excludes = [
     "tests", "test", "unittest", "pytest", "doctest",
     "setuptools", "pip", "wheel", "pkg_resources",
-    "tkinter.test", "tkinter.test.test_tkinter",
     "numpy.tests", "numpy.f2py",
     "pandas.tests",
     "lib2to3", "distutils", "ensurepip",
@@ -145,10 +140,5 @@ if _is_macos:
             "CFBundleDisplayName": "EasyQC",
             "CFBundleExecutable": APP_NAME,
             "NSHumanReadableCopyright": "MIT License. (c) 2024-2026 Chongjing Luo.",
-            "LSEnvironment": {
-                # tkinter 在 macOS 上可能需要 framework 路径
-                "TCL_LIBRARY": "/System/Library/Frameworks/Tcl.framework/Versions/Current",
-                "TK_LIBRARY": "/System/Library/Frameworks/Tk.framework/Versions/Current",
-            },
         },
     )

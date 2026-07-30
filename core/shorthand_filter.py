@@ -12,7 +12,7 @@ The output is a list of operation dicts consumed by TableTransformEngine.apply.
 The engine and ExpressionParser are NOT modified — this module only produces
 the same operation dicts the JSON path would, just from friendlier syntax.
 
-Layer: core. No tkinter, no GUI dependency.
+Layer: core. No GUI dependency.
 """
 
 from __future__ import annotations

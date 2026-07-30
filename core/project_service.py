@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 from types import MappingProxyType
-from typing import Any, Callable
+from typing import Any
 
 from core.event_bus import EventBus, Event, EventType
 from core.module_repository import (
@@ -56,9 +56,6 @@ class ProjectService:
         # Typed event bus (P1-C, AC-10). Created internally if not injected so
         # CLI/tests that do not supply one still work; GUI injects a shared bus.
         self.event_bus = event_bus or EventBus()
-        # Legacy string observers — bridged to the typed bus for transition.
-        # Deprecated; will be removed once GUI subscribes directly (P1-D/P2).
-        self._observers: list[Callable[[str], None]] = []
 
     @property
     def current_project(self) -> Project | None:
@@ -645,13 +642,7 @@ class ProjectService:
         if current != 3:
             raise ValueError("项目设置必须使用 schema_version 3")
 
-    def add_observer(self, callback: Callable[[str], None]) -> None:
-        """[DEPRECATED] Legacy string observer. Bridged to the typed EventBus
-        for transition. Prefer ``service.event_bus.subscribe(EventType.X, ...)``
-        directly (P1-D/P2 will retire this bridge)."""
-        self._observers.append(callback)
-
-    # Legacy string event name -> typed EventType. settings_saved is new.
+    # Internal service event name -> public typed EventType.
     _EVENT_TYPE_MAP = {
         "project_changed": EventType.PROJECT_CHANGED,
         "modules_changed": EventType.MODULES_CHANGED,
@@ -734,19 +725,12 @@ class ProjectService:
         FileUtils.safe_json_save(self.registry_path, self.registry.to_legacy_dict())
 
     def _notify(self, event: str, data: dict[str, Any] | None = None) -> None:
-        """Emit a typed Event AND fire legacy string observers (bridge).
+        """Emit one typed project event on the caller's thread."""
 
-        The legacy string observers are told the raw ``event`` name so existing
-        callers/tests keep working. The typed bus gets an ``Event`` with the
-        mapped EventType, source='ProjectService', and optional payload.
-        Unknown event names still notify legacy observers but do not emit a
-        typed event (defensive — should not happen in practice).
-        """
-        for callback in self._observers:
-            callback(event)
         event_type = self._EVENT_TYPE_MAP.get(event)
-        if event_type is not None:
-            self.event_bus.emit(Event(type=event_type, source="ProjectService", data=data))
+        if event_type is None:
+            raise ValueError(f"不支持的项目变更事件: {event}")
+        self.event_bus.emit(Event(type=event_type, source="ProjectService", data=data))
 
     def _require_current_project(self) -> None:
         if self.current is None:

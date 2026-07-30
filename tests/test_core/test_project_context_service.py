@@ -178,6 +178,40 @@ def test_qc_factory_uses_snapshot_order_directory_and_emits_rating_event(tmp_pat
     }
 
 
+def test_qc_factory_accepts_detached_cli_rater_override(tmp_path) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    project = _add_project(services, tmp_path, "SAMPLE")
+    snapshot = services.project_context_service.snapshot()
+
+    workflow = services.project_context_service.create_qc_workflow(
+        snapshot,
+        module_name="AnatQC",
+        rater_override="cli_rater",
+        initial_easyqcid="SUB002",
+    )
+
+    assert snapshot.modules[0].rater == "rater1"
+    assert workflow.current_module.rater == "cli_rater"
+    workflow.set_score("1", "Good")
+    saved = workflow.save()
+    assert saved.parent == project.rating_dir / "AnatQC" / "cli_rater"
+
+
+@pytest.mark.parametrize("rater", ["bad-rater", "", "名字"])
+def test_qc_factory_rejects_invalid_cli_rater_override(tmp_path, rater) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    _add_project(services, tmp_path, "SAMPLE")
+    snapshot = services.project_context_service.snapshot()
+
+    with pytest.raises(ProjectContextError):
+        services.project_context_service.create_qc_workflow(
+            snapshot,
+            module_name="AnatQC",
+            rater_override=rater,
+            initial_easyqcid="SUB001",
+        )
+
+
 def test_qc_factory_projects_existing_score_and_tag_summaries_for_exact_queue(
     tmp_path,
 ) -> None:

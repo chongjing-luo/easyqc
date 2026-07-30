@@ -362,17 +362,6 @@ def test_project_service_save_rejects_non_v3_schema(tmp_path) -> None:
     assert settings_path.read_bytes() == bytes_before
 
 
-def test_project_service_observer_receives_events(tmp_path) -> None:
-    service = ProjectService(tmp_path / "projects.json")
-    events = []
-    service.add_observer(events.append)
-
-    service.create("SAMPLE", tmp_path)
-    service.add_module("t1_qc", "T1 QC")
-
-    assert events == ["project_changed", "modules_changed"]
-
-
 def test_project_service_has_event_bus(tmp_path) -> None:
     """P1-C: ProjectService exposes a typed EventBus (AC-10)."""
     from core.event_bus import EventBus
@@ -435,19 +424,6 @@ def test_project_service_emits_settings_saved(tmp_path) -> None:
 
     assert len(received) == 1
     assert received[0].type is EventType.SETTINGS_SAVED
-
-
-def test_project_service_legacy_observer_still_works(tmp_path) -> None:
-    """P1-C: the deprecated add_observer API keeps working (transition bridge)
-    so existing callers/tests do not break until P2 retires it."""
-    service = ProjectService(tmp_path / "projects.json")
-    events: list[str] = []
-    service.add_observer(events.append)
-
-    service.create("SAMPLE", tmp_path)
-
-    # legacy string callback still fires (bridged to PROJECT_CHANGED)
-    assert events == ["project_changed"]
 
 
 def test_project_service_remove_only_updates_registry(tmp_path) -> None:

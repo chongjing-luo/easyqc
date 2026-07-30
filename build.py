@@ -220,20 +220,6 @@ def check_deps():
             error(f"缺少依赖: {pkg}。请先运行: pip install -r requirements.txt")
             sys.exit(1)
 
-def check_tkinter():
-    """验证 tkinter 模块可导入（不要求真实显示器——打包可在无头环境执行）"""
-    try:
-        import tkinter
-        info(f"✓ tkinter (Tk {tkinter.TkVersion})")
-    except ImportError:
-        if SYSTEM == "Linux":
-            error("tkinter 未安装。Ubuntu/Debian: sudo apt install python3-tk")
-        elif SYSTEM == "Darwin":
-            error("tkinter 未安装。请使用官方 Python（包含 tkinter），而非 Homebrew 版本。")
-        else:
-            error("tkinter 未安装。请确保 Python 包含 tkinter。")
-        sys.exit(1)
-
 def check_qt_platform_dependencies(
     cursor_runtime: VerifiedLinuxCursorRuntime | None = None,
 ) -> None:
@@ -3112,18 +3098,18 @@ def smoke_test(binary: Path) -> None:
         error(f"二进制 --help 验证失败: {e}")
         sys.exit(1)
 
-    preview_environment = {
+    offscreen_environment = {
         **os.environ,
         "DISPLAY": "",
         "QT_QPA_PLATFORM": "offscreen",
     }
-    preview_environment.pop("LD_LIBRARY_PATH", None)
-    preview_environment.pop("LD_PRELOAD", None)
-    preview_environment.pop("LD_AUDIT", None)
+    offscreen_environment.pop("LD_LIBRARY_PATH", None)
+    offscreen_environment.pop("LD_PRELOAD", None)
+    offscreen_environment.pop("LD_AUDIT", None)
     _expect_process_alive(
-        [str(binary), "--ui", "qt-preview"],
-        preview_environment,
-        "Qt Preview offscreen",
+        [str(binary)],
+        offscreen_environment,
+        "Qt offscreen",
     )
 
     if SYSTEM != "Linux":
@@ -3140,9 +3126,9 @@ def smoke_test(binary: Path) -> None:
     native_environment.pop("LD_PRELOAD", None)
     native_environment.pop("LD_AUDIT", None)
     _expect_process_alive(
-        [xvfb_run, "-a", str(binary), "--ui", "qt-preview"],
+        [xvfb_run, "-a", str(binary)],
         native_environment,
-        "Qt Preview native xcb",
+        "Qt native xcb",
     )
 
 # ---------------------------------------------------------------------------
@@ -3225,7 +3211,6 @@ def main(argv: list[str] | None = None):
     check_python()
     check_pyinstaller()
     check_deps()
-    check_tkinter()
 
     # 2. 清理
     if args.clean:
