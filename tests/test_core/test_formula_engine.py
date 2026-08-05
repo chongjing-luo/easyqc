@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -202,3 +203,50 @@ def test_evaluator_has_no_per_row_or_dynamic_code_execution_path() -> None:
         "exec(",
     ):
         assert forbidden not in source
+
+
+def test_random_formula_is_reproducible_prefix_stable_and_locally_seeded() -> None:
+    engine = FormulaEngine()
+    preview = pd.DataFrame(index=[3, 5, 8, 13, 21])
+    full = pd.DataFrame(index=range(100_000))
+    expected = [
+        0.4963776898696063,
+        0.45833075236414145,
+        0.13071530424120104,
+        0.8753057054212088,
+        0.9207502768943099,
+    ]
+    np.random.seed(314159)
+    expected_legacy_values = np.random.random(4)
+    np.random.seed(314159)
+
+    preview_result = engine.evaluate(preview, "RANDOM(20260806)")
+    full_result = engine.evaluate(full, "RANDOM(20260806)")
+    actual_legacy_values = np.random.random(4)
+
+    assert preview_result.values.tolist() == pytest.approx(expected)
+    assert full_result.values.iloc[:5].tolist() == pytest.approx(expected)
+    assert preview_result.values.index.tolist() == [3, 5, 8, 13, 21]
+    assert preview_result.values.dtype == np.dtype("float64")
+    assert preview_result.values.between(0.0, 1.0, inclusive="left").all()
+    assert not preview_result.has_errors
+    assert not full_result.has_errors
+    np.testing.assert_array_equal(actual_legacy_values, expected_legacy_values)
+
+
+@pytest.mark.parametrize(
+    "formula",
+    (
+        "RANDOM([a])",
+        "RANDOM(1.5)",
+        "RANDOM(-1)",
+        "RANDOM(TRUE)",
+        'RANDOM("1")',
+        "RANDOM(4294967296)",
+        "RANDOM()",
+        "RANDOM(1, 2)",
+    ),
+)
+def test_random_formula_rejects_invalid_seed_literals(formula: str) -> None:
+    with pytest.raises(FormulaValidationError, match="RANDOM"):
+        FormulaEngine().evaluate(pd.DataFrame({"a": [1, 2]}), formula)

@@ -6,6 +6,7 @@ import operator as scalar_operator
 from dataclasses import dataclass
 from typing import Final
 
+import numpy as np
 import pandas as pd
 
 from core.formula_parser import (
@@ -399,6 +400,8 @@ class FormulaEngine:
             raise FormulaValidationError(
                 f"函数 {name} 参数数量必须是 {expected}"
             )
+        if name == "RANDOM":
+            return self._random(node, frame)
         args = [self._evaluate_node(child, frame) for child in node.children]
         if name == "IF":
             return self._if(args)
@@ -439,6 +442,31 @@ class FormulaEngine:
         if name in {"PATHNAME", "PARENTPATH", "EXTENSION", "STEM"}:
             return self._path_function(name, args[0])
         raise FormulaValidationError(f"函数尚未实现: {name}")
+
+    @classmethod
+    def _random(
+        cls,
+        node: FormulaNode,
+        frame: pd.DataFrame,
+    ) -> FormulaEvaluation:
+        """Generate one deterministic row-aligned sequence from a local RNG."""
+
+        seed = cls._scalar_integer(
+            node.children[0],
+            "RANDOM",
+            "seed",
+            minimum=0,
+        )
+        if seed > 4_294_967_295:
+            raise FormulaValidationError(
+                "函数 RANDOM 的参数 seed 不能大于 4294967295"
+            )
+        values = pd.Series(
+            np.random.default_rng(seed).random(len(frame)),
+            index=frame.index,
+            dtype="float64",
+        )
+        return FormulaEvaluation(values, _blank_errors(frame.index))
 
     @staticmethod
     def _text_unary(

@@ -204,6 +204,15 @@ FORMULA_FUNCTION_CATALOG: Final = (
         "ROUND([number], 2)",
     ),
     _spec(
+        "RANDOM",
+        "numeric",
+        1,
+        "RANDOM(seed)",
+        "使用固定整数种子产生可复现的 0 到 1 随机数。",
+        "Generate reproducible values from 0 to 1 using a fixed integer seed.",
+        "RANDOM(20260806)",
+    ),
+    _spec(
         "STEM",
         "path",
         1,

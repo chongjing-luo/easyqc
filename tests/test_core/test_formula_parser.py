@@ -102,3 +102,29 @@ def test_first_throughput_rejects_unknown_column_without_mutating_source() -> No
     with pytest.raises(TableTransformError, match="未知列"):
         TableTransformEngine().derive_column_from_formula(source, request)
     assert source.columns.tolist() == ["site"]
+
+
+def test_first_throughput_materializes_seeded_random_column() -> None:
+    from core.table_transform import TableTransformEngine
+
+    source = pd.DataFrame(
+        {"easyqcid": ["case-1", "case-2", "case-3"]},
+        index=[11, 17, 23],
+    )
+    request = DerivedColumnFormula(
+        name="random_order",
+        expression="RANDOM(20260806)",
+    )
+
+    result = TableTransformEngine().derive_column_from_formula(source, request)
+
+    assert result is not source
+    assert source.columns.tolist() == ["easyqcid"]
+    assert result.index.tolist() == [11, 17, 23]
+    assert result["random_order"].tolist() == pytest.approx(
+        [
+            0.4963776898696063,
+            0.45833075236414145,
+            0.13071530424120104,
+        ]
+    )
