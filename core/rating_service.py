@@ -688,6 +688,113 @@ class RatingService:
             [self._rating_to_flat_record(rating, path) for rating, path in records]
         )
 
+    @staticmethod
+    def professional_long_results(long_df: pd.DataFrame) -> pd.DataFrame:
+        """Return a detached, display-safe projection of loaded rating facts.
+
+        The source is the raw flattened frame produced by
+        :meth:`rating_records_to_long_dataframe`. Only rating identity,
+        naturally numbered score/tag values, notes, and time cross this
+        boundary. The method performs no scan or persistence.
+        """
+
+        if not isinstance(long_df, pd.DataFrame):
+            raise TypeError("professional long results input must be a pandas DataFrame")
+
+        structural_columns = (
+            "easyqcid",
+            "module_name",
+            "rater",
+            "notes",
+            "time",
+        )
+        if long_df.empty:
+            return pd.DataFrame(
+                {
+                    column: pd.Series(dtype="string")
+                    for column in structural_columns
+                }
+            )
+
+        if long_df.columns.has_duplicates:
+            duplicates = long_df.columns[long_df.columns.duplicated()].tolist()
+            raise ValueError(f"评分长表包含重复列名: {duplicates}")
+
+        identity_columns = ("easyqcid", "module_name", "rater")
+        missing_identity = [
+            column for column in identity_columns if column not in long_df.columns
+        ]
+        if missing_identity:
+            raise ValueError(f"评分长表缺少身份列: {missing_identity}")
+
+        normalized_identity = long_df.loc[:, list(identity_columns)].apply(
+            lambda series: series.map(RatingService._normalize_long_identity)
+        )
+        for column in identity_columns:
+            if normalized_identity[column].eq("").any():
+                raise ValueError(f"评分长表身份列 {column} 为空")
+
+        duplicate_mask = normalized_identity.duplicated(
+            subset=list(identity_columns),
+            keep=False,
+        )
+        if duplicate_mask.any():
+            offenders = (
+                normalized_identity.loc[duplicate_mask, list(identity_columns)]
+                .drop_duplicates()
+                .agg("/".join, axis=1)
+                .tolist()
+            )
+            raise ValueError(
+                "重复的评分身份(easyqcid/module_name/rater): "
+                f"{offenders[:5]}"
+            )
+
+        numbered_pattern = re.compile(r"^(score|tag)(\d+)$")
+
+        def numbered_columns(prefix: str) -> list[str]:
+            columns: list[tuple[int, str]] = []
+            for column in long_df.columns:
+                if not isinstance(column, str):
+                    continue
+                match = numbered_pattern.fullmatch(column)
+                if match is not None and match.group(1) == prefix:
+                    columns.append((int(match.group(2)), column))
+            return [column for _, column in sorted(columns)]
+
+        score_columns = numbered_columns("score")
+        tag_columns = numbered_columns("tag")
+        selected = [
+            *identity_columns,
+            *score_columns,
+            *tag_columns,
+            *(column for column in ("notes", "time") if column in long_df.columns),
+        ]
+        result = long_df.loc[:, selected].copy(deep=True)
+        result.loc[:, list(identity_columns)] = normalized_identity
+        for column in ("notes", "time"):
+            if column not in result.columns:
+                result[column] = pd.Series(pd.NA, index=result.index, dtype="string")
+        return result.loc[
+            :,
+            [
+                *identity_columns,
+                *score_columns,
+                *tag_columns,
+                "notes",
+                "time",
+            ],
+        ].copy(deep=True)
+
+    @staticmethod
+    def _normalize_long_identity(value: Any) -> str:
+        try:
+            if bool(pd.isna(value)):
+                return ""
+        except (TypeError, ValueError):
+            pass
+        return str(value).strip()
+
     def long_table_to_wide(self, long_df: pd.DataFrame) -> pd.DataFrame:
         if long_df.empty:
             return pd.DataFrame()

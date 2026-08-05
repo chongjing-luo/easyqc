@@ -290,6 +290,96 @@ def test_batch_qc_identity_validation_preserves_order_and_errors() -> None:
         )
 
 
+def test_validate_row_key_accepts_unique_composite_and_normalizes_values() -> None:
+    source = pd.DataFrame(
+        {
+            "easyqcid": [" SUB001 ", "SUB001", "SUB001"],
+            "module_name": ["Anat", "Anat", "Dwi"],
+            "rater": ["r1", "r2", "r1"],
+            "score1": ["good", "fair", "pass"],
+        }
+    )
+    service = TableViewService(source)
+    result = service.apply_state(
+        service.default_state().with_sort_rules((SortRule("rater", ascending=False),))
+    )
+
+    assert service.validate_row_key(
+        result,
+        1,
+        ("easyqcid", "module_name", "rater"),
+    ) == ("SUB001", "Anat", "r1")
+
+
+@pytest.mark.parametrize(
+    "key_columns, message",
+    [
+        ((), "不能为空"),
+        (("easyqcid", "easyqcid"), "不能重复"),
+        (("easyqcid", "missing"), "缺少.*missing"),
+    ],
+)
+def test_validate_row_key_rejects_invalid_key_columns(
+    key_columns: tuple[str, ...],
+    message: str,
+) -> None:
+    service = TableViewService(_source())
+    result = service.apply_state(service.default_state())
+
+    with pytest.raises(QcIdentityError, match=message):
+        service.validate_row_key(result, 0, key_columns)
+
+
+def test_validate_row_key_rejects_blank_or_duplicate_source_tuple() -> None:
+    blank_service = TableViewService(
+        pd.DataFrame(
+            {
+                "easyqcid": ["SUB001"],
+                "module_name": ["Anat"],
+                "rater": [None],
+            }
+        )
+    )
+    blank_result = blank_service.apply_state(blank_service.default_state())
+    with pytest.raises(QcIdentityError, match="rater.*为空"):
+        blank_service.validate_row_key(
+            blank_result,
+            0,
+            ("easyqcid", "module_name", "rater"),
+        )
+
+    duplicate_service = TableViewService(
+        pd.DataFrame(
+            {
+                "easyqcid": ["SUB001", " SUB001 "],
+                "module_name": ["Anat", "Anat"],
+                "rater": ["r1", "r1"],
+            }
+        )
+    )
+    duplicate_result = duplicate_service.apply_state(
+        duplicate_service.default_state()
+    )
+    with pytest.raises(QcIdentityError, match="不唯一"):
+        duplicate_service.validate_row_key(
+            duplicate_result,
+            1,
+            ("easyqcid", "module_name", "rater"),
+        )
+
+
+def test_validate_row_key_rejects_invalid_position_and_stale_result() -> None:
+    service = TableViewService(_source())
+    result = service.apply_state(service.default_state())
+
+    with pytest.raises(QcIdentityError, match="位置已失效"):
+        service.validate_row_key(result, result.matched_total, ("easyqcid",))
+
+    stale_result = replace(result, source_total=result.source_total + 1)
+    with pytest.raises(TableViewError, match="不匹配"):
+        service.validate_row_key(stale_result, 0, ("easyqcid",))
+
+
 def test_source_dataframe_is_not_mutated_by_view_operations() -> None:
     source = _source()
     original = source.copy(deep=True)

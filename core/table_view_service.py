@@ -341,6 +341,65 @@ class TableViewService:
             )
         return identities
 
+    def validate_row_key(
+        self,
+        result: TableViewResult,
+        result_position: int,
+        key_columns: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        """Validate and return one exact globally unique source-row key.
+
+        ``key_columns`` describes one identity contract, such as
+        ``("easyqcid",)`` for wide data or
+        ``("easyqcid", "module_name", "rater")`` for long ratings. Values
+        are whitespace-normalized for comparison and return. No source or
+        result state is mutated.
+        """
+
+        self._validate_result(result)
+        if not isinstance(key_columns, tuple) or not key_columns:
+            raise QcIdentityError("QC 行键列不能为空，且必须使用元组")
+        if any(not isinstance(column, str) or not column for column in key_columns):
+            raise QcIdentityError("QC 行键列名必须是非空字符串")
+        if len(set(key_columns)) != len(key_columns):
+            raise QcIdentityError("QC 行键列不能重复")
+        missing = [column for column in key_columns if column not in self._source.columns]
+        if missing:
+            raise QcIdentityError(f"表格缺少 QC 行键列: {missing}")
+
+        if len(result.source_positions) != result.matched_total:
+            raise TableViewError("表格结果与当前源表不匹配，请重新应用视图")
+        if result_position < 0 or result_position >= result.matched_total:
+            raise QcIdentityError("所选记录位置已失效，请重新选择")
+
+        source_positions = np.asarray(result.source_positions)
+        if (
+            source_positions.ndim != 1
+            or len(np.unique(source_positions)) != len(source_positions)
+            or np.any(source_positions < 0)
+            or np.any(source_positions >= len(self._source))
+        ):
+            raise TableViewError("表格结果与当前源表不匹配，请重新应用视图")
+
+        normalized_columns = tuple(
+            self._normalized_source_identities(column) for column in key_columns
+        )
+        source_keys = tuple(zip(*normalized_columns))
+        for column_index, column in enumerate(key_columns):
+            if any(not key[column_index] for key in source_keys):
+                raise QcIdentityError(f"源表的 QC 行键列 {column} 为空")
+
+        counts = Counter(source_keys)
+        duplicate = next((key for key in source_keys if counts[key] != 1), None)
+        if duplicate is not None:
+            joined = "/".join(duplicate)
+            raise QcIdentityError(
+                f"QC 行键 {joined!r} 在源表中不唯一，无法安全打开 QC"
+            )
+
+        source_position = int(source_positions[result_position])
+        return source_keys[source_position]
+
     def _validate_result(self, result: TableViewResult) -> None:
         if not isinstance(result, TableViewResult):
             raise TypeError("result must be a TableViewResult")

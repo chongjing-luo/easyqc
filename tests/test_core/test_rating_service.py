@@ -300,3 +300,152 @@ def test_long_table_to_wide_allows_distinct_raters_same_subject() -> None:
 
     assert "Anat.r1.score1" in wide.columns
     assert "Anat.r2.score1" in wide.columns
+
+
+def test_professional_long_results_allowlists_orders_and_detaches() -> None:
+    service = RatingService(_project(Path("/tmp/nonexistent")))
+    source = pd.DataFrame(
+        {
+            "tag10": [True, False],
+            "score10": ["10", None],
+            "easyqcid": ["SUB001", "SUB002"],
+            "score2label": ["must not leak", "must not leak"],
+            "score2": ["2", "3"],
+            "tag2label": ["must not leak", "must not leak"],
+            "tag2": [False, True],
+            "module_name": ["Anat", "Dwi"],
+            "rater": ["r1", "r2"],
+            "notes": ["review", None],
+            "time": ["2026-08-06 01:00:00", None],
+            "filename": ["rating-a.json", "rating-b.json"],
+            "filepath": ["/private/a.json", "/private/b.json"],
+            "schema_version": [3, 3],
+            "code": ["mrview $image", "freeview $image"],
+            "code_exe": ["mrview /private/image", "freeview /private/image"],
+            "label": ["Structural", "Diffusion"],
+            "module_payload": [{"private": "a"}, {"private": "b"}],
+        },
+        index=[17, 4],
+    )
+    original = source.copy(deep=True)
+
+    result = service.professional_long_results(source)
+
+    assert result.columns.tolist() == [
+        "easyqcid",
+        "module_name",
+        "rater",
+        "score2",
+        "score10",
+        "tag2",
+        "tag10",
+        "notes",
+        "time",
+    ]
+    assert result.index.tolist() == [17, 4]
+    assert pd.isna(result.loc[4, "score10"])
+    assert not {
+        "score2label",
+        "tag2label",
+        "filename",
+        "filepath",
+        "schema_version",
+        "code",
+        "code_exe",
+        "label",
+        "module_payload",
+    }.intersection(result.columns)
+    result.loc[17, "score2"] = "changed"
+    assert source.loc[17, "score2"] == "2"
+    pd.testing.assert_frame_equal(source, original)
+
+
+def test_professional_long_results_empty_has_typed_identity_fact_columns() -> None:
+    service = RatingService(_project(Path("/tmp/nonexistent")))
+
+    result = service.professional_long_results(pd.DataFrame())
+
+    assert result.empty
+    assert result.columns.tolist() == [
+        "easyqcid",
+        "module_name",
+        "rater",
+        "notes",
+        "time",
+    ]
+    assert all(isinstance(result[column].dtype, pd.StringDtype) for column in result)
+
+
+def test_professional_long_results_accepts_repeated_component_with_unique_identity() -> None:
+    service = RatingService(_project(Path("/tmp/nonexistent")))
+    source = pd.DataFrame(
+        {
+            "easyqcid": ["SUB001", "SUB001", "SUB001"],
+            "module_name": ["Anat", "Anat", "Dwi"],
+            "rater": ["r1", "r2", "r1"],
+            "score1": ["good", "fair", "pass"],
+        }
+    )
+
+    result = service.professional_long_results(source)
+
+    assert result[["easyqcid", "module_name", "rater"]].to_dict("records") == [
+        {"easyqcid": "SUB001", "module_name": "Anat", "rater": "r1"},
+        {"easyqcid": "SUB001", "module_name": "Anat", "rater": "r2"},
+        {"easyqcid": "SUB001", "module_name": "Dwi", "rater": "r1"},
+    ]
+    assert result["notes"].isna().all()
+    assert result["time"].isna().all()
+
+
+@pytest.mark.parametrize(
+    "source, message",
+    [
+        (
+            pd.DataFrame(
+                {"module_name": ["Anat"], "rater": ["r1"], "score1": ["good"]}
+            ),
+            "easyqcid",
+        ),
+        (
+            pd.DataFrame(
+                {
+                    "easyqcid": ["SUB001"],
+                    "module_name": ["  "],
+                    "rater": ["r1"],
+                }
+            ),
+            "module_name.*为空",
+        ),
+    ],
+)
+def test_professional_long_results_rejects_missing_or_blank_identity(
+    source: pd.DataFrame,
+    message: str,
+) -> None:
+    service = RatingService(_project(Path("/tmp/nonexistent")))
+
+    with pytest.raises(ValueError, match=message):
+        service.professional_long_results(source)
+
+
+def test_professional_long_results_rejects_duplicate_composite_identity() -> None:
+    service = RatingService(_project(Path("/tmp/nonexistent")))
+    source = pd.DataFrame(
+        {
+            "easyqcid": [" SUB001 ", "SUB001"],
+            "module_name": ["Anat", "Anat"],
+            "rater": ["r1", "r1"],
+            "score1": ["good", "poor"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="SUB001.*Anat.*r1|重复"):
+        service.professional_long_results(source)
+
+
+def test_professional_long_results_rejects_non_dataframe_input() -> None:
+    service = RatingService(_project(Path("/tmp/nonexistent")))
+
+    with pytest.raises(TypeError, match="DataFrame"):
+        service.professional_long_results([])  # type: ignore[arg-type]
