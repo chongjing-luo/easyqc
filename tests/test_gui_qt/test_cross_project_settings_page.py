@@ -149,6 +149,36 @@ def test_cross_project_page_module_editor_preserves_hidden_payload(
         "Motion",
         "质控模块",
     )
+    scores_layout = page.module_editor.scores_group.layout()
+    assert scores_layout.itemAt(0).widget() is page.module_editor.score_table
+    action_layout = scores_layout.itemAt(1).layout()
+    assert [action_layout.itemAt(index).widget() for index in range(4)] == [
+        page.module_editor.add_score_button,
+        page.module_editor.remove_score_button,
+        page.module_editor.move_score_up_button,
+        page.module_editor.move_score_down_button,
+    ]
+    assert not page.module_editor.move_score_up_button.isEnabled()
+    assert page.module_editor.move_score_down_button.isEnabled()
+
+    page.module_editor.score_table.setCurrentCell(1, 1)
+    qtbot.mouseClick(page.module_editor.move_score_up_button, Qt.LeftButton)
+    assert page.module_editor.score_table.currentRow() == 0
+    assert page.module_editor.score_table.currentColumn() == 1
+    candidate = page.module_editor.candidate()
+    assert list(candidate.scores) == ["1", "2"]
+    assert [score.label for score in candidate.scores.values()] == [
+        "Artifact",
+        "Quality",
+    ]
+    stored_score_labels = [
+        score.label
+        for score in templates.module(original.module_id).module.scores.values()
+    ]
+    assert stored_score_labels == [
+        "Quality",
+        "Artifact",
+    ]
     two_rows_height = page.module_editor.score_table.height()
     page.module_editor.clear()
     assert page.module_editor.score_table.rowCount() == 1
@@ -182,3 +212,35 @@ def test_cross_project_page_module_editor_preserves_hidden_payload(
     assert templates.modules().records == ()
     assert page.module_list.count() == 0
     assert page.module_empty_label.isVisible()
+
+
+def test_cross_project_score_move_actions_retranslate_and_refresh_state(
+    qtbot,
+    tmp_path,
+) -> None:
+    page, _templates, _executor, language = _page(qtbot, tmp_path)
+    editor = page.module_editor
+
+    assert editor.move_score_up_button.text() == "上移评分项"
+    assert editor.move_score_down_button.text() == "下移评分项"
+    assert editor.move_score_up_button.accessibleName() == "上移评分项"
+    assert editor.move_score_up_button.toolTip() == "上移评分项"
+    assert not editor.move_score_up_button.isEnabled()
+    assert not editor.move_score_down_button.isEnabled()
+
+    qtbot.mouseClick(editor.add_score_button, Qt.LeftButton)
+    assert editor.move_score_up_button.isEnabled()
+    assert not editor.move_score_down_button.isEnabled()
+    qtbot.mouseClick(editor.remove_score_button, Qt.LeftButton)
+    assert not editor.move_score_up_button.isEnabled()
+    assert not editor.move_score_down_button.isEnabled()
+    qtbot.mouseClick(editor.add_score_button, Qt.LeftButton)
+    editor.discard()
+    assert not editor.move_score_up_button.isEnabled()
+    assert not editor.move_score_down_button.isEnabled()
+
+    language.set_language("en")
+    assert editor.move_score_up_button.text() == "Move score up"
+    assert editor.move_score_down_button.text() == "Move score down"
+    assert editor.move_score_down_button.accessibleName() == "Move score down"
+    assert editor.move_score_down_button.toolTip() == "Move score down"

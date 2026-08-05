@@ -63,10 +63,14 @@ from gui_qt.i18n import (
     protect_user_text,
     translate_ui_text,
 )
+from gui_qt.module_score_table import (
+    move_score_row,
+    sync_score_table_height,
+    update_score_move_actions,
+)
 from gui_qt.module_tag_editor import (
     ModuleTagEditor,
     normalize_stored_tag_labels,
-    sync_score_table_height,
 )
 from gui_qt.qc_list_import_page import QtQcListImportPage
 from gui_qt.read_only_table_preview_dialog import ReadOnlyTablePreviewDialog
@@ -642,10 +646,6 @@ class QtProjectConfigWorkspace(QWidget):
         self.score_table.horizontalHeader().setStretchLastSection(True)
         editor.addWidget(QLabel("评分项", editor_widget))
         editor.addWidget(self.score_table)
-        self.module_tags_title = QLabel("标签", editor_widget)
-        editor.addWidget(self.module_tags_title)
-        self.tag_editor = ModuleTagEditor(self.language, editor_widget)
-        editor.addWidget(self.tag_editor)
 
         self.module_row_actions_toolbar = QToolBar("模块条目操作", editor_widget)
         self.module_row_actions_toolbar.setObjectName("configModuleRowActions")
@@ -667,7 +667,34 @@ class QtProjectConfigWorkspace(QWidget):
             QKeySequence(),
             self._remove_score_row,
         )
+        (
+            self.move_score_up_action,
+            self.move_score_up_button,
+        ) = self._add_toolbar_action(
+            self.module_row_actions_toolbar,
+            self.language.tr("cross.move_score_up"),
+            QKeySequence(),
+            lambda: self._move_score_row(-1),
+        )
+        (
+            self.move_score_down_action,
+            self.move_score_down_button,
+        ) = self._add_toolbar_action(
+            self.module_row_actions_toolbar,
+            self.language.tr("cross.move_score_down"),
+            QKeySequence(),
+            lambda: self._move_score_row(1),
+        )
         editor.addWidget(self.module_row_actions_toolbar)
+        self.score_table.itemSelectionChanged.connect(
+            self._update_score_move_actions
+        )
+        self._update_score_move_actions()
+
+        self.module_tags_title = QLabel("标签", editor_widget)
+        editor.addWidget(self.module_tags_title)
+        self.tag_editor = ModuleTagEditor(self.language, editor_widget)
+        editor.addWidget(self.tag_editor)
 
         self.module_viewer_section = QFrame(editor_widget)
         self.module_viewer_section.setObjectName("moduleViewerSection")
@@ -879,8 +906,26 @@ class QtProjectConfigWorkspace(QWidget):
         self.constant_from_template_button.setAccessibleName(add_from_template)
         self.module_from_template_action.setText(add_from_template)
         self.module_from_template_button.setAccessibleName(add_from_template)
+        for action, button, key in (
+            (
+                self.move_score_up_action,
+                self.move_score_up_button,
+                "cross.move_score_up",
+            ),
+            (
+                self.move_score_down_action,
+                self.move_score_down_button,
+                "cross.move_score_down",
+            ),
+        ):
+            text = self.language.tr(key)
+            action.setText(text)
+            action.setToolTip(text)
+            button.setAccessibleName(text)
+            button.setToolTip(text)
         self.tag_editor.retranslate_ui()
         sync_score_table_height(self.score_table)
+        self._update_score_move_actions()
         self._preview_project_item(self.project_list.currentItem())
         self._retranslate_module_rows()
 
@@ -1814,6 +1859,7 @@ class QtProjectConfigWorkspace(QWidget):
             self.score_table.setItem(row, 0, label_item)
             self.score_table.setItem(row, 1, values_item)
         sync_score_table_height(self.score_table)
+        self._update_score_move_actions()
         self.tag_editor.set_tags(
             normalize_stored_tag_labels(
                 tag.label for tag in module.tags.values()
@@ -1837,6 +1883,7 @@ class QtProjectConfigWorkspace(QWidget):
         self.score_table.setItem(0, 0, QTableWidgetItem("质量"))
         self.score_table.setItem(0, 1, QTableWidgetItem("差,一般,好"))
         sync_score_table_height(self.score_table)
+        self._update_score_move_actions()
         self.tag_editor.set_tags(("需要复核",))
         if (
             self._pending_module_filter is not None
@@ -1879,6 +1926,7 @@ class QtProjectConfigWorkspace(QWidget):
             self.score_table.setItem(row, column, QTableWidgetItem(value))
         self.score_table.setCurrentCell(row, 0)
         sync_score_table_height(self.score_table)
+        self._update_score_move_actions()
 
     def _remove_score_row(self) -> None:
         """Remove the selected score draft while retaining one starter row."""
@@ -1887,6 +1935,18 @@ class QtProjectConfigWorkspace(QWidget):
         if row >= 0 and self.score_table.rowCount() > 1:
             self.score_table.removeRow(row)
             sync_score_table_height(self.score_table)
+        self._update_score_move_actions()
+
+    def _move_score_row(self, delta: int) -> None:
+        move_score_row(self.score_table, delta)
+        self._update_score_move_actions()
+
+    def _update_score_move_actions(self) -> None:
+        update_score_move_actions(
+            self.score_table,
+            self.move_score_up_action,
+            self.move_score_down_action,
+        )
 
     def add_module(self, name: str, label: str) -> bool:
         try:

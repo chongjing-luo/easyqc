@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QTableWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -276,30 +275,7 @@ def normalize_stored_tag_labels(
     return tuple("" if label is None else label for label in stored)
 
 
-def sync_score_table_height(table: QTableWidget) -> int:
-    """Apply native header/row/frame height to one score table and return it."""
-
-    if not isinstance(table, QTableWidget):
-        raise TypeError("score table height requires QTableWidget")
-    table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-    table.resizeRowsToContents()
-    header_height = table.horizontalHeader().height()
-    if header_height <= 0:
-        header_height = table.horizontalHeader().sizeHint().height()
-    height = (
-        header_height
-        + sum(table.rowHeight(row) for row in range(table.rowCount()))
-        + table.frameWidth() * 2
-    )
-    table.setFixedHeight(height)
-    policy = table.sizePolicy()
-    policy.setVerticalPolicy(QSizePolicy.Fixed)
-    table.setSizePolicy(policy)
-    return height
-
-
 __all__ = [
     "ModuleTagEditor",
     "normalize_stored_tag_labels",
-    "sync_score_table_height",
 ]

@@ -141,6 +141,14 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
         "en": "Add from template",
     },
     "cross.add_score": {"zh_CN": "添加评分项", "en": "Add score"},
+    "cross.move_score_down": {
+        "zh_CN": "下移评分项",
+        "en": "Move score down",
+    },
+    "cross.move_score_up": {
+        "zh_CN": "上移评分项",
+        "en": "Move score up",
+    },
     "cross.add_tag": {"zh_CN": "添加标签", "en": "Add tag"},
     "cross.cancel": {"zh_CN": "取消", "en": "Cancel"},
     "cross.copy_constant_title": {

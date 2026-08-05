@@ -22,10 +22,14 @@ from PySide6.QtWidgets import (
 )
 
 from gui_qt.i18n import LanguageController
+from gui_qt.module_score_table import (
+    move_score_row,
+    sync_score_table_height,
+    update_score_move_actions,
+)
 from gui_qt.module_tag_editor import (
     ModuleTagEditor,
     normalize_stored_tag_labels,
-    sync_score_table_height,
 )
 from gui_qt.theme import (
     CONTROL_SPACING,
@@ -90,8 +94,12 @@ class QtModuleTemplateEditor(QWidget):
         score_actions = QHBoxLayout()
         self.add_score_button = QPushButton(self.scores_group)
         self.remove_score_button = QPushButton(self.scores_group)
+        self.move_score_up_button = QPushButton(self.scores_group)
+        self.move_score_down_button = QPushButton(self.scores_group)
         score_actions.addWidget(self.add_score_button)
         score_actions.addWidget(self.remove_score_button)
+        score_actions.addWidget(self.move_score_up_button)
+        score_actions.addWidget(self.move_score_down_button)
         score_actions.addStretch(1)
         scores_layout.addLayout(score_actions)
         layout.addWidget(self.scores_group)
@@ -138,6 +146,15 @@ class QtModuleTemplateEditor(QWidget):
             lambda: self._append_score_row(("Quality", "Poor,Fair,Good"))
         )
         self.remove_score_button.clicked.connect(self._remove_current_score)
+        self.move_score_up_button.clicked.connect(
+            lambda: self._move_score_row(-1)
+        )
+        self.move_score_down_button.clicked.connect(
+            lambda: self._move_score_row(1)
+        )
+        self.score_table.itemSelectionChanged.connect(
+            self._update_score_move_actions
+        )
         self.discard_button.clicked.connect(self.discard)
         self.save_button.clicked.connect(self._request_save)
 
@@ -160,12 +177,25 @@ class QtModuleTemplateEditor(QWidget):
 
         self._append_row(self.score_table, values)
         sync_score_table_height(self.score_table)
+        self._update_score_move_actions()
 
     def _remove_current_score(self) -> None:
         """Remove the selected score row and resynchronize native height."""
 
         self._remove_current_row(self.score_table)
         sync_score_table_height(self.score_table)
+        self._update_score_move_actions()
+
+    def _move_score_row(self, delta: int) -> None:
+        move_score_row(self.score_table, delta)
+        self._update_score_move_actions()
+
+    def _update_score_move_actions(self) -> None:
+        update_score_move_actions(
+            self.score_table,
+            self.move_score_up_button,
+            self.move_score_down_button,
+        )
 
     def clear(self) -> None:
         """Install one blank baseline for creating a template."""
@@ -194,6 +224,7 @@ class QtModuleTemplateEditor(QWidget):
             self.score_table.setCurrentCell(0, 0)
             self.score_table.scrollToTop()
         sync_score_table_height(self.score_table)
+        self._update_score_move_actions()
         self.tag_editor.set_tags(
             normalize_stored_tag_labels(
                 tag.label for tag in module.tags.values()
@@ -273,6 +304,14 @@ class QtModuleTemplateEditor(QWidget):
         )
         self.add_score_button.setText(tr("cross.add_score"))
         self.remove_score_button.setText(tr("cross.remove_score"))
+        for button, key in (
+            (self.move_score_up_button, "cross.move_score_up"),
+            (self.move_score_down_button, "cross.move_score_down"),
+        ):
+            text = tr(key)
+            button.setText(text)
+            button.setAccessibleName(text)
+            button.setToolTip(text)
         self.tags_group.setTitle(tr("cross.tags"))
         self.tag_editor.retranslate_ui()
         self.viewer_group.setTitle(tr("cross.viewer"))
@@ -282,6 +321,7 @@ class QtModuleTemplateEditor(QWidget):
         self.save_button.setText(tr("cross.save_module"))
         self.setAccessibleName(tr("cross.module_editor_accessible"))
         sync_score_table_height(self.score_table)
+        self._update_score_move_actions()
 
 
 __all__ = ["QtModuleTemplateEditor"]

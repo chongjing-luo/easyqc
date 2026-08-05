@@ -5,8 +5,6 @@ from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
     QInputDialog,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
     QToolButton,
 )
 
@@ -14,7 +12,6 @@ from gui_qt.i18n import LanguageController
 from gui_qt.module_tag_editor import (
     ModuleTagEditor,
     normalize_stored_tag_labels,
-    sync_score_table_height,
 )
 
 
@@ -147,33 +144,3 @@ def test_language_switch_translates_chrome_without_rewriting_tag_text(
         "质控模块",
     ]
     assert _tag_remove_buttons(editor)[0].accessibleName() == "Remove tag 质控模块"
-
-
-def test_score_table_height_uses_header_rows_and_frame_and_tracks_row_count(
-    qtbot,
-) -> None:
-    table = QTableWidget(1, 2)
-    qtbot.addWidget(table)
-    table.setItem(0, 0, QTableWidgetItem("Quality"))
-    table.setItem(0, 1, QTableWidgetItem("Poor,Fair,Good"))
-    table.show()
-
-    one_row_height = sync_score_table_height(table)
-    expected = (
-        table.horizontalHeader().height()
-        + sum(table.rowHeight(row) for row in range(table.rowCount()))
-        + table.frameWidth() * 2
-    )
-    assert one_row_height == expected
-    assert table.minimumHeight() == one_row_height
-    assert table.maximumHeight() == one_row_height
-    assert table.verticalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
-
-    table.insertRow(1)
-    table.setItem(1, 0, QTableWidgetItem("Artifact"))
-    table.setItem(1, 1, QTableWidgetItem("None,Mild,Severe"))
-    two_row_height = sync_score_table_height(table)
-    assert two_row_height > one_row_height
-
-    table.removeRow(1)
-    assert sync_score_table_height(table) == one_row_height

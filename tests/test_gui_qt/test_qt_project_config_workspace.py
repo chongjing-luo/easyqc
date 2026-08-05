@@ -431,6 +431,42 @@ def test_project_module_tags_save_duplicate_order_and_scores_resize_with_rows(
     workspace._refresh_modules(module.name)
 
     assert workspace.tag_editor.tags() == ("重复标签", "重复标签", "质控模块")
+    editor_layout = workspace.module_editor_scroll.widget().layout()
+    assert editor_layout.indexOf(workspace.score_table) < editor_layout.indexOf(
+        workspace.module_row_actions_toolbar
+    )
+    assert editor_layout.indexOf(
+        workspace.module_row_actions_toolbar
+    ) < editor_layout.indexOf(workspace.module_tags_title)
+    score_action_texts = [
+        action.text()
+        for action in workspace.module_row_actions_toolbar.actions()
+    ]
+    assert score_action_texts == [
+        "添加评分项",
+        "删除评分项",
+        "上移评分项",
+        "下移评分项",
+    ]
+    workspace.score_table.setCurrentCell(1, 1)
+    qtbot.mouseClick(workspace.move_score_up_button, Qt.LeftButton)
+    assert workspace.score_table.currentRow() == 0
+    assert workspace.score_table.currentColumn() == 1
+    assert [score.label for score in config.modules()[0].scores.values()] == [
+        "Quality",
+        "Artifact",
+        "Coverage",
+    ]
+    workspace._save_module_form()
+    reordered = next(item for item in config.modules() if item.name == module.name)
+    assert list(reordered.scores) == ["1", "2", "3"]
+    assert [score.label for score in reordered.scores.values()] == [
+        "Artifact",
+        "Quality",
+        "Coverage",
+    ]
+
+    workspace._load_module_form(module)
     three_rows_height = workspace.score_table.height()
     workspace._prepare_new_module()
     one_row_height = workspace.score_table.height()
@@ -442,12 +478,38 @@ def test_project_module_tags_save_duplicate_order_and_scores_resize_with_rows(
     workspace.score_table.setCurrentCell(1, 0)
     qtbot.mouseClick(workspace.remove_score_button, Qt.LeftButton)
     assert workspace.score_table.height() == one_row_height
+    assert not workspace.move_score_up_action.isEnabled()
+    assert not workspace.move_score_down_action.isEnabled()
 
     workspace._load_module_form(module)
     workspace.tag_editor.set_tags(("甲", "甲", "乙"))
     workspace._save_module_form()
     saved = next(item for item in config.modules() if item.name == module.name)
     assert tuple(tag.label for tag in saved.tags.values()) == ("甲", "甲", "乙")
+
+
+def test_project_score_move_actions_refresh_and_retranslate(qtbot, tmp_path) -> None:
+    workspace, _config = _workspace(qtbot, tmp_path)
+    workspace._prepare_new_module()
+
+    assert not workspace.move_score_up_action.isEnabled()
+    assert not workspace.move_score_down_action.isEnabled()
+    qtbot.mouseClick(workspace.add_score_button, Qt.LeftButton)
+    assert workspace.move_score_up_action.isEnabled()
+    assert not workspace.move_score_down_action.isEnabled()
+    workspace.score_table.setCurrentCell(0, 0)
+    assert not workspace.move_score_up_action.isEnabled()
+    assert workspace.move_score_down_action.isEnabled()
+    workspace._discard_module_form()
+    assert not workspace.move_score_up_action.isEnabled()
+    assert not workspace.move_score_down_action.isEnabled()
+
+    workspace.language.set_language("en")
+    workspace.retranslate_ui()
+    assert workspace.move_score_up_action.text() == "Move score up"
+    assert workspace.move_score_down_action.text() == "Move score down"
+    assert workspace.move_score_up_button.accessibleName() == "Move score up"
+    assert workspace.move_score_up_button.toolTip() == "Move score up"
 
 
 def test_module_filter_section_prepares_complete_list_profiles_off_gui_thread(
