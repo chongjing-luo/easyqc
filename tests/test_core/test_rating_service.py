@@ -360,6 +360,261 @@ def test_professional_long_results_allowlists_orders_and_detaches() -> None:
     pd.testing.assert_frame_equal(source, original)
 
 
+def test_attach_master_columns_to_long_carries_one_rating_through() -> None:
+    professional_long = pd.DataFrame(
+        {
+            "easyqcid": ["SUB001"],
+            "module_name": ["Anat"],
+            "rater": ["r1"],
+            "score1": ["Good"],
+            "notes": ["review"],
+            "time": ["2026-08-06 01:00:00"],
+        }
+    )
+    master = pd.DataFrame(
+        {
+            "easyqcid": ["SUB001"],
+            "site": ["A"],
+            "image": ["/data/sub001.nii.gz"],
+        }
+    )
+
+    result = RatingService.attach_master_columns_to_long(
+        professional_long,
+        master,
+    )
+
+    assert result.columns.tolist() == [
+        "easyqcid",
+        "site",
+        "image",
+        "module_name",
+        "rater",
+        "score1",
+        "notes",
+        "time",
+    ]
+    assert result.to_dict("records") == [
+        {
+            "easyqcid": "SUB001",
+            "site": "A",
+            "image": "/data/sub001.nii.gz",
+            "module_name": "Anat",
+            "rater": "r1",
+            "score1": "Good",
+            "notes": "review",
+            "time": "2026-08-06 01:00:00",
+        }
+    ]
+
+
+def test_attach_master_columns_to_long_preserves_full_schema_collisions_and_rows() -> None:
+    professional_long = pd.DataFrame(
+        {
+            "easyqcid": ["SUB001", "SUB001", "SUB002"],
+            "module_name": ["Anat", "Dwi", "Anat"],
+            "rater": ["r1", "r2", "r1"],
+            "score2": ["Good", "Pass", "Fair"],
+            "score10": ["A", "B", "C"],
+            "tag2": [True, False, True],
+            "notes": ["first", "second", "third"],
+            "time": ["t1", "t2", "t3"],
+        }
+    )
+    master = pd.DataFrame(
+        {
+            "easyqcid": ["SUB001", "SUB002", "SUB003"],
+            "site": ["A", "B", "unrated"],
+            "notes": ["master note 1", "master note 2", "unused"],
+            "master.notes": ["source 1", "source 2", "unused"],
+            "score2": [20, 30, 40],
+        }
+    )
+
+    result = RatingService.attach_master_columns_to_long(professional_long, master)
+
+    assert result.columns.tolist() == [
+        "easyqcid",
+        "site",
+        "master.notes",
+        "master.master.notes",
+        "master.score2",
+        "module_name",
+        "rater",
+        "score2",
+        "score10",
+        "tag2",
+        "notes",
+        "time",
+    ]
+    assert result[["easyqcid", "site"]].to_dict("records") == [
+        {"easyqcid": "SUB001", "site": "A"},
+        {"easyqcid": "SUB001", "site": "A"},
+        {"easyqcid": "SUB002", "site": "B"},
+    ]
+    assert result["master.notes"].tolist() == [
+        "master note 1",
+        "master note 1",
+        "master note 2",
+    ]
+    assert result["master.master.notes"].tolist() == [
+        "source 1",
+        "source 1",
+        "source 2",
+    ]
+    assert "SUB003" not in result["easyqcid"].tolist()
+
+
+def test_attach_master_columns_to_long_empty_ratings_retains_complete_schema() -> None:
+    professional_long = pd.DataFrame(
+        {
+            "easyqcid": pd.Series(dtype="string"),
+            "module_name": pd.Series(dtype="string"),
+            "rater": pd.Series(dtype="string"),
+            "notes": pd.Series(dtype="string"),
+            "time": pd.Series(dtype="string"),
+        }
+    )
+    master = pd.DataFrame(
+        {
+            "easyqcid": ["SUB001"],
+            "site": ["A"],
+            "notes": ["master note"],
+        }
+    )
+
+    result = RatingService.attach_master_columns_to_long(professional_long, master)
+
+    assert result.empty
+    assert result.columns.tolist() == [
+        "easyqcid",
+        "site",
+        "master.notes",
+        "module_name",
+        "rater",
+        "notes",
+        "time",
+    ]
+
+
+@pytest.mark.parametrize("invalid_input", [None, [], {}])
+def test_attach_master_columns_to_long_rejects_non_dataframes(invalid_input) -> None:
+    valid_long = pd.DataFrame({"easyqcid": ["SUB001"]})
+    valid_master = pd.DataFrame({"easyqcid": ["SUB001"]})
+
+    with pytest.raises(TypeError, match="DataFrame"):
+        RatingService.attach_master_columns_to_long(invalid_input, valid_master)
+    with pytest.raises(TypeError, match="DataFrame"):
+        RatingService.attach_master_columns_to_long(valid_long, invalid_input)
+
+
+def test_attach_master_columns_to_long_rejects_duplicate_master_columns() -> None:
+    professional_long = pd.DataFrame({"easyqcid": ["SUB001"]})
+    master = pd.DataFrame(
+        [["SUB001", "A", "duplicate"]],
+        columns=["easyqcid", "site", "site"],
+    )
+
+    with pytest.raises(ValueError, match="重复|duplicate"):
+        RatingService.attach_master_columns_to_long(professional_long, master)
+
+
+@pytest.mark.parametrize(
+    "professional_long, master, message",
+    [
+        (
+            pd.DataFrame({"module_name": ["Anat"]}),
+            pd.DataFrame({"easyqcid": ["SUB001"]}),
+            "easyqcid",
+        ),
+        (
+            pd.DataFrame({"easyqcid": ["SUB001"]}),
+            pd.DataFrame({"site": ["A"]}),
+            "easyqcid",
+        ),
+        (
+            pd.DataFrame({"easyqcid": ["SUB001"]}),
+            pd.DataFrame({"easyqcid": ["  "]}),
+            "为空|blank",
+        ),
+        (
+            pd.DataFrame({"easyqcid": ["SUB001"]}),
+            pd.DataFrame({"easyqcid": [pd.NA]}),
+            "为空|blank",
+        ),
+        (
+            pd.DataFrame({"easyqcid": ["SUB001"]}),
+            pd.DataFrame(
+                {"easyqcid": pd.Series([["SUB001"]], dtype=object)}
+            ),
+            "标量|scalar",
+        ),
+        (
+            pd.DataFrame({"easyqcid": ["SUB001"]}),
+            pd.DataFrame({"easyqcid": ["SUB001", "SUB001"]}),
+            "重复|duplicate",
+        ),
+        (
+            pd.DataFrame({"easyqcid": ["SUB001"]}),
+            pd.DataFrame({"easyqcid": [" SUB001 ", "SUB001"]}),
+            "重复|duplicate",
+        ),
+        (
+            pd.DataFrame({"easyqcid": ["  "]}),
+            pd.DataFrame({"easyqcid": ["SUB001"]}),
+            "为空|blank",
+        ),
+        (
+            pd.DataFrame(
+                {"easyqcid": pd.Series([["SUB001"]], dtype=object)}
+            ),
+            pd.DataFrame({"easyqcid": ["SUB001"]}),
+            "标量|scalar",
+        ),
+        (
+            pd.DataFrame({"easyqcid": ["ORPHAN"]}),
+            pd.DataFrame({"easyqcid": ["SUB001"]}),
+            "ORPHAN|匹配|match",
+        ),
+    ],
+)
+def test_attach_master_columns_to_long_rejects_invalid_identity_contract(
+    professional_long: pd.DataFrame,
+    master: pd.DataFrame,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        RatingService.attach_master_columns_to_long(professional_long, master)
+
+
+def test_attach_master_columns_to_long_detaches_and_does_not_mutate_inputs() -> None:
+    professional_long = pd.DataFrame(
+        {
+            "easyqcid": [" SUB001 "],
+            "module_name": ["Anat"],
+            "rater": ["r1"],
+            "score1": ["Good"],
+        },
+        index=[7],
+    )
+    master = pd.DataFrame(
+        {"easyqcid": ["SUB001"], "site": ["A"]},
+        index=[11],
+    )
+    original_long = professional_long.copy(deep=True)
+    original_master = master.copy(deep=True)
+
+    result = RatingService.attach_master_columns_to_long(professional_long, master)
+    result.loc[result.index[0], "site"] = "changed"
+    result.loc[result.index[0], "score1"] = "changed"
+
+    pd.testing.assert_frame_equal(professional_long, original_long)
+    pd.testing.assert_frame_equal(master, original_master)
+    assert result.loc[result.index[0], "easyqcid"] == "SUB001"
+    assert professional_long.loc[7, "score1"] == "Good"
+    assert master.loc[11, "site"] == "A"
+
+
 def test_professional_long_results_empty_has_typed_identity_fact_columns() -> None:
     service = RatingService(_project(Path("/tmp/nonexistent")))
 

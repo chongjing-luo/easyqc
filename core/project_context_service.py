@@ -237,8 +237,11 @@ class ProjectContextService:
         loaded_ratings = RatingService(project).load_state(subjects)
         ratings = tuple(deepcopy(loaded_ratings.ratings))
         table_source = self._professional_table_source(subjects, loaded_ratings.qctable)
-        long_results = RatingService.professional_long_results(
-            loaded_ratings.original_table
+        long_results = RatingService.attach_master_columns_to_long(
+            RatingService.professional_long_results(
+                loaded_ratings.original_table
+            ),
+            subjects,
         )
         return PreparedProjectContext(
             project_load=prepared,

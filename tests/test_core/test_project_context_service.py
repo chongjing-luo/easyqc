@@ -168,9 +168,14 @@ def test_context_prepares_wide_and_professional_long_services_from_one_rating_lo
     real_professional_long = (
         project_context_module.RatingService.professional_long_results
     )
+    real_attach_master = (
+        project_context_module.RatingService.attach_master_columns_to_long
+    )
     loads = []
     loaded_states = []
     projected_sources = []
+    projected_results = []
+    attached_sources = []
 
     def counted_load_state(service, subjects):
         loads.append(subjects)
@@ -180,7 +185,13 @@ def test_context_prepares_wide_and_professional_long_services_from_one_rating_lo
 
     def capture_professional_long(long_frame):
         projected_sources.append(long_frame)
-        return real_professional_long(long_frame)
+        result = real_professional_long(long_frame)
+        projected_results.append(result)
+        return result
+
+    def capture_attach_master(long_frame, master_frame):
+        attached_sources.append((long_frame, master_frame))
+        return real_attach_master(long_frame, master_frame)
 
     monkeypatch.setattr(
         project_context_module.RatingService,
@@ -192,13 +203,22 @@ def test_context_prepares_wide_and_professional_long_services_from_one_rating_lo
         "professional_long_results",
         capture_professional_long,
     )
+    monkeypatch.setattr(
+        project_context_module.RatingService,
+        "attach_master_columns_to_long",
+        capture_attach_master,
+    )
 
     snapshot = services.project_context_service.snapshot()
 
     assert len(loads) == 1
     assert len(loaded_states) == 1
     assert len(projected_sources) == 1
+    assert len(projected_results) == 1
+    assert len(attached_sources) == 1
     assert projected_sources[0] is loaded_states[0].original_table
+    assert attached_sources[0][0] is projected_results[0]
+    assert attached_sources[0][1] is loads[0]
     assert loads[0] is not snapshot.subjects
     assert snapshot.table_view_service.source_total == 3
     assert snapshot.long_results_table_view_service.source_total == 1
@@ -206,6 +226,8 @@ def test_context_prepares_wide_and_professional_long_services_from_one_rating_lo
         profile.name for profile in snapshot.long_results_table_view_service.profiles
     ) == (
         "easyqcid",
+        "site",
+        "image",
         "module_name",
         "rater",
         "score1",
@@ -225,6 +247,10 @@ def test_context_prepares_wide_and_professional_long_services_from_one_rating_lo
         "SUB001",
         "AnatQC",
         "rater1",
+    ]
+    assert long_frame.loc[0, ["site", "image"]].tolist() == [
+        "A",
+        "/one.nii",
     ]
 
 

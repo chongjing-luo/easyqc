@@ -787,6 +787,104 @@ class RatingService:
         ].copy(deep=True)
 
     @staticmethod
+    def attach_master_columns_to_long(
+        long_df: pd.DataFrame,
+        master_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """Attach Master QC-list fields to sanitized long rating facts.
+
+        Input: one professional-long rating frame and one Master QC-list frame.
+        Output: one detached frame ordered as Master identity/context followed
+        by rating facts. The method performs no scan or persistence.
+        """
+
+        if not isinstance(long_df, pd.DataFrame):
+            raise TypeError("professional long input must be a pandas DataFrame")
+        if not isinstance(master_df, pd.DataFrame):
+            raise TypeError("Master QC list must be a pandas DataFrame")
+        if long_df.columns.has_duplicates:
+            duplicates = long_df.columns[long_df.columns.duplicated()].tolist()
+            raise ValueError(f"评分长表包含重复列名: {duplicates}")
+        if master_df.columns.has_duplicates:
+            duplicates = master_df.columns[master_df.columns.duplicated()].tolist()
+            raise ValueError(f"Master QC list 包含重复列名: {duplicates}")
+        if "easyqcid" not in long_df.columns or "easyqcid" not in master_df.columns:
+            raise ValueError("Both long results and Master QC list require easyqcid")
+
+        def normalized_easyqcid(frame: pd.DataFrame, source_name: str) -> pd.Series:
+            try:
+                normalized = frame["easyqcid"].map(
+                    RatingService._normalize_long_identity
+                )
+            except ValueError as exc:
+                raise ValueError(f"{source_name} easyqcid 必须是标量") from exc
+            if normalized.eq("").any():
+                raise ValueError(f"{source_name} easyqcid 为空")
+            return normalized
+
+        normalized_long_ids = normalized_easyqcid(long_df, "评分长表")
+        normalized_master_ids = normalized_easyqcid(master_df, "Master QC list")
+        duplicate_master_mask = normalized_master_ids.duplicated(keep=False)
+        if duplicate_master_mask.any():
+            offenders = (
+                normalized_master_ids.loc[duplicate_master_mask]
+                .drop_duplicates()
+                .tolist()
+            )
+            raise ValueError(
+                "Master QC list 包含重复 easyqcid: "
+                f"{offenders[:5]}"
+            )
+
+        orphan_mask = ~normalized_long_ids.isin(normalized_master_ids)
+        if orphan_mask.any():
+            orphans = (
+                normalized_long_ids.loc[orphan_mask]
+                .drop_duplicates()
+                .tolist()
+            )
+            raise ValueError(
+                "评分长表 easyqcid 无法匹配 Master QC list: "
+                f"{orphans[:5]}"
+            )
+
+        rating_columns = [
+            column for column in long_df.columns if column != "easyqcid"
+        ]
+        reserved_columns = set(long_df.columns)
+        master_renames: dict[Any, Any] = {}
+        master_columns: list[Any] = []
+        for column in master_df.columns:
+            if column == "easyqcid":
+                continue
+            candidate = column
+            while candidate in reserved_columns:
+                candidate = f"master.{candidate}"
+            master_renames[column] = candidate
+            master_columns.append(candidate)
+            reserved_columns.add(candidate)
+
+        prepared_long = long_df.copy(deep=False)
+        prepared_long["easyqcid"] = normalized_long_ids
+        prepared_master = master_df.rename(
+            columns=master_renames,
+            copy=False,
+        ).copy(deep=False)
+        prepared_master["easyqcid"] = normalized_master_ids
+        result = prepared_long.merge(
+            prepared_master,
+            on="easyqcid",
+            how="left",
+            sort=False,
+            validate="many_to_one",
+            copy=False,
+        )
+        return result.loc[
+            :,
+            ["easyqcid", *master_columns, *rating_columns],
+        ].copy(deep=True)
+
+    @staticmethod
     def _normalize_long_identity(value: Any) -> str:
         if not pd.api.types.is_scalar(value):
             raise ValueError("评分长表身份值必须是标量")
