@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
@@ -10,6 +11,7 @@ from PySide6.QtWidgets import (
     QPushButton,
 )
 
+from core.table_transform import TableTransformEngine
 from gui_qt.derived_column_dialog import DerivedColumnDialog
 from gui_qt.formula_editor import FormulaEditorWidget
 from models.derived_formula import DerivedColumnFormula
@@ -128,6 +130,53 @@ def test_dialog_previews_and_commits_fixed_formula(qtbot) -> None:
     qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
     qtbot.waitUntil(lambda: dialog.result() == QDialog.Accepted, timeout=3000)
     assert commits[0] == DerivedColumnFormula("batch", '"A"')
+
+
+def test_random_quick_template_preview_matches_detached_full_materialization(
+    qtbot,
+) -> None:
+    source = pd.DataFrame(
+        {
+            "easyqcid": [f"case-{index}" for index in range(25)],
+            "site": ["A"] * 25,
+        },
+        index=range(100, 125),
+    )
+    materialized = {}
+
+    def persist(request):
+        materialized["frame"] = TableTransformEngine().derive_column_from_formula(
+            source,
+            request,
+        )
+        return request.name
+
+    dialog = DerivedColumnDialog(source, persist)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog.name_edit.setText("random_order")
+    panel = dialog.editor.quick_panel
+    panel.set_template("random")
+    panel.random_seed_edit.setText("20260806")
+
+    qtbot.mouseClick(panel.generate_button, Qt.LeftButton)
+    assert dialog.editor.formula() == "RANDOM(20260806)"
+    assert dialog.preview()
+    preview_values = [
+        float(dialog.preview_table.item(row, 1).text())
+        for row in range(dialog.preview_table.rowCount())
+    ]
+
+    qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
+    qtbot.waitUntil(lambda: dialog.result() == QDialog.Accepted, timeout=3000)
+
+    result = materialized["frame"]
+    assert result is not source
+    assert source.columns.tolist() == ["easyqcid", "site"]
+    assert result.index.equals(source.index)
+    assert result["random_order"].iloc[:20].tolist() == pytest.approx(
+        preview_values
+    )
 
 
 def test_dialog_can_preview_missing_easyqcid_target(qtbot) -> None:

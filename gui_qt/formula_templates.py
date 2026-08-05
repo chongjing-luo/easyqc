@@ -39,6 +39,16 @@ def render_fixed_formula(value: object) -> str:
     return formula_literal(value)
 
 
+def render_random_formula(seed: int) -> str:
+    """Render one reproducible random-number formula from a uint32 seed."""
+
+    if type(seed) is not int:
+        raise TypeError("随机种子必须是 0 到 4294967295 之间的整数")
+    if not 0 <= seed <= 4_294_967_295:
+        raise ValueError("随机种子必须是 0 到 4294967295 之间的整数")
+    return f"RANDOM({seed})"
+
+
 def render_concatenate_formula(
     left_column: str,
     separator: str,
@@ -157,4 +167,5 @@ __all__ = [
     "render_fixed_formula",
     "render_numeric_columns_formula",
     "render_numeric_fixed_formula",
+    "render_random_formula",
 ]

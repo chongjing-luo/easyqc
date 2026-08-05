@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from collections.abc import Callable
 
 from PySide6.QtCore import Signal, Slot
@@ -33,13 +34,14 @@ from gui_qt.formula_templates import (
     render_fixed_formula,
     render_numeric_columns_formula,
     render_numeric_fixed_formula,
+    render_random_formula,
 )
 from gui_qt.i18n import protect_user_text
 from gui_qt.theme import set_button_role
 
 
 class FormulaQuickTemplatePanel(QWidget):
-    """Render six common tasks into visible EasyQC Formula text."""
+    """Render seven common tasks into visible EasyQC Formula text."""
 
     formulaRendered = Signal(str)
     errorRaised = Signal(str)
@@ -51,6 +53,7 @@ class FormulaQuickTemplatePanel(QWidget):
         ("条件生成", "conditional"),
         ("文本清理与大小写", "cleanup"),
         ("数值计算", "numeric"),
+        ("随机数", "random"),
     )
 
     def __init__(
@@ -88,6 +91,7 @@ class FormulaQuickTemplatePanel(QWidget):
         self.pages.addWidget(self._build_conditional_page())
         self.pages.addWidget(self._build_cleanup_page())
         self.pages.addWidget(self._build_numeric_page())
+        self.pages.addWidget(self._build_random_page())
         self.pages.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Maximum,
@@ -113,6 +117,7 @@ class FormulaQuickTemplatePanel(QWidget):
         self.numeric_right_kind_combo.currentIndexChanged.connect(
             self._sync_numeric_right_editor
         )
+        self.random_seed_button.clicked.connect(self.generate_random_seed)
         self.generate_button.clicked.connect(self._render_current)
         self._sync_fixed_value_editor()
         self._sync_numeric_right_editor()
@@ -254,6 +259,37 @@ class FormulaQuickTemplatePanel(QWidget):
         form.addRow("固定数值", self.numeric_right_value_edit)
         return page
 
+    def _build_random_page(self) -> QWidget:
+        page, form = self._page()
+        seed_row = QWidget(page)
+        seed_layout = QHBoxLayout(seed_row)
+        seed_layout.setContentsMargins(0, 0, 0, 0)
+        seed_layout.setSpacing(8)
+        self.random_seed_edit = QLineEdit(seed_row)
+        self.random_seed_edit.setObjectName("randomFormulaSeed")
+        self.random_seed_edit.setAccessibleName("随机种子")
+        self.random_seed_edit.setMaxLength(10)
+        self.random_seed_button = QPushButton("换一个种子", seed_row)
+        self.random_seed_button.setObjectName("generateRandomFormulaSeed")
+        self.random_seed_button.setAccessibleName(
+            "生成并显示另一个随机种子"
+        )
+        set_button_role(self.random_seed_button, "secondary")
+        seed_layout.addWidget(self.random_seed_edit, 1)
+        seed_layout.addWidget(self.random_seed_button)
+        form.addRow("种子", seed_row)
+        self.generate_random_seed()
+        return page
+
+    @Slot()
+    def generate_random_seed(self) -> int:
+        """Populate and return one visible unsigned 32-bit seed draft."""
+
+        seed = secrets.randbits(32)
+        render_random_formula(seed)
+        self.random_seed_edit.setText(str(seed))
+        return seed
+
     def set_template(self, template_id: str) -> None:
         index = self.template_combo.findData(template_id)
         if index < 0:
@@ -322,6 +358,12 @@ class FormulaQuickTemplatePanel(QWidget):
         except ValueError as exc:
             raise ValueError("固定数值格式无效") from exc
 
+    def _random_seed(self) -> int:
+        text = self.random_seed_edit.text().strip()
+        if not text or not text.isascii() or not text.isdecimal():
+            raise ValueError("随机种子必须是 0 到 4294967295 之间的整数")
+        return int(text)
+
     def _renderer(self, template_id: str) -> Callable[[], str]:
         renderers: dict[str, Callable[[], str]] = {
             "fixed": lambda: render_fixed_formula(self._fixed_value()),
@@ -347,6 +389,7 @@ class FormulaQuickTemplatePanel(QWidget):
                 operation=str(self.cleanup_operation_combo.currentData()),
             ),
             "numeric": self._render_numeric,
+            "random": lambda: render_random_formula(self._random_seed()),
         }
         return renderers[template_id]
 

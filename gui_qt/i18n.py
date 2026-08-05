@@ -925,6 +925,14 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "右值类型": "Right-value type",
     "固定数值": "Fixed number",
     "例如：12 或 0.5": "For example: 12 or 0.5",
+    "随机数": "Random numbers",
+    "种子": "Seed",
+    "随机种子": "Random seed",
+    "换一个种子": "Generate another seed",
+    "生成并显示另一个随机种子": "Generate and display another random seed",
+    "随机种子必须是 0 到 4294967295 之间的整数": (
+        "Random seed must be an integer from 0 to 4294967295"
+    ),
     "当前公式": "Current formula",
     "公式只计算当前表格中的值；不会运行 Python、SQL、正则或文件操作。": (
         "The formula calculates only values in the current table; it cannot "

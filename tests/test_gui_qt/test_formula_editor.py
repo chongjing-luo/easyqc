@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import secrets
+
 import pandas as pd
 import pytest
 from PySide6.QtCore import Qt
@@ -12,6 +14,7 @@ from PySide6.QtWidgets import (
 
 from core.formula_engine import FormulaEngine
 from core.formula_parser import FormulaParser
+from gui_qt import formula_templates
 from gui_qt.formula_editor import FormulaEditorWidget
 from gui_qt.formula_templates import (
     column_reference,
@@ -49,6 +52,33 @@ def test_template_renderers_escape_user_text_and_share_the_formula_parser() -> N
     assert formulas[5] == "[age] - [baseline age]"
     for formula in formulas:
         assert FormulaParser().parse(formula).root
+
+
+@pytest.mark.parametrize(
+    ("seed", "expected"),
+    (
+        (0, "RANDOM(0)"),
+        (20260806, "RANDOM(20260806)"),
+        (4_294_967_295, "RANDOM(4294967295)"),
+    ),
+)
+def test_random_template_renderer_emits_canonical_parser_accepted_formula(
+    seed,
+    expected,
+) -> None:
+    formula = formula_templates.render_random_formula(seed)
+
+    assert formula == expected
+    assert FormulaParser().parse(formula).root
+
+
+@pytest.mark.parametrize(
+    "seed",
+    (True, 1.5, "1", -1, 4_294_967_296),
+)
+def test_random_template_renderer_rejects_non_uint32_seed(seed) -> None:
+    with pytest.raises((TypeError, ValueError), match="种子"):
+        formula_templates.render_random_formula(seed)
 
 
 def test_two_column_templates_evaluate_without_a_second_executor() -> None:
@@ -145,7 +175,7 @@ def test_advanced_insertion_uses_exact_columns_and_shared_function_metadata(
     assert widget.function_signature.text() == "ROUND(number, digits)"
     assert widget.function_description.text()
     assert widget.function_example.text()
-    assert widget.function_combo.count() == 23
+    assert widget.function_combo.count() == 24
 
     qtbot.mouseClick(widget.insert_function_button, Qt.LeftButton)
     assert widget.formula() == "ROUND()"
@@ -178,6 +208,46 @@ def test_numeric_quick_template_generates_visible_two_column_formula(qtbot) -> N
     qtbot.mouseClick(panel.generate_button, Qt.LeftButton)
 
     assert widget.formula() == "[age] - [baseline age]"
+    assert widget.status_label.property("state") == "valid"
+
+
+def test_random_quick_template_keeps_seed_visible_and_waits_for_generate(
+    qtbot,
+    monkeypatch,
+) -> None:
+    generated = iter((20260806, 4_294_967_295, 7))
+    monkeypatch.setattr(secrets, "randbits", lambda bits: next(generated))
+    widget = FormulaEditorWidget(("easyqcid", "site"))
+    qtbot.addWidget(widget)
+    widget.show()
+    widget.set_formula("[site]")
+    panel = widget.quick_panel
+
+    assert panel.template_combo.count() == 7
+    panel.set_template("random")
+    assert panel.random_seed_edit.text() == "20260806"
+    assert panel.random_seed_edit.isVisibleTo(panel)
+    assert panel.random_seed_button.isVisibleTo(panel)
+    assert panel.random_seed_button.accessibleName()
+    assert widget.formula() == "[site]"
+
+    qtbot.mouseClick(panel.random_seed_button, Qt.LeftButton)
+
+    assert panel.random_seed_edit.text() == "4294967295"
+    assert widget.formula() == "[site]"
+
+    panel.random_seed_edit.setText("1.5")
+    qtbot.mouseClick(panel.generate_button, Qt.LeftButton)
+    assert widget.formula() == "[site]"
+    assert widget.status_label.property("state") == "invalid"
+    assert "种子" in widget.status_label.text()
+
+    assert panel.generate_random_seed() == 7
+    assert panel.random_seed_edit.text() == "7"
+    assert widget.formula() == "[site]"
+    qtbot.mouseClick(panel.generate_button, Qt.LeftButton)
+
+    assert widget.formula() == "RANDOM(7)"
     assert widget.status_label.property("state") == "valid"
 
 

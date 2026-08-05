@@ -313,6 +313,47 @@ def test_column_bulk_visibility_buttons_switch_language_immediately(
     assert panel.deselect_all_button.text() == "Deselect all"
 
 
+def test_random_formula_template_switches_chrome_without_changing_seed_or_formula(
+    qtbot,
+    tmp_path,
+) -> None:
+    controller = LanguageController(settings=_settings(tmp_path))
+    dialog = DerivedColumnDialog(
+        pd.DataFrame({"easyqcid": ["A"], "site": ["项目选择"]}),
+        lambda request: request.name,
+    )
+    qtbot.addWidget(dialog)
+    panel = dialog.editor.quick_panel
+    panel.set_template("random")
+    panel.random_seed_edit.setText("20260806")
+    dialog.editor.set_formula("RANDOM(20260806)")
+    controller.register_root(dialog)
+
+    assert panel.template_combo.currentText() == "随机数"
+    assert panel.random_seed_button.text() == "换一个种子"
+
+    controller.set_language("en")
+
+    assert panel.template_combo.currentText() == "Random numbers"
+    assert panel.random_seed_button.text() == "Generate another seed"
+    assert panel.random_seed_button.accessibleName() == (
+        "Generate and display another random seed"
+    )
+    assert panel.random_seed_edit.accessibleName() == "Random seed"
+    assert panel.random_seed_edit.text() == "20260806"
+    assert dialog.editor.formula() == "RANDOM(20260806)"
+    assert controller.translate_source(
+        "随机种子必须是 0 到 4294967295 之间的整数"
+    ) == "Random seed must be an integer from 0 to 4294967295"
+
+    controller.set_language("zh_CN")
+
+    assert panel.template_combo.currentText() == "随机数"
+    assert panel.random_seed_button.text() == "换一个种子"
+    assert panel.random_seed_edit.text() == "20260806"
+    assert dialog.editor.formula() == "RANDOM(20260806)"
+
+
 def test_pinning_a_column_after_switching_to_english_localizes_visible_and_accessible_text(
     qtbot,
     tmp_path,
