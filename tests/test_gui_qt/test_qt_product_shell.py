@@ -400,14 +400,13 @@ def test_runtime_language_switch_updates_seven_pages_and_preserves_context(
     assert [
         window.config_workspace.add_score_button.text(),
         window.config_workspace.remove_score_button.text(),
-        window.config_workspace.add_tag_button.text(),
-        window.config_workspace.remove_tag_button.text(),
+        window.config_workspace.tag_editor.add_button.text(),
     ] == [
         "Add rating item",
         "Delete rating item",
         "Add tag",
-        "Delete tag",
     ]
+    assert not hasattr(window.config_workspace, "remove_tag_button")
     assert window.current_context is context
     assert window.workspace_stack.currentWidget() is selected_page
     assert window.navigation.currentRow() == window.results_page_index
@@ -615,10 +614,10 @@ def test_runtime_language_switch_preserves_label_and_rater_identity(
     assert window.project_combo.currentText() == "SAMPLE"
     module_item = window.config_workspace.module_list.item(0)
     module_row = window.config_workspace.module_list.itemWidget(module_item)
-    assert module_row.findChild(QLabel, "moduleRowTitle").text() == "常量设置"
-    assert module_row.findChild(QLabel, "moduleRowDetail").text() == (
-        "AnatQC · rater_cn"
-    )
+    identity = module_row.findChild(QLabel, "moduleRowIdentity")
+    assert identity.text() == "常量设置 · AnatQC · rater_cn"
+    assert module_row.findChild(QLabel, "moduleRowTitle") is None
+    assert module_row.findChild(QLabel, "moduleRowDetail") is None
     start_button = module_row.findChild(QPushButton, "moduleRowStart")
     assert start_button.text() == "Start QC"
     assert start_button.accessibleName() == "Start QC 常量设置"

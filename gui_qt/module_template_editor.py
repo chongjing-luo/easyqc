@@ -22,8 +22,12 @@ from PySide6.QtWidgets import (
 )
 
 from gui_qt.i18n import LanguageController
+from gui_qt.module_tag_editor import (
+    ModuleTagEditor,
+    normalize_stored_tag_labels,
+    sync_score_table_height,
+)
 from gui_qt.theme import (
-    CONTROL_HEIGHT,
     CONTROL_SPACING,
     SECTION_SPACING,
     set_button_role,
@@ -82,7 +86,6 @@ class QtModuleTemplateEditor(QWidget):
         self.score_table.horizontalHeader().setStretchLastSection(True)
         self.score_table.verticalHeader().hide()
         self.score_table.setAlternatingRowColors(True)
-        self.score_table.setMinimumHeight(CONTROL_HEIGHT * 4)
         scores_layout.addWidget(self.score_table)
         score_actions = QHBoxLayout()
         self.add_score_button = QPushButton(self.scores_group)
@@ -91,25 +94,14 @@ class QtModuleTemplateEditor(QWidget):
         score_actions.addWidget(self.remove_score_button)
         score_actions.addStretch(1)
         scores_layout.addLayout(score_actions)
-        layout.addWidget(self.scores_group, 1)
+        layout.addWidget(self.scores_group)
 
         self.tags_group = QGroupBox(self)
         tags_layout = QVBoxLayout(self.tags_group)
         tags_layout.setSpacing(CONTROL_SPACING)
-        self.tag_table = QTableWidget(0, 1, self.tags_group)
-        self.tag_table.horizontalHeader().setStretchLastSection(True)
-        self.tag_table.verticalHeader().hide()
-        self.tag_table.setAlternatingRowColors(True)
-        self.tag_table.setMinimumHeight(CONTROL_HEIGHT * 4)
-        tags_layout.addWidget(self.tag_table)
-        tag_actions = QHBoxLayout()
-        self.add_tag_button = QPushButton(self.tags_group)
-        self.remove_tag_button = QPushButton(self.tags_group)
-        tag_actions.addWidget(self.add_tag_button)
-        tag_actions.addWidget(self.remove_tag_button)
-        tag_actions.addStretch(1)
-        tags_layout.addLayout(tag_actions)
-        layout.addWidget(self.tags_group, 1)
+        self.tag_editor = ModuleTagEditor(self.language, self.tags_group)
+        tags_layout.addWidget(self.tag_editor)
+        layout.addWidget(self.tags_group)
 
         self.viewer_group = QGroupBox(self)
         viewer_layout = QVBoxLayout(self.viewer_group)
@@ -143,20 +135,9 @@ class QtModuleTemplateEditor(QWidget):
         layout.addLayout(actions)
 
         self.add_score_button.clicked.connect(
-            lambda: self._append_row(
-                self.score_table,
-                ("Quality", "Poor,Fair,Good"),
-            )
+            lambda: self._append_score_row(("Quality", "Poor,Fair,Good"))
         )
-        self.remove_score_button.clicked.connect(
-            lambda: self._remove_current_row(self.score_table)
-        )
-        self.add_tag_button.clicked.connect(
-            lambda: self._append_row(self.tag_table, ("Needs review",))
-        )
-        self.remove_tag_button.clicked.connect(
-            lambda: self._remove_current_row(self.tag_table)
-        )
+        self.remove_score_button.clicked.connect(self._remove_current_score)
         self.discard_button.clicked.connect(self.discard)
         self.save_button.clicked.connect(self._request_save)
 
@@ -174,10 +155,23 @@ class QtModuleTemplateEditor(QWidget):
         if row >= 0:
             table.removeRow(row)
 
+    def _append_score_row(self, values: tuple[str, str]) -> None:
+        """Append one editable score row and resynchronize native height."""
+
+        self._append_row(self.score_table, values)
+        sync_score_table_height(self.score_table)
+
+    def _remove_current_score(self) -> None:
+        """Remove the selected score row and resynchronize native height."""
+
+        self._remove_current_row(self.score_table)
+        sync_score_table_height(self.score_table)
+
     def clear(self) -> None:
         """Install one blank baseline for creating a template."""
 
         self.load_module(QCModule(name="", label=""))
+        self._append_score_row(("Quality", "Poor,Fair,Good"))
 
     def load_module(self, module: QCModule) -> None:
         """Load one detached baseline; hidden fields are retained on save."""
@@ -199,12 +193,12 @@ class QtModuleTemplateEditor(QWidget):
         if self.score_table.rowCount():
             self.score_table.setCurrentCell(0, 0)
             self.score_table.scrollToTop()
-        self.tag_table.setRowCount(0)
-        for tag in module.tags.values():
-            self._append_row(self.tag_table, (tag.label or "",))
-        if self.tag_table.rowCount():
-            self.tag_table.setCurrentCell(0, 0)
-            self.tag_table.scrollToTop()
+        sync_score_table_height(self.score_table)
+        self.tag_editor.set_tags(
+            normalize_stored_tag_labels(
+                tag.label for tag in module.tags.values()
+            )
+        )
         self.set_error("")
 
     def candidate(self) -> QCModule:
@@ -230,13 +224,9 @@ class QtModuleTemplateEditor(QWidget):
             key = str(len(module.scores) + 1)
             module.scores[key] = Score(key, label, values, values)
         module.tags = {}
-        for row in range(self.tag_table.rowCount()):
-            item = self.tag_table.item(row, 0)
-            label = item.text().strip() if item is not None else ""
-            if not label:
-                continue
+        for label in self.tag_editor.tags():
             key = str(len(module.tags) + 1)
-            module.tags[key] = Tag(key, label)
+            module.tags[key] = Tag(key, label.strip())
         module.easyqcid = None
         module.code_exe = None
         module.notes = None
@@ -250,6 +240,8 @@ class QtModuleTemplateEditor(QWidget):
     @Slot()
     def discard(self) -> None:
         self.load_module(self._baseline)
+        if not self._baseline.name and not self.score_table.rowCount():
+            self._append_score_row(("Quality", "Poor,Fair,Good"))
 
     @Slot()
     def _request_save(self) -> None:
@@ -282,15 +274,14 @@ class QtModuleTemplateEditor(QWidget):
         self.add_score_button.setText(tr("cross.add_score"))
         self.remove_score_button.setText(tr("cross.remove_score"))
         self.tags_group.setTitle(tr("cross.tags"))
-        self.tag_table.setHorizontalHeaderLabels([tr("cross.tag_label")])
-        self.add_tag_button.setText(tr("cross.add_tag"))
-        self.remove_tag_button.setText(tr("cross.remove_tag"))
+        self.tag_editor.retranslate_ui()
         self.viewer_group.setTitle(tr("cross.viewer"))
         self.module_code.setPlaceholderText(tr("cross.viewer_placeholder"))
         self.module_control.setText(tr("cross.viewer_control"))
         self.discard_button.setText(tr("cross.discard"))
         self.save_button.setText(tr("cross.save_module"))
         self.setAccessibleName(tr("cross.module_editor_accessible"))
+        sync_score_table_height(self.score_table)
 
 
 __all__ = ["QtModuleTemplateEditor"]

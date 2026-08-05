@@ -31,7 +31,7 @@ from core.template_service import TemplateService
 from gui_qt import project_config_workspace as workspace_module
 from gui_qt.i18n import LanguageController
 from gui_qt.project_config_workspace import QtProjectConfigWorkspace
-from models.qcmodule import QCModule
+from models.qcmodule import QCModule, Score, Tag
 from models.table_view_state import (
     FilterCondition,
     FilterExpression,
@@ -409,6 +409,45 @@ def test_qt_module_form_adds_and_reorders_without_json_editor(qtbot, tmp_path) -
     names = [module.name for module in config.modules()]
     assert names == ["example", "FuncQC", "AnatQC"]
     assert not hasattr(workspace, "json_editor")
+
+
+def test_project_module_tags_save_duplicate_order_and_scores_resize_with_rows(
+    qtbot,
+    tmp_path,
+) -> None:
+    workspace, config = _workspace(qtbot, tmp_path)
+    module = config.modules()[0]
+    module.scores = {
+        "1": Score("1", "Quality", "Poor,Good", "Poor,Good"),
+        "2": Score("2", "Artifact", "None,Present", "None,Present"),
+        "3": Score("3", "Coverage", "Poor,Good", "Poor,Good"),
+    }
+    module.tags = {
+        "1": Tag("1", "重复标签"),
+        "2": Tag("2", "重复标签"),
+        "3": Tag("3", "质控模块"),
+    }
+    config.save_module(module, original_name=module.name)
+    workspace._refresh_modules(module.name)
+
+    assert workspace.tag_editor.tags() == ("重复标签", "重复标签", "质控模块")
+    three_rows_height = workspace.score_table.height()
+    workspace._prepare_new_module()
+    one_row_height = workspace.score_table.height()
+    assert one_row_height < three_rows_height
+
+    qtbot.mouseClick(workspace.add_score_button, Qt.LeftButton)
+    two_rows_height = workspace.score_table.height()
+    assert two_rows_height > one_row_height
+    workspace.score_table.setCurrentCell(1, 0)
+    qtbot.mouseClick(workspace.remove_score_button, Qt.LeftButton)
+    assert workspace.score_table.height() == one_row_height
+
+    workspace._load_module_form(module)
+    workspace.tag_editor.set_tags(("甲", "甲", "乙"))
+    workspace._save_module_form()
+    saved = next(item for item in config.modules() if item.name == module.name)
+    assert tuple(tag.label for tag in saved.tags.values()) == ("甲", "甲", "乙")
 
 
 def test_module_filter_section_prepares_complete_list_profiles_off_gui_thread(
@@ -887,7 +926,7 @@ def test_module_list_header_owns_right_side_new_import_and_each_row_launches_exa
         for label in row_widget.findChildren(QLabel)
         if label.text().strip()
     ]
-    assert row_labels == ["Anatomical QC", "AnatQC · 只读"]
+    assert row_labels == ["Anatomical QC · AnatQC · 只读"]
 
 
 def test_module_launch_failure_is_visible_on_module_page(qtbot, tmp_path) -> None:
@@ -1057,12 +1096,22 @@ def test_qt_configuration_uses_responsive_toolbars_splitter_and_long_tooltips(
     assert workspace.score_table.columnWidth(0) == (
         workspace.score_table.horizontalHeader().defaultSectionSize()
     )
-    assert workspace.tag_table.horizontalHeader().stretchLastSection()
+    assert (
+        workspace.tag_editor.scroll_area.verticalScrollBarPolicy()
+        == Qt.ScrollBarAlwaysOff
+    )
     assert workspace.constants_table.item(0, 1).toolTip() == long_path
     selected_item = workspace.module_list.currentItem()
     assert selected_item.text() == ""
     assert selected_item.data(workspace.MODULE_LABEL_ROLE) == long_label
     assert long_label in selected_item.toolTip()
+    row_widget = workspace.module_list.itemWidget(selected_item)
+    identity = row_widget.findChild(QLabel, "moduleRowIdentity")
+    assert identity is not None
+    assert identity.text() == f"{long_label} · LongQC · 只读"
+    assert row_widget.findChild(QLabel, "moduleRowTitle") is None
+    assert row_widget.findChild(QLabel, "moduleRowDetail") is None
+    assert long_label in identity.toolTip()
     assert workspace.project_list.horizontalScrollBarPolicy() == Qt.ScrollBarAsNeeded
     assert workspace.project_path_preview.toolTip() == str(config.current_project.path)
 

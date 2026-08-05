@@ -290,6 +290,30 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
     },
     "cross.tag_label": {"zh_CN": "标签", "en": "Tag label"},
     "cross.tags": {"zh_CN": "标签", "en": "Tags"},
+    "module_tags.add_title": {
+        "zh_CN": "添加标签",
+        "en": "Add tag",
+    },
+    "module_tags.blank_error": {
+        "zh_CN": "标签不能为空",
+        "en": "Tag label cannot be blank",
+    },
+    "module_tags.edit_accessible": {
+        "zh_CN": "编辑标签 {label}",
+        "en": "Edit tag {label}",
+    },
+    "module_tags.edit_title": {
+        "zh_CN": "编辑标签",
+        "en": "Edit tag",
+    },
+    "module_tags.label_prompt": {
+        "zh_CN": "标签名称",
+        "en": "Tag label",
+    },
+    "module_tags.remove_accessible": {
+        "zh_CN": "删除标签 {label}",
+        "en": "Remove tag {label}",
+    },
     "cross.template_source": {
         "zh_CN": "选择模板",
         "en": "Select template",

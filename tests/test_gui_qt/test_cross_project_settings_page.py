@@ -125,8 +125,13 @@ def test_cross_project_page_module_editor_preserves_hidden_payload(
         rater="rater_a",
         scores={
             "1": Score("1", "Quality", "Poor,Good", "Poor,Good"),
+            "2": Score("2", "Artifact", "None,Present", "None,Present"),
         },
-        tags={"1": Tag("1", "Motion")},
+        tags={
+            "1": Tag("1", "Motion"),
+            "2": Tag("2", "Motion"),
+            "3": Tag("3", "质控模块"),
+        },
         code="freeview {image}",
         control=True,
         qc_filter={"groups": [{"id": "hidden-filter"}]},
@@ -139,11 +144,27 @@ def test_cross_project_page_module_editor_preserves_hidden_payload(
     assert page.module_list.count() == 1
     page.module_list.setCurrentRow(0)
     assert page.module_editor.module_name.text() == "AnatQC"
+    assert page.module_editor.tag_editor.tags() == (
+        "Motion",
+        "Motion",
+        "质控模块",
+    )
+    two_rows_height = page.module_editor.score_table.height()
+    page.module_editor.clear()
+    assert page.module_editor.score_table.rowCount() == 1
+    assert page.module_editor.score_table.height() < two_rows_height
+    page.module_editor.load_module(module)
     page.module_editor.module_label.setText("Edited label")
+    page.module_editor.tag_editor.set_tags(("One", "One", "Two"))
     qtbot.mouseClick(page.module_editor.save_button, Qt.LeftButton)
 
     saved = templates.module(original.module_id)
     assert saved.module.label == "Edited label"
+    assert tuple(tag.label for tag in saved.module.tags.values()) == (
+        "One",
+        "One",
+        "Two",
+    )
     assert saved.module.qc_filter == {"groups": [{"id": "hidden-filter"}]}
     assert saved.module.button == {"help": "SOP"}
     assert saved.module.code == "freeview {image}"

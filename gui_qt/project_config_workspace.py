@@ -7,13 +7,14 @@ from copy import deepcopy
 from pathlib import Path
 
 import pandas as pd
-from PySide6.QtCore import Qt, QUrl, Slot
+from PySide6.QtCore import QSize, Qt, QUrl, Slot
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
     QDesktopServices,
     QFontDatabase,
     QKeySequence,
+    QPainter,
 )
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -61,6 +62,11 @@ from gui_qt.i18n import (
     protect_user_text,
     translate_ui_text,
 )
+from gui_qt.module_tag_editor import (
+    ModuleTagEditor,
+    normalize_stored_tag_labels,
+    sync_score_table_height,
+)
 from gui_qt.qc_list_import_page import QtQcListImportPage
 from gui_qt.task_runner import RevisionedTaskController
 from gui_qt.template_copy_dialogs import (
@@ -70,6 +76,29 @@ from gui_qt.template_copy_dialogs import (
 from gui_qt.theme import set_button_role
 from models.qcmodule import Score, Tag
 from models.table_view_state import FilterExpression
+
+
+class _ElidingLabel(QLabel):
+    """Paint one full user-owned label as a single elided line."""
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt virtual API
+        painter = QPainter(self)
+        painter.setFont(self.font())
+        painter.setPen(self.palette().windowText().color())
+        text = self.fontMetrics().elidedText(
+            self.text(),
+            Qt.ElideRight,
+            max(0, self.contentsRect().width()),
+        )
+        painter.drawText(
+            self.contentsRect(),
+            int(Qt.AlignLeft | Qt.AlignVCenter),
+            text,
+        )
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt virtual API
+        hint = super().minimumSizeHint()
+        return QSize(0, hint.height())
 
 
 class QtProjectConfigWorkspace(QWidget):
@@ -580,16 +609,11 @@ class QtProjectConfigWorkspace(QWidget):
         )
         self.score_table.horizontalHeader().setStretchLastSection(True)
         editor.addWidget(QLabel("评分项", editor_widget))
-        editor.addWidget(self.score_table, 1)
-        self.tag_table = QTableWidget(0, 1, editor_widget)
-        self.tag_table.setHorizontalHeaderLabels(["标签"])
-        self.tag_table.horizontalHeader().setSectionResizeMode(
-            0,
-            QHeaderView.Interactive,
-        )
-        self.tag_table.horizontalHeader().setStretchLastSection(True)
-        editor.addWidget(QLabel("标签", editor_widget))
-        editor.addWidget(self.tag_table, 1)
+        editor.addWidget(self.score_table)
+        self.module_tags_title = QLabel("标签", editor_widget)
+        editor.addWidget(self.module_tags_title)
+        self.tag_editor = ModuleTagEditor(self.language, editor_widget)
+        editor.addWidget(self.tag_editor)
 
         self.module_row_actions_toolbar = QToolBar("模块条目操作", editor_widget)
         self.module_row_actions_toolbar.setObjectName("configModuleRowActions")
@@ -600,10 +624,7 @@ class QtProjectConfigWorkspace(QWidget):
             self.module_row_actions_toolbar,
             "添加评分项",
             QKeySequence(),
-            lambda: self._append_table_row(
-                self.score_table,
-                ("质量", "差,一般,好"),
-            ),
+            lambda: self._append_score_row(("质量", "差,一般,好")),
         )
         (
             self.remove_score_action,
@@ -612,19 +633,7 @@ class QtProjectConfigWorkspace(QWidget):
             self.module_row_actions_toolbar,
             "删除评分项",
             QKeySequence(),
-            lambda: self._remove_table_row(self.score_table),
-        )
-        self.add_tag_action, self.add_tag_button = self._add_toolbar_action(
-            self.module_row_actions_toolbar,
-            "添加标签",
-            QKeySequence(),
-            lambda: self._append_table_row(self.tag_table, ("需要复核",)),
-        )
-        self.remove_tag_action, self.remove_tag_button = self._add_toolbar_action(
-            self.module_row_actions_toolbar,
-            "删除标签",
-            QKeySequence(),
-            lambda: self._remove_table_row(self.tag_table),
+            self._remove_score_row,
         )
         editor.addWidget(self.module_row_actions_toolbar)
 
@@ -832,6 +841,8 @@ class QtProjectConfigWorkspace(QWidget):
         self.constant_from_template_button.setAccessibleName(add_from_template)
         self.module_from_template_action.setText(add_from_template)
         self.module_from_template_button.setAccessibleName(add_from_template)
+        self.tag_editor.retranslate_ui()
+        sync_score_table_height(self.score_table)
         self._preview_project_item(self.project_list.currentItem())
         self._retranslate_module_rows()
 
@@ -846,17 +857,14 @@ class QtProjectConfigWorkspace(QWidget):
             label = str(row_widget.property("_easyqc_module_label") or "")
             name = str(row_widget.property("_easyqc_module_name") or "")
             rater = str(row_widget.property("_easyqc_module_rater") or "")
-            detail_text = f"{name} · {rater or translate_ui_text('只读')}"
-            tooltip = f"{label}\n{detail_text}"
-            title = row_widget.findChild(QLabel, "moduleRowTitle")
-            detail = row_widget.findChild(QLabel, "moduleRowDetail")
+            identity_text = (
+                f"{label} · {name} · {rater or translate_ui_text('只读')}"
+            )
+            identity = row_widget.findChild(QLabel, "moduleRowIdentity")
             start_button = row_widget.findChild(QPushButton, "moduleRowStart")
-            if title is not None:
-                title.setText(label)
-                title.setToolTip(tooltip)
-            if detail is not None:
-                detail.setText(detail_text)
-                detail.setToolTip(tooltip)
+            if identity is not None:
+                identity.setText(identity_text)
+                identity.setToolTip(identity_text)
             if start_button is not None:
                 start_button.setAccessibleName(
                     f"{translate_ui_text('启动质控')} {label}"
@@ -950,16 +958,17 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_start_buttons = {}
         for module in modules:
             item_text = module.label
-            detail_text = (
-                f"{module.name} · {module.rater or translate_ui_text('只读')}"
+            identity_text = (
+                f"{module.label} · {module.name} · "
+                f"{module.rater or translate_ui_text('只读')}"
             )
-            tooltip = f"{module.label}\n{detail_text}"
+            tooltip = identity_text
             item = QListWidgetItem("", self.module_list)
             item.setData(Qt.UserRole, module.name)
             item.setData(self.MODULE_LABEL_ROLE, item_text)
             item.setData(
                 Qt.AccessibleTextRole,
-                f"{module.label}，{detail_text}",
+                identity_text,
             )
             item.setToolTip(tooltip)
             row_widget = QWidget(self.module_list)
@@ -969,22 +978,12 @@ class QtProjectConfigWorkspace(QWidget):
             row_layout = QHBoxLayout(row_widget)
             row_layout.setContentsMargins(6, 5, 6, 5)
             row_layout.setSpacing(8)
-            text_column = QVBoxLayout()
-            text_column.setContentsMargins(0, 0, 0, 0)
-            text_column.setSpacing(2)
-            title = QLabel(module.label, row_widget)
-            title.setObjectName("moduleRowTitle")
-            protect_user_text(title, "text", "toolTip")
-            title.setToolTip(tooltip)
-            title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-            detail = QLabel(detail_text, row_widget)
-            detail.setObjectName("moduleRowDetail")
-            protect_user_text(detail, "text", "toolTip")
-            detail.setToolTip(tooltip)
-            detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-            text_column.addWidget(title)
-            text_column.addWidget(detail)
-            row_layout.addLayout(text_column, 1)
+            identity = _ElidingLabel(identity_text, row_widget)
+            identity.setObjectName("moduleRowIdentity")
+            protect_user_text(identity, "text", "toolTip")
+            identity.setToolTip(tooltip)
+            identity.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            row_layout.addWidget(identity, 1)
             start_button = QPushButton("启动质控", row_widget)
             start_button.setObjectName("moduleRowStart")
             protect_user_text(start_button, "accessibleName")
@@ -999,7 +998,7 @@ class QtProjectConfigWorkspace(QWidget):
                 )
             )
             row_layout.addWidget(start_button)
-            item.setSizeHint(row_widget.sizeHint())
+            item.setSizeHint(QSize(0, row_widget.sizeHint().height()))
             self.module_list.setItemWidget(item, row_widget)
             self.module_start_buttons[module.name] = start_button
         target = next(
@@ -1036,10 +1035,7 @@ class QtProjectConfigWorkspace(QWidget):
                 )
                 for row in range(self.score_table.rowCount())
             ),
-            tuple(
-                item_text(self.tag_table, row, 0)
-                for row in range(self.tag_table.rowCount())
-            ),
+            self.tag_editor.tags(),
             self.module_code.toPlainText().strip(),
             self.module_control.isChecked(),
         )
@@ -1692,11 +1688,12 @@ class QtProjectConfigWorkspace(QWidget):
             values_item.setToolTip(score.num_ or "")
             self.score_table.setItem(row, 0, label_item)
             self.score_table.setItem(row, 1, values_item)
-        self.tag_table.setRowCount(len(module.tags))
-        for row, tag in enumerate(module.tags.values()):
-            tag_item = QTableWidgetItem(tag.label or "")
-            tag_item.setToolTip(tag.label or "")
-            self.tag_table.setItem(row, 0, tag_item)
+        sync_score_table_height(self.score_table)
+        self.tag_editor.set_tags(
+            normalize_stored_tag_labels(
+                tag.label for tag in module.tags.values()
+            )
+        )
         self._module_form_baseline = self._module_form_signature()
         self._request_module_filter_preview(module)
 
@@ -1714,8 +1711,8 @@ class QtProjectConfigWorkspace(QWidget):
         self.score_table.setRowCount(1)
         self.score_table.setItem(0, 0, QTableWidgetItem("质量"))
         self.score_table.setItem(0, 1, QTableWidgetItem("差,一般,好"))
-        self.tag_table.setRowCount(1)
-        self.tag_table.setItem(0, 0, QTableWidgetItem("需要复核"))
+        sync_score_table_height(self.score_table)
+        self.tag_editor.set_tags(("需要复核",))
         if (
             self._pending_module_filter is not None
             and self._pending_module_filter[1] == "prepare"
@@ -1747,19 +1744,23 @@ class QtProjectConfigWorkspace(QWidget):
         self._load_module_form(module)
         self._set_error("")
 
-    @staticmethod
-    def _append_table_row(table: QTableWidget, values: tuple[str, ...]) -> None:
-        row = table.rowCount()
-        table.insertRow(row)
-        for column, value in enumerate(values):
-            table.setItem(row, column, QTableWidgetItem(value))
-        table.setCurrentCell(row, 0)
+    def _append_score_row(self, values: tuple[str, str]) -> None:
+        """Append one score draft row and resynchronize native height."""
 
-    @staticmethod
-    def _remove_table_row(table: QTableWidget) -> None:
-        row = table.currentRow()
-        if row >= 0 and table.rowCount() > 1:
-            table.removeRow(row)
+        row = self.score_table.rowCount()
+        self.score_table.insertRow(row)
+        for column, value in enumerate(values):
+            self.score_table.setItem(row, column, QTableWidgetItem(value))
+        self.score_table.setCurrentCell(row, 0)
+        sync_score_table_height(self.score_table)
+
+    def _remove_score_row(self) -> None:
+        """Remove the selected score draft while retaining one starter row."""
+
+        row = self.score_table.currentRow()
+        if row >= 0 and self.score_table.rowCount() > 1:
+            self.score_table.removeRow(row)
+            sync_score_table_height(self.score_table)
 
     def add_module(self, name: str, label: str) -> bool:
         try:
@@ -1802,11 +1803,10 @@ class QtProjectConfigWorkspace(QWidget):
                 num_=values,
             )
         tags = {}
-        for row in range(self.tag_table.rowCount()):
-            tag_label = self.tag_table.item(row, 0)
+        for row, tag_label in enumerate(self.tag_editor.tags()):
             tags[str(row + 1)] = Tag(
                 key=str(row + 1),
-                label=tag_label.text().strip() if tag_label else "",
+                label=tag_label.strip(),
             )
         if self._selected_module_name is None:
             if self.add_module(name, label):
