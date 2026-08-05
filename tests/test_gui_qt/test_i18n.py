@@ -276,6 +276,29 @@ def test_column_item_accessible_text_switches_with_visible_pinned_label(
     )
 
 
+def test_column_bulk_visibility_buttons_switch_language_immediately(
+    qtbot,
+    tmp_path,
+):
+    controller = LanguageController(settings=_settings(tmp_path))
+    panel = ColumnsPanel(
+        ColumnViewState(
+            order=("easyqcid", "site"),
+            pinned=("easyqcid",),
+        )
+    )
+    qtbot.addWidget(panel)
+    controller.register_root(panel)
+
+    assert panel.select_all_button.text() == "全选"
+    assert panel.deselect_all_button.text() == "取消全选"
+
+    controller.set_language("en")
+
+    assert panel.select_all_button.text() == "Select all"
+    assert panel.deselect_all_button.text() == "Deselect all"
+
+
 def test_pinning_a_column_after_switching_to_english_localizes_visible_and_accessible_text(
     qtbot,
     tmp_path,

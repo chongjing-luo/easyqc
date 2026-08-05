@@ -60,6 +60,16 @@ class ColumnsPanel(QWidget):
         layout.addWidget(self.search_label)
         layout.addWidget(self.search_edit)
 
+        visibility_actions = QHBoxLayout()
+        self.select_all_button = QPushButton("全选", self)
+        self.select_all_button.setAccessibleName("显示全部非固定列")
+        self.deselect_all_button = QPushButton("取消全选", self)
+        self.deselect_all_button.setAccessibleName("隐藏全部非固定列")
+        visibility_actions.addWidget(self.select_all_button)
+        visibility_actions.addWidget(self.deselect_all_button)
+        visibility_actions.addStretch(1)
+        layout.addLayout(visibility_actions)
+
         self.list_widget = QListWidget(self)
         self.list_widget.setObjectName("columnList")
         self.list_widget.setAccessibleName("表格列顺序与可见性")
@@ -91,6 +101,12 @@ class ColumnsPanel(QWidget):
 
         self.search_edit.textChanged.connect(self._refresh_search)
         self.list_widget.itemSelectionChanged.connect(self._refresh_controls)
+        self.select_all_button.clicked.connect(
+            lambda _checked=False: self.set_all_visible(True)
+        )
+        self.deselect_all_button.clicked.connect(
+            lambda _checked=False: self.set_all_visible(False)
+        )
         self.move_up_button.clicked.connect(
             lambda _checked=False: self.move_selected(-1)
         )
@@ -172,6 +188,19 @@ class ColumnsPanel(QWidget):
             widths=self._widths,
             pinned=tuple(pinned),
         )
+
+    def set_all_visible(self, visible: bool) -> None:
+        """Update every non-pinned column in the current visibility draft."""
+
+        if type(visible) is not bool:
+            raise TypeError("visible must be bool")
+        check_state = (
+            Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked
+        )
+        for row in range(self.list_widget.count()):
+            item = self.list_widget.item(row)
+            if not bool(item.data(PINNED_ROLE)):
+                item.setCheckState(check_state)
 
     def _configure_item(
         self,

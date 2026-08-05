@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QFormLayout,
-    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -319,9 +318,8 @@ class QtQcListImportPage(QWidget):
         preview_header.addWidget(self.preview_search)
         layout.addLayout(preview_header)
 
-        preview_actions = QGridLayout()
+        preview_actions = QHBoxLayout()
         preview_actions.setContentsMargins(0, 0, 0, 0)
-        preview_actions.setColumnStretch(0, 1)
         self.filter_button = QPushButton("筛选", self)
         self.sort_button = QPushButton("排序", self)
         self.columns_button = QPushButton("列显示", self)
@@ -346,12 +344,16 @@ class QtQcListImportPage(QWidget):
         self.derive_button.clicked.connect(self.open_derived_column_dialog)
         self.delete_rows_button.clicked.connect(self.open_delete_rows_dialog)
         self.delete_column_button.clicked.connect(self.open_delete_columns_dialog)
-        preview_actions.addWidget(self.filter_button, 0, 1)
-        preview_actions.addWidget(self.sort_button, 0, 2)
-        preview_actions.addWidget(self.columns_button, 0, 3)
-        preview_actions.addWidget(self.derive_button, 1, 1)
-        preview_actions.addWidget(self.delete_rows_button, 1, 2)
-        preview_actions.addWidget(self.delete_column_button, 1, 3)
+        for button in (
+            self.filter_button,
+            self.sort_button,
+            self.columns_button,
+            self.derive_button,
+            self.delete_rows_button,
+            self.delete_column_button,
+        ):
+            button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            preview_actions.addWidget(button, 1)
         layout.addLayout(preview_actions)
 
         self.preview_table = QTableView(self)

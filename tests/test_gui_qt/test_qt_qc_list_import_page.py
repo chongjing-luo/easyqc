@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QAbstractButton,
     QAbstractItemView,
     QComboBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -585,6 +586,38 @@ def test_reduced_width_keeps_import_and_apply_actions_reachable(qtbot, tmp_path)
     assert page.clear_button.isVisible()
     assert page.apply_button.isVisible()
     assert page.preview_table.horizontalScrollBarPolicy() == Qt.ScrollBarAsNeeded
+
+
+def test_import_preview_actions_share_one_horizontal_layout(qtbot, tmp_path) -> None:
+    page, _configuration, _current = _page(qtbot, tmp_path)
+    page.resize(480, 520)
+    qtbot.waitUntil(lambda: page.width() == 480)
+    action_buttons = (
+        page.filter_button,
+        page.sort_button,
+        page.columns_button,
+        page.derive_button,
+        page.delete_rows_button,
+        page.delete_column_button,
+    )
+
+    action_layout = None
+    page_layout = page.layout()
+    for index in range(page_layout.count()):
+        candidate = page_layout.itemAt(index).layout()
+        if candidate is not None and candidate.indexOf(action_buttons[0]) >= 0:
+            action_layout = candidate
+            break
+
+    assert action_layout is not None
+    assert isinstance(action_layout, QHBoxLayout)
+    positions = [action_layout.indexOf(button) for button in action_buttons]
+    assert positions == list(range(positions[0], positions[0] + 6))
+    assert all(button.isVisible() for button in action_buttons)
+    assert all(
+        button.width() >= button.fontMetrics().horizontalAdvance(button.text())
+        for button in action_buttons
+    )
 
 
 def test_import_draft_can_generate_missing_easyqcid_then_merge(

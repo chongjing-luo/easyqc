@@ -186,7 +186,16 @@ def test_project_and_constants_pages_remove_repeated_titles_counts_and_visible_c
     assert first_row is not None
     assert first_row.indexOf(workspace.constant_name) >= 0
     assert first_row.indexOf(workspace.constant_value) >= 0
+    assert first_row.indexOf(workspace.constant_from_template_button) >= 0
     assert first_row.indexOf(workspace.save_constant_button) >= 0
+    assert first_row.indexOf(workspace.constant_from_template_button) < first_row.indexOf(
+        workspace.save_constant_button
+    )
+    search_row = workspace.constants_tab.layout().itemAt(1).layout()
+    assert search_row is not None
+    assert search_row.indexOf(workspace.constant_search) >= 0
+    assert search_row.indexOf(workspace.refresh_constants_button) >= 0
+    assert search_row.indexOf(workspace.constant_from_template_button) == -1
     assert workspace.save_constant_button.text() == "添加常量"
 
 

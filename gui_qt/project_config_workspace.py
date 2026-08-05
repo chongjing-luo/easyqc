@@ -378,6 +378,10 @@ class QtProjectConfigWorkspace(QWidget):
         self.save_constant_button = QPushButton("添加常量", self.constants_tab)
         self.save_constant_button.setObjectName("primaryAction")
         set_button_role(self.save_constant_button, "primary")
+        self.constant_from_template_button = QPushButton(
+            "从模板添加",
+            self.constants_tab,
+        )
         self.cancel_constant_button = QPushButton("取消编辑", self.constants_tab)
         self.cancel_constant_button.hide()
         form.addWidget(QLabel("常量名", self.constants_tab))
@@ -385,6 +389,7 @@ class QtProjectConfigWorkspace(QWidget):
         form.addWidget(QLabel("值", self.constants_tab))
         form.addWidget(self.constant_value, 2)
         form.addWidget(self.cancel_constant_button)
+        form.addWidget(self.constant_from_template_button)
         form.addWidget(self.save_constant_button)
         layout.addLayout(form)
 
@@ -395,12 +400,7 @@ class QtProjectConfigWorkspace(QWidget):
         self.constant_search.setPlaceholderText("搜索常量名或值")
         self.constant_search.setClearButtonEnabled(True)
         self.refresh_constants_button = QPushButton("刷新", self.constants_tab)
-        self.constant_from_template_button = QPushButton(
-            "从模板添加",
-            self.constants_tab,
-        )
         search_row.addWidget(self.constant_search, 1)
-        search_row.addWidget(self.constant_from_template_button)
         search_row.addWidget(self.refresh_constants_button)
         layout.addLayout(search_row)
 

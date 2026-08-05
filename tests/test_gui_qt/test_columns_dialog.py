@@ -94,6 +94,39 @@ def test_easyqcid_controls_cannot_hide_unpin_or_move_identity(qtbot):
     assert editor.state().pinned[0] == "easyqcid"
 
 
+def test_bulk_visibility_uses_complete_draft_and_preserves_pinned_identity(qtbot):
+    dialog = ColumnsDialog(DEFAULT, DEFAULT)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    emitted: list[ColumnViewState] = []
+    dialog.applyRequested.connect(emitted.append)
+    editor = dialog.editor
+    editor.search_edit.setText("age")
+
+    qtbot.mouseClick(editor.deselect_all_button, Qt.MouseButton.LeftButton)
+
+    assert editor.state().hidden == ("site", "age", "passed")
+    assert _item(editor, "easyqcid").checkState() == Qt.CheckState.Checked
+    assert editor.state().pinned == ("easyqcid",)
+    assert emitted == []
+
+    qtbot.mouseClick(editor.select_all_button, Qt.MouseButton.LeftButton)
+
+    assert editor.state().hidden == ()
+    assert emitted == []
+
+
+def test_bulk_visibility_requires_exact_bool_and_is_atomic(qtbot):
+    dialog = ColumnsDialog(DEFAULT, DEFAULT)
+    qtbot.addWidget(dialog)
+    before = dialog.editor.state()
+
+    with pytest.raises(TypeError, match="bool"):
+        dialog.editor.set_all_visible(1)
+
+    assert dialog.editor.state() == before
+
+
 def test_columns_reset_cancel_close_and_apply_are_transactional(qtbot):
     applied = ColumnViewState(
         order=("easyqcid", "age", "site", "passed"),

@@ -620,6 +620,10 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
         "The hidden or pinned column list contains duplicates."
     ),
     "列设置中包含重复列": "Column settings contain duplicate columns.",
+    "全选": "Select all",
+    "取消全选": "Deselect all",
+    "显示全部非固定列": "Show all non-pinned columns",
+    "隐藏全部非固定列": "Hide all non-pinned columns",
     "列设置窗口返回了无效草稿": (
         "The column settings dialog returned an invalid draft."
     ),
