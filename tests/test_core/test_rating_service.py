@@ -449,3 +449,17 @@ def test_professional_long_results_rejects_non_dataframe_input() -> None:
 
     with pytest.raises(TypeError, match="DataFrame"):
         service.professional_long_results([])  # type: ignore[arg-type]
+
+
+def test_professional_long_results_rejects_non_scalar_identity() -> None:
+    service = RatingService(_project(Path("/tmp/nonexistent")))
+    source = pd.DataFrame(
+        {
+            "easyqcid": pd.Series([["SUB001"]], dtype=object),
+            "module_name": ["Anat"],
+            "rater": ["r1"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="身份值必须是标量"):
+        service.professional_long_results(source)

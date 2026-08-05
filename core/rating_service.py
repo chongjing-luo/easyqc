@@ -788,11 +788,10 @@ class RatingService:
 
     @staticmethod
     def _normalize_long_identity(value: Any) -> str:
-        try:
-            if bool(pd.isna(value)):
-                return ""
-        except (TypeError, ValueError):
-            pass
+        if not pd.api.types.is_scalar(value):
+            raise ValueError("评分长表身份值必须是标量")
+        if bool(pd.isna(value)):
+            return ""
         return str(value).strip()
 
     def long_table_to_wide(self, long_df: pd.DataFrame) -> pd.DataFrame:
