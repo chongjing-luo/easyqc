@@ -96,6 +96,7 @@ class QtTableWorkspace(QWidget):
         delete_columns_callback: Callable[[tuple[str, ...]], int] | None = None,
         on_data_mutation_committed: Callable[[], None] | None = None,
         protected_delete_columns: tuple[str, ...] = (),
+        row_key_columns: tuple[str, ...] = ("easyqcid",),
         row_context_provider: Callable[[str], QcRowContext] | None = None,
         on_open_qc_module: (
             Callable[[str, QcModuleMenuEntry], None] | None
@@ -148,6 +149,10 @@ class QtTableWorkspace(QWidget):
         )
         self.service = (
             source if isinstance(source, TableViewService) else TableViewService(source)
+        )
+        self.row_key_columns = self._validate_row_key_columns(
+            row_key_columns,
+            self.service,
         )
         self.export_service = TableExportService(self.service)
         if background_row_threshold <= 0:
@@ -982,6 +987,43 @@ class QtTableWorkspace(QWidget):
                 dialog.reject()
                 setattr(self, attribute, None)
 
+    @staticmethod
+    def _validate_row_key_columns(
+        columns: tuple[str, ...],
+        service: TableViewService,
+    ) -> tuple[str, ...]:
+        if not isinstance(columns, tuple) or not columns:
+            raise TypeError("row_key_columns must be a non-empty tuple")
+        if any(not isinstance(column, str) or not column for column in columns):
+            raise ValueError("row_key_columns must contain non-empty strings")
+        if len(set(columns)) != len(columns):
+            raise ValueError("row_key_columns cannot contain duplicates")
+        if columns[0] != "easyqcid":
+            raise ValueError("row_key_columns must start with easyqcid")
+        available = {profile.name for profile in service.profiles}
+        missing = [column for column in columns if column not in available]
+        if missing:
+            raise ValueError(f"row_key_columns are missing from the table: {missing}")
+        return columns
+
+    def set_row_key_columns(self, columns: tuple[str, ...]) -> None:
+        """Select the exact source-row identity used by QC row actions."""
+
+        self.row_key_columns = self._validate_row_key_columns(
+            columns,
+            self.service,
+        )
+
+    def capture_state(self) -> TableViewState:
+        """Return the applied state with the table's current visual widths."""
+
+        return replace(
+            self.applied_state,
+            columns=self._columns_with_current_widths(
+                self.applied_state.columns
+            ),
+        )
+
     def _selected_identity(self) -> str:
         if self.selected_source_position is None:
             return ""
@@ -1075,28 +1117,43 @@ class QtTableWorkspace(QWidget):
         service: TableViewService,
         *,
         preserve_state: bool,
+        preferred_state: TableViewState | None = None,
+        preserve_selection: bool = True,
     ) -> None:
         """Atomically replace a prepared source and retain compatible view state."""
 
         if not isinstance(service, TableViewService):
             raise TypeError("replace_service requires TableViewService")
+        if preferred_state is not None and not isinstance(
+            preferred_state,
+            TableViewState,
+        ):
+            raise TypeError("preferred_state must be a TableViewState or None")
         previous_identity = self._selected_identity()
         previous_source_position = self.selected_source_position
-        previous = replace(
-            self.applied_state,
-            columns=self._columns_with_current_widths(self.applied_state.columns),
-        )
+        previous = self.capture_state()
         self._close_open_dialogs()
         self.close_view_inspector()
         self.task_controller.cancel()
+        if self._export_cancel_event is not None:
+            self._export_cancel_event.set()
+        self.export_task_controller.cancel()
+        self._clear_export_request()
+        self.last_export_receipt = None
+        self.export_status_label.setText("")
         self._pending_state = None
         self._pending_reset_page = False
+        if self.active_row_context_menu is not None:
+            self.active_row_context_menu.close()
+            self.active_row_context_menu.deleteLater()
+            self.active_row_context_menu = None
         self.service = service
         self.export_service = TableExportService(service)
-        self.initial_state = service.default_state(page_size=previous.page_size)
+        source_state = preferred_state or previous
+        self.initial_state = service.default_state(page_size=source_state.page_size)
         candidate = (
-            self._compatible_state(previous, service)
-            if preserve_state
+            self._compatible_state(source_state, service)
+            if preserve_state or preferred_state is not None
             else self.initial_state
         )
         try:
@@ -1112,7 +1169,7 @@ class QtTableWorkspace(QWidget):
         self.selected_source_position = None
         self.selection_outside_view = False
         self._render_result()
-        if previous_identity:
+        if preserve_selection and previous_identity:
             try:
                 position = service.find_identity(self.result, previous_identity)
             except QcIdentityError:
@@ -1994,13 +2051,21 @@ class QtTableWorkspace(QWidget):
             self._set_error("所选记录不在当前视图中")
             return False
         current = self.table_model.row_reference(local_row)
-        if current.source_position != reference.source_position:
+        if current != reference:
             self._set_error("所选记录引用已失效，请重新选择")
             return False
         try:
-            identity = self.service.validate_qc_identity(self.result, position)
-        except QcIdentityError as exc:
+            row_key = self.service.validate_row_key(
+                self.result,
+                position,
+                self.row_key_columns,
+            )
+        except TableViewError as exc:
             self._set_error(str(exc))
+            return False
+        identity = row_key[self.row_key_columns.index("easyqcid")]
+        if identity != reference.easyqcid:
+            self._set_error("所选记录引用已失效，请重新选择")
             return False
         if self.on_open_qc is None:
             self._set_error("当前只读表格不能打开质控")
@@ -2044,10 +2109,21 @@ class QtTableWorkspace(QWidget):
         view.selectRow(index.row())
         reference = self.table_model.row_reference(index.row())
         try:
-            identity = self.service.validate_qc_identity(
+            if (
+                reference.result_position < 0
+                or reference.result_position >= self.result.matched_total
+                or int(
+                    self.result.source_positions[reference.result_position]
+                )
+                != reference.source_position
+            ):
+                raise TableViewError("所选记录引用已失效，请重新选择")
+            row_key = self.service.validate_row_key(
                 self.result,
                 reference.result_position,
+                self.row_key_columns,
             )
+            identity = row_key[self.row_key_columns.index("easyqcid")]
             if identity != reference.easyqcid:
                 raise TableViewError("所选记录引用已失效，请重新选择")
             if (

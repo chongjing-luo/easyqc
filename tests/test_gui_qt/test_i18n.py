@@ -108,6 +108,10 @@ def test_translation_formatting_is_strict_and_keeps_business_identifiers(tmp_pat
         ("正在取消导出…", "Cancelling export…"),
         ("查看总名单", "View master list"),
         ("查看筛选名单", "View filtered list"),
+        ("切换为长表", "Switch to long view"),
+        ("切换为宽表", "Switch to wide view"),
+        ("将质控结果切换为长表", "Switch QC results to long view"),
+        ("将质控结果切换为宽表", "Switch QC results to wide view"),
         (
             "质控总名单：Module_User_Text",
             "Master QC list — Module_User_Text",

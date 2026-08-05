@@ -59,6 +59,7 @@ class ProjectContextSnapshot:
     ratings: tuple[Rating, ...]
     rating_positions_by_easyqcid: Mapping[str, tuple[int, ...]]
     table_view_service: TableViewService
+    long_results_table_view_service: TableViewService
 
     @property
     def has_project(self) -> bool:
@@ -77,6 +78,7 @@ class PreparedProjectContext:
     ratings: tuple[Rating, ...]
     rating_positions_by_easyqcid: Mapping[str, tuple[int, ...]]
     table_view_service: TableViewService
+    long_results_table_view_service: TableViewService
 
 
 class ProjectContextService:
@@ -132,6 +134,7 @@ class ProjectContextService:
         if last:
             return self.prepare_project(last)
         subjects = pd.DataFrame(columns=["easyqcid"])
+        long_results = RatingService.professional_long_results(pd.DataFrame())
         return PreparedProjectContext(
             project_load=None,
             project_names=tuple(project_service.list_all()),
@@ -141,6 +144,7 @@ class ProjectContextService:
             ratings=(),
             rating_positions_by_easyqcid=MappingProxyType({}),
             table_view_service=TableViewService(subjects),
+            long_results_table_view_service=TableViewService(long_results),
         )
 
     def prepare_project(self, name: str) -> PreparedProjectContext:
@@ -181,6 +185,9 @@ class ProjectContextService:
                 ratings=(),
                 rating_positions_by_easyqcid=MappingProxyType({}),
                 table_view_service=prepared.table_view_service,
+                long_results_table_view_service=(
+                    prepared.long_results_table_view_service
+                ),
             )
 
         project = self.configuration_service.project_service.commit_load(
@@ -203,6 +210,9 @@ class ProjectContextService:
             ratings=tuple(deepcopy(prepared.ratings)),
             rating_positions_by_easyqcid=prepared.rating_positions_by_easyqcid,
             table_view_service=prepared.table_view_service,
+            long_results_table_view_service=(
+                prepared.long_results_table_view_service
+            ),
         )
 
     def _prepare_context(self, prepared: PreparedProjectLoad) -> PreparedProjectContext:
@@ -227,6 +237,9 @@ class ProjectContextService:
         loaded_ratings = RatingService(project).load_state(subjects)
         ratings = tuple(deepcopy(loaded_ratings.ratings))
         table_source = self._professional_table_source(subjects, loaded_ratings.qctable)
+        long_results = RatingService.professional_long_results(
+            loaded_ratings.original_table
+        )
         return PreparedProjectContext(
             project_load=prepared,
             project_names=tuple(self.configuration_service.project_service.list_all()),
@@ -236,6 +249,7 @@ class ProjectContextService:
             ratings=ratings,
             rating_positions_by_easyqcid=self._index_rating_positions(ratings),
             table_view_service=TableViewService(table_source),
+            long_results_table_view_service=TableViewService(long_results),
         )
 
     @classmethod

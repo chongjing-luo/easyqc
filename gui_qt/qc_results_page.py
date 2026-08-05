@@ -13,6 +13,7 @@ from core.table_view_service import TableViewService
 from gui_qt.i18n import LanguageController, translate_ui_text
 from gui_qt.table_workspace import QtTableWorkspace
 from models.derived_formula import DerivedColumnFormula
+from models.table_view_state import TableViewState
 
 
 class _QtQcResultsTableWorkspace(QtTableWorkspace):
@@ -93,21 +94,44 @@ class QtQcResultsPage(QWidget):
         self._on_derived_column_committed = on_derived_column_committed
         self.language = language
         self._refresh_busy = False
+        self._default_page_size = 25
+        self.wide_service = TableViewService(source)
+        self.long_service = TableViewService(
+            pd.DataFrame(
+                {
+                    column: pd.Series(dtype="string")
+                    for column in (
+                        "easyqcid",
+                        "module_name",
+                        "rater",
+                        "notes",
+                        "time",
+                    )
+                }
+            )
+        )
+        self.current_mode = "wide"
+        self._mode_states: dict[str, TableViewState | None] = {
+            "wide": None,
+            "long": None,
+        }
         self.setObjectName("qcResultsPage")
         self.setAccessibleName("质控结果")
-        self._build_ui(source)
+        self._build_ui()
+        if self.language is not None:
+            self.language.languageChanged.connect(self.retranslate_ui)
 
-    def _build_ui(self, source: pd.DataFrame) -> None:
+    def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(8)
 
         self.table_workspace = _QtQcResultsTableWorkspace(
-            source,
+            self.wide_service,
             derive_column_callback=self._derive_column_callback,
             derive_preview_source=self._derive_preview_source,
             on_derived_column_committed=self._on_derived_column_committed,
-            page_size=25,
+            page_size=self._default_page_size,
             language=self.language,
             parent=self,
         )
@@ -160,6 +184,17 @@ class QtQcResultsPage(QWidget):
             self.table_workspace.filter_action,
             self.refresh_action,
         )
+        self.mode_action = QAction("切换为长表", self)
+        self.mode_action.setObjectName("toggleQcResultsModeAction")
+        self.mode_action.setShortcut(QKeySequence("Ctrl+Shift+L"))
+        self.mode_action.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+        self.mode_action.triggered.connect(
+            lambda _checked=False: self.toggle_result_mode()
+        )
+        self.table_workspace.action_toolbar.insertAction(
+            self.table_workspace.filter_action,
+            self.mode_action,
+        )
         self.table_workspace.action_toolbar.insertSeparator(
             self.table_workspace.filter_action
         )
@@ -169,6 +204,14 @@ class QtQcResultsPage(QWidget):
         self.refresh_button.setObjectName("refreshQcResultsButton")
         if isinstance(self.refresh_button, QToolButton):
             self.refresh_button.setAutoRaise(False)
+        self.mode_button = self.table_workspace.action_toolbar.widgetForAction(
+            self.mode_action
+        )
+        if self.mode_button is not None:
+            self.mode_button.setObjectName("toggleQcResultsModeButton")
+            if isinstance(self.mode_button, QToolButton):
+                self.mode_button.setAutoRaise(False)
+        self._update_mode_action()
         layout.addWidget(self.table_workspace, 1)
 
         self.error_label = QLabel("", self)
@@ -198,23 +241,149 @@ class QtQcResultsPage(QWidget):
         self.show_error("")
         return True
 
+    def _ui_text(self, source: str) -> str:
+        if self.language is not None:
+            return self.language.translate_source(source)
+        return translate_ui_text(source)
+
+    @staticmethod
+    def _row_key_columns(mode: str) -> tuple[str, ...]:
+        if mode == "wide":
+            return ("easyqcid",)
+        if mode == "long":
+            return ("easyqcid", "module_name", "rater")
+        raise ValueError(f"Unknown QC results mode: {mode}")
+
+    def _service_for_mode(self, mode: str) -> TableViewService:
+        if mode == "wide":
+            return self.wide_service
+        if mode == "long":
+            return self.long_service
+        raise ValueError(f"Unknown QC results mode: {mode}")
+
+    def _update_mode_action(self) -> None:
+        target = "long" if self.current_mode == "wide" else "wide"
+        label = "切换为长表" if target == "long" else "切换为宽表"
+        description = (
+            "将质控结果切换为长表"
+            if target == "long"
+            else "将质控结果切换为宽表"
+        )
+        self.mode_action.setText(self._ui_text(label))
+        self.mode_action.setToolTip(self._ui_text(description))
+        if self.mode_button is not None:
+            self.mode_button.setAccessibleName(self._ui_text(description))
+            self.mode_button.setToolTip(self._ui_text(description))
+
+    def replace_services(
+        self,
+        wide: TableViewService,
+        long: TableViewService,
+        *,
+        preserve_state: bool,
+    ) -> None:
+        """Accept one prepared wide/long pair without reading rating files."""
+
+        if not isinstance(wide, TableViewService) or not isinstance(
+            long,
+            TableViewService,
+        ):
+            raise TypeError("replace_services requires two TableViewService objects")
+        for mode, service in (("wide", wide), ("long", long)):
+            available = {profile.name for profile in service.profiles}
+            missing = [
+                column
+                for column in self._row_key_columns(mode)
+                if column not in available
+            ]
+            if missing:
+                raise ValueError(
+                    f"{mode} results service is missing row-key columns: {missing}"
+                )
+        if preserve_state:
+            self._mode_states[self.current_mode] = (
+                self.table_workspace.capture_state()
+            )
+        else:
+            self.current_mode = "wide"
+            self._mode_states = {"wide": None, "long": None}
+
+        self.wide_service = wide
+        self.long_service = long
+        service = self._service_for_mode(self.current_mode)
+        preferred = self._mode_states[self.current_mode]
+        if preferred is None:
+            preferred = service.default_state(
+                page_size=self._default_page_size
+            )
+        self.table_workspace.replace_service(
+            service,
+            preserve_state=True,
+            preferred_state=preferred,
+            preserve_selection=bool(
+                preserve_state and self.current_mode == "wide"
+            ),
+        )
+        self.table_workspace.set_row_key_columns(
+            self._row_key_columns(self.current_mode)
+        )
+        self._mode_states[self.current_mode] = (
+            self.table_workspace.capture_state()
+        )
+        self._update_mode_action()
+        self.set_refresh_busy(False)
+        self.show_error("")
+
+    def toggle_result_mode(self) -> str:
+        """Switch synchronously to the other already prepared result service."""
+
+        self._mode_states[self.current_mode] = self.table_workspace.capture_state()
+        target = "long" if self.current_mode == "wide" else "wide"
+        service = self._service_for_mode(target)
+        preferred = self._mode_states[target]
+        if preferred is None:
+            preferred = service.default_state(
+                page_size=self._default_page_size
+            )
+        self.table_workspace.replace_service(
+            service,
+            preserve_state=True,
+            preferred_state=preferred,
+            preserve_selection=False,
+        )
+        self.table_workspace.set_row_key_columns(self._row_key_columns(target))
+        self.current_mode = target
+        self._mode_states[target] = self.table_workspace.capture_state()
+        self._update_mode_action()
+        self.show_error("")
+        return target
+
     def replace_service(
         self,
         service: TableViewService,
         *,
         preserve_state: bool,
     ) -> None:
-        """Replace the prepared projection while retaining compatible view state."""
+        """Backward-compatible replacement of the professional wide service."""
 
-        self.table_workspace.replace_service(service, preserve_state=preserve_state)
-        self.set_refresh_busy(False)
-        self.show_error("")
+        self.replace_services(
+            service,
+            self.long_service,
+            preserve_state=preserve_state,
+        )
 
     def set_refresh_busy(self, busy: bool) -> None:
         self._refresh_busy = bool(busy)
         source = "刷新中…" if self._refresh_busy else "刷新结果"
-        self.refresh_action.setText(translate_ui_text(source))
+        self.refresh_action.setText(self._ui_text(source))
         self.refresh_action.setEnabled(not self._refresh_busy)
+
+    def retranslate_ui(self, _language: str | None = None) -> None:
+        """Refresh dynamic mode/refresh chrome without replacing either view."""
+
+        self.table_workspace.retranslate_ui()
+        self.set_refresh_busy(self._refresh_busy)
+        self._update_mode_action()
 
     def show_error(self, message: str) -> None:
         text = str(message)

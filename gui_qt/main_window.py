@@ -173,6 +173,17 @@ class QtMainWindow(QMainWindow):
             ratings=(),
             rating_positions_by_easyqcid=MappingProxyType({}),
             table_view_service=TableViewService(initial_source),
+            long_results_table_view_service=TableViewService(
+                pd.DataFrame(
+                    columns=(
+                        "easyqcid",
+                        "module_name",
+                        "rater",
+                        "notes",
+                        "time",
+                    )
+                )
+            ),
         )
         self.qc_workspace: QtQcWorkspace | None = None
         self.qc_controller: QtQcControllerWindow | None = None
@@ -192,8 +203,9 @@ class QtMainWindow(QMainWindow):
                 self.current_context.table_view_service,
                 preserve_state=False,
             )
-            self.results_page.replace_service(
+            self.results_page.replace_services(
                 self.current_context.table_view_service,
+                self.current_context.long_results_table_view_service,
                 preserve_state=False,
             )
             self._sync_preview_aliases()
@@ -835,8 +847,9 @@ class QtMainWindow(QMainWindow):
             snapshot.table_view_service,
             preserve_state=bool(preserve_qc and same_project),
         )
-        self.results_page.replace_service(
+        self.results_page.replace_services(
             snapshot.table_view_service,
+            snapshot.long_results_table_view_service,
             preserve_state=bool(preserve_qc and same_project),
         )
         self.table_workspace.on_open_qc = (

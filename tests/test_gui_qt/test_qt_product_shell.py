@@ -650,7 +650,11 @@ def test_all_seven_pages_have_no_untranslated_chinese_in_english_mode(
     assert untranslated == {}
 
 
-def test_results_navigation_owns_direct_shared_results_page(qtbot, tmp_path) -> None:
+def test_results_navigation_owns_direct_shared_results_page(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
     window, _services = _window(qtbot, tmp_path)
     window.navigation.setCurrentRow(window.results_page_index)
 
@@ -658,8 +662,35 @@ def test_results_navigation_owns_direct_shared_results_page(qtbot, tmp_path) -> 
     assert window.results_workspace is window.results_page.table_workspace
     assert window.results_workspace is not window.table_workspace
     assert window.results_workspace.service is window.current_context.table_view_service
+    assert window.results_page.wide_service is window.current_context.table_view_service
+    assert (
+        window.results_page.long_service
+        is window.current_context.long_results_table_view_service
+    )
+    assert window.results_page.current_mode == "wide"
+    assert window.results_workspace.row_key_columns == ("easyqcid",)
     assert window.workspace_stack.currentWidget() is window.results_page
     assert window.findChild(QLabel, "qcResultsTitle") is None
+
+    def unexpected_load(*_args, **_kwargs):
+        raise AssertionError("results mode switching must not load ratings")
+
+    monkeypatch.setattr(
+        type(window.services.rating_service),
+        "load_state",
+        unexpected_load,
+    )
+    assert window.results_page.toggle_result_mode() == "long"
+    assert (
+        window.results_workspace.service
+        is window.current_context.long_results_table_view_service
+    )
+    assert window.results_workspace.row_key_columns == (
+        "easyqcid",
+        "module_name",
+        "rater",
+    )
+    assert window.results_page.toggle_result_mode() == "wide"
 
 
 def test_non_first_easyqcid_project_loads_and_module_launch_click_responds(
@@ -854,6 +885,52 @@ def test_row_context_menus_cover_pre_qc_results_and_active_qc_queue(
         window.qc_workspace.active_row_context_menu.context.easyqcid
         == "SUB002"
     )
+
+
+def test_long_results_row_menu_uses_composite_identity_but_existing_easyqcid_context(
+    qtbot,
+    tmp_path,
+) -> None:
+    services = build_app_services(tmp_path / "projects.json")
+    _add_project(services, tmp_path, "SAMPLE", second_module=True)
+    project = services.configuration_service.current_project
+    subjects = services.configuration_service.subjects()
+    anat = QcWorkflowService(
+        _module_payload(),
+        subjects,
+        rating_dir=project.rating_dir / "AnatQC" / "rater1",
+        code_executor=services.code_executor,
+    )
+    anat.set_score("1", "Good")
+    anat.save()
+    func = QcWorkflowService(
+        _module_payload(name="FuncQC", rater="rater2"),
+        subjects,
+        rating_dir=project.rating_dir / "FuncQC" / "rater2",
+        code_executor=services.code_executor,
+    )
+    func.set_score("1", "Fair")
+    func.save()
+    window = build_product_window(services)
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
+
+    assert window.results_page.toggle_result_mode() == "long"
+    assert window.results_workspace.result.matched_total == 2
+    second = window.results_workspace.table_model.index(1, 0)
+    window.results_workspace._open_row_context_menu(
+        window.results_workspace.pinned_view,
+        window.results_workspace.pinned_view.visualRect(second).center(),
+    )
+
+    menu = window.results_workspace.active_row_context_menu
+    assert menu is not None
+    assert menu.context.easyqcid == "SUB001"
+    assert set(menu.record_actions) == {
+        ("SUB001", "AnatQC", "rater1"),
+        ("SUB001", "FuncQC", "rater2"),
+    }
 
 
 def test_row_record_action_starts_toggleable_read_only_and_dirty_draft_blocks_replacement(

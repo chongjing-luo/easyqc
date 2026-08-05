@@ -110,6 +110,7 @@ def test_empty_context_is_detached_and_does_not_create_registry(tmp_path) -> Non
     assert snapshot.project_names == ()
     assert snapshot.subjects.empty
     assert snapshot.table_view_service.source_total == 0
+    assert snapshot.long_results_table_view_service.source_total == 0
     assert not registry.exists()
 
 
@@ -145,6 +146,86 @@ def test_last_project_snapshot_prepares_subjects_ratings_and_table_service(tmp_p
     )
     window = snapshot.table_view_service.get_window(result, 0, 1)
     assert window.dataframe.loc[0, "AnatQC.rater1.score1"] == "Good"
+
+
+def test_context_prepares_wide_and_professional_long_services_from_one_rating_load(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    registry = tmp_path / "projects.json"
+    services = build_app_services(registry)
+    project = _add_project(services, tmp_path, "SAMPLE")
+    workflow = QcWorkflowService(
+        _module_payload(),
+        _subjects(),
+        rating_dir=project.rating_dir / "AnatQC" / "rater1",
+        code_executor=services.code_executor,
+    )
+    workflow.set_score("1", "Good")
+    workflow.set_tag("1", True)
+    workflow.save()
+    real_load_state = project_context_module.RatingService.load_state
+    real_professional_long = (
+        project_context_module.RatingService.professional_long_results
+    )
+    loads = []
+    loaded_states = []
+    projected_sources = []
+
+    def counted_load_state(service, subjects):
+        loads.append(subjects)
+        state = real_load_state(service, subjects)
+        loaded_states.append(state)
+        return state
+
+    def capture_professional_long(long_frame):
+        projected_sources.append(long_frame)
+        return real_professional_long(long_frame)
+
+    monkeypatch.setattr(
+        project_context_module.RatingService,
+        "load_state",
+        counted_load_state,
+    )
+    monkeypatch.setattr(
+        project_context_module.RatingService,
+        "professional_long_results",
+        capture_professional_long,
+    )
+
+    snapshot = services.project_context_service.snapshot()
+
+    assert len(loads) == 1
+    assert len(loaded_states) == 1
+    assert len(projected_sources) == 1
+    assert projected_sources[0] is loaded_states[0].original_table
+    assert loads[0] is not snapshot.subjects
+    assert snapshot.table_view_service.source_total == 3
+    assert snapshot.long_results_table_view_service.source_total == 1
+    assert tuple(
+        profile.name for profile in snapshot.long_results_table_view_service.profiles
+    ) == (
+        "easyqcid",
+        "module_name",
+        "rater",
+        "score1",
+        "tag1",
+        "notes",
+        "time",
+    )
+    long_result = snapshot.long_results_table_view_service.apply_state(
+        snapshot.long_results_table_view_service.default_state()
+    )
+    long_frame = snapshot.long_results_table_view_service.get_window(
+        long_result,
+        0,
+        1,
+    ).dataframe
+    assert long_frame.loc[0, ["easyqcid", "module_name", "rater"]].tolist() == [
+        "SUB001",
+        "AnatQC",
+        "rater1",
+    ]
 
 
 def test_qc_factory_uses_snapshot_order_directory_and_emits_rating_event(tmp_path) -> None:

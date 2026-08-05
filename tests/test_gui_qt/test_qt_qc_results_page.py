@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pandas as pd
 from PySide6.QtCore import QSettings, Qt
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import QAbstractItemView, QLabel, QPushButton, QToolBar
 
 from core.table_view_service import TableViewService
@@ -18,6 +21,20 @@ def _source() -> pd.DataFrame:
             "easyqcid": ["SUB001", "SUB002", "SUB003"],
             "site": ["A", "B", "A"],
             "AnatQC.rater1.score1": ["Good", "Fair", None],
+        }
+    )
+
+
+def _long_source() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "easyqcid": ["SUB001", "SUB001", "SUB002"],
+            "module_name": ["AnatQC", "FuncQC", "AnatQC"],
+            "rater": ["rater1", "rater2", "rater1"],
+            "score1": ["Good", "Fair", "Poor"],
+            "tag1": [True, False, True],
+            "notes": ["", "review", ""],
+            "time": ["2026-08-01", "2026-08-02", "2026-08-03"],
         }
     )
 
@@ -52,6 +69,7 @@ def test_results_page_is_direct_read_only_shared_table_without_repeated_title(
     assert not (table.table_model.flags(table.table_model.index(0, 0)) & Qt.ItemIsEditable)
     assert _visible_toolbar_text(page) == [
         "刷新结果",
+        "切换为长表",
         "筛选 (0)",
         "排序 (0)",
         "列显示 (3/3)",
@@ -83,6 +101,146 @@ def test_results_page_is_direct_read_only_shared_table_without_repeated_title(
     qtbot.waitUntil(lambda: not table._pinned_width_update_pending)
 
 
+def test_results_page_switches_prepared_services_with_independent_mode_state(
+    qtbot,
+) -> None:
+    page = QtQcResultsPage(_source(), refresh_callback=lambda: True)
+    qtbot.addWidget(page)
+    wide = TableViewService(_source())
+    long = TableViewService(_long_source())
+
+    page.replace_services(wide, long, preserve_state=False)
+
+    assert page.current_mode == "wide"
+    assert page.table_workspace.service is wide
+    assert page.table_workspace.row_key_columns == ("easyqcid",)
+    assert page.mode_action.text() == "切换为长表"
+    assert page.mode_action.isEnabled()
+    assert page.mode_action.shortcut() != QKeySequence()
+    assert page.table_workspace.apply_sort_rules((SortRule("site", False),))
+    assert page.table_workspace.apply_column_state(
+        replace(
+            page.table_workspace.applied_state.columns,
+            hidden=("AnatQC.rater1.score1",),
+        )
+    )
+    assert page.table_workspace.set_page_size(50)
+
+    assert page.toggle_result_mode() == "long"
+
+    assert page.current_mode == "long"
+    assert page.table_workspace.service is long
+    assert page.table_workspace.row_key_columns == (
+        "easyqcid",
+        "module_name",
+        "rater",
+    )
+    assert page.mode_action.text() == "切换为宽表"
+    assert page.table_workspace.applied_state.sort_rules == ()
+    assert page.table_workspace.apply_sort_rules((SortRule("module_name", True),))
+    assert page.table_workspace.apply_column_state(
+        replace(
+            page.table_workspace.applied_state.columns,
+            hidden=("notes",),
+        )
+    )
+    assert page.table_workspace.set_page_size(100)
+
+    assert page.toggle_result_mode() == "wide"
+    assert page.table_workspace.applied_state.sort_rules == (SortRule("site", False),)
+    assert page.table_workspace.applied_state.columns.hidden == (
+        "AnatQC.rater1.score1",
+    )
+    assert page.table_workspace.applied_state.page_size == 50
+
+    assert page.toggle_result_mode() == "long"
+    assert page.table_workspace.applied_state.sort_rules == (
+        SortRule("module_name", True),
+    )
+    assert page.table_workspace.applied_state.columns.hidden == ("notes",)
+    assert page.table_workspace.applied_state.page_size == 100
+
+    refreshed_wide = TableViewService(_source().assign(scanner=["A", "B", "C"]))
+    refreshed_long = TableViewService(_long_source().assign(score2=[1, 2, 3]))
+    page.replace_services(refreshed_wide, refreshed_long, preserve_state=True)
+
+    assert page.current_mode == "long"
+    assert page.table_workspace.service is refreshed_long
+    assert page.table_workspace.applied_state.sort_rules == (
+        SortRule("module_name", True),
+    )
+    assert page.table_workspace.applied_state.columns.hidden == ("notes",)
+    assert page.toggle_result_mode() == "wide"
+    assert page.table_workspace.service is refreshed_wide
+    assert page.table_workspace.applied_state.sort_rules == (
+        SortRule("site", False),
+    )
+    assert page.table_workspace.applied_state.columns.hidden == (
+        "AnatQC.rater1.score1",
+    )
+    assert "scanner" in page.table_workspace.applied_state.columns.order
+
+    page.replace_services(wide, long, preserve_state=False)
+
+    assert page.current_mode == "wide"
+    assert page.table_workspace.service is wide
+    assert page.table_workspace.applied_state.sort_rules == ()
+    assert page.table_workspace.applied_state.columns.hidden == ()
+    assert page.table_workspace.applied_state.page_size == 25
+
+
+def test_results_page_export_uses_only_the_visible_long_mode(qtbot, tmp_path) -> None:
+    page = QtQcResultsPage(_source(), refresh_callback=lambda: True)
+    qtbot.addWidget(page)
+    wide = TableViewService(_source())
+    long = TableViewService(_long_source())
+    page.replace_services(wide, long, preserve_state=False)
+    assert page.toggle_result_mode() == "long"
+    assert page.table_workspace.apply_sort_rules((SortRule("module_name", False),))
+    destination = tmp_path / "long-results.csv"
+
+    assert page.table_workspace.start_export(destination, chunk_size=1)
+    qtbot.waitUntil(
+        lambda: not page.table_workspace.export_task_controller.busy,
+        timeout=3000,
+    )
+
+    exported = pd.read_csv(destination)
+    assert exported.columns.tolist() == _long_source().columns.tolist()
+    assert exported["module_name"].tolist() == ["FuncQC", "AnatQC", "AnatQC"]
+    assert len(exported) == 3
+
+
+def test_legacy_single_service_replacement_always_targets_the_wide_projection(
+    qtbot,
+) -> None:
+    page = QtQcResultsPage(_source(), refresh_callback=lambda: True)
+    qtbot.addWidget(page)
+    initial_wide = TableViewService(_source())
+    long = TableViewService(_long_source())
+    page.replace_services(initial_wide, long, preserve_state=False)
+    assert page.toggle_result_mode() == "long"
+    replacement = TableViewService(_source().assign(scanner=["A", "B", "C"]))
+
+    page.replace_service(replacement, preserve_state=False)
+
+    assert page.current_mode == "wide"
+    assert page.wide_service is replacement
+    assert page.long_service is long
+    assert page.table_workspace.service is replacement
+
+    assert page.toggle_result_mode() == "long"
+    newer_wide = TableViewService(_source().assign(session=[1, 2, 3]))
+    page.replace_service(newer_wide, preserve_state=True)
+
+    assert page.current_mode == "long"
+    assert page.wide_service is newer_wide
+    assert page.long_service is long
+    assert page.table_workspace.service is long
+    assert page.toggle_result_mode() == "wide"
+    assert page.table_workspace.service is newer_wide
+
+
 def test_results_statuses_stay_english_when_state_changes_after_language_switch(
     qtbot,
     tmp_path,
@@ -97,6 +255,11 @@ def test_results_statuses_stay_english_when_state_changes_after_language_switch(
     )
     qtbot.addWidget(page)
     controller.register_root(page)
+    page.replace_services(
+        TableViewService(_source()),
+        TableViewService(_long_source()),
+        preserve_state=False,
+    )
     controller.set_language("en")
     table = page.table_workspace
 
@@ -115,6 +278,9 @@ def test_results_statuses_stay_english_when_state_changes_after_language_switch(
     assert table.range_label.text() == "Rows 1–2"
     assert table.columns_status_label.text() == "Columns 3/3"
     assert table.selection_status_label.text() == "Selected source row 1"
+    assert page.mode_action.text() == "Switch to long view"
+    assert page.toggle_result_mode() == "long"
+    assert page.mode_action.text() == "Switch to wide view"
 
 
 def test_results_page_refresh_empty_and_error_states_are_explicit(qtbot) -> None:

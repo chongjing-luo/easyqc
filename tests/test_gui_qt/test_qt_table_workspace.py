@@ -7,6 +7,7 @@ from threading import Event
 import time
 
 import pandas as pd
+import pytest
 from pandas.testing import assert_frame_equal
 from PySide6.QtCore import (
     QCoreApplication,
@@ -31,9 +32,10 @@ from PySide6.QtWidgets import (
 )
 
 from core.table_view_service import TableViewError, TableViewService
-from core.table_export_service import TableExportError
+from core.table_export_service import TableExportCancelled, TableExportError
 from gui_qt.i18n import LanguageController
 from gui_qt.table_workspace import QtTableWorkspace
+from models.qc_row_context import QcRowContext
 from models.table_view_state import (
     ColumnViewState,
     FilterCondition,
@@ -1602,6 +1604,134 @@ def test_prepared_source_replacement_preserves_compatible_view_and_identity(qtbo
     ]
     assert "AnatQC.rater1.score1" in workspace.applied_state.columns.order
     assert workspace.table_model.row_reference(2).easyqcid == "SUB003"
+
+
+def test_workspace_composite_row_key_allows_repeated_easyqcid_for_exact_menu(
+    qtbot,
+) -> None:
+    source = pd.DataFrame(
+        {
+            "easyqcid": ["SUB001", "SUB001", "SUB002"],
+            "module_name": ["AnatQC", "FuncQC", "AnatQC"],
+            "rater": ["rater1", "rater2", "rater1"],
+            "score1": ["Good", "Fair", "Poor"],
+        }
+    )
+    provided = []
+    workspace = QtTableWorkspace(
+        source,
+        row_key_columns=("easyqcid", "module_name", "rater"),
+        row_context_provider=lambda identity: provided.append(identity)
+        or QcRowContext(identity, (), ()),
+        on_open_qc_module=lambda _identity, _entry: None,
+        on_open_qc_record=lambda _entry: None,
+    )
+    qtbot.addWidget(workspace)
+    workspace.resize(900, 600)
+    workspace.show()
+
+    index = workspace.table_model.index(1, 0)
+    workspace._open_row_context_menu(
+        workspace.pinned_view,
+        workspace.pinned_view.visualRect(index).center(),
+    )
+
+    assert workspace.row_key_columns == ("easyqcid", "module_name", "rater")
+    assert provided == ["SUB001"]
+    assert workspace.active_row_context_menu is not None
+    assert workspace.active_row_context_menu.context.easyqcid == "SUB001"
+    assert workspace.error_text == ""
+
+
+def test_workspace_composite_row_key_rejects_duplicate_or_stale_exact_row(
+    qtbot,
+) -> None:
+    duplicate = pd.DataFrame(
+        {
+            "easyqcid": ["SUB001", "SUB001"],
+            "module_name": ["AnatQC", "AnatQC"],
+            "rater": ["rater1", "rater1"],
+        }
+    )
+    calls = []
+    workspace = QtTableWorkspace(
+        duplicate,
+        row_key_columns=("easyqcid", "module_name", "rater"),
+        row_context_provider=lambda identity: calls.append(identity)
+        or QcRowContext(identity, (), ()),
+        on_open_qc_module=lambda _identity, _entry: None,
+        on_open_qc_record=lambda _entry: None,
+    )
+    qtbot.addWidget(workspace)
+    workspace.resize(900, 600)
+    workspace.show()
+    index = workspace.table_model.index(0, 0)
+
+    workspace._open_row_context_menu(
+        workspace.pinned_view,
+        workspace.pinned_view.visualRect(index).center(),
+    )
+
+    assert calls == []
+    assert workspace.active_row_context_menu is None
+    assert "不唯一" in workspace.error_text
+
+
+def test_workspace_captures_width_aware_state_and_updates_row_key_contract(qtbot):
+    workspace = QtTableWorkspace(_source())
+    qtbot.addWidget(workspace)
+    workspace.table_view.setColumnWidth(1, 211)
+
+    captured = workspace.capture_state()
+    workspace.set_row_key_columns(("easyqcid", "site"))
+
+    assert captured.columns.width_for("site") == 211
+    assert workspace.row_key_columns == ("easyqcid", "site")
+    with pytest.raises(ValueError, match="easyqcid"):
+        workspace.set_row_key_columns(("site",))
+
+
+def test_workspace_service_replacement_cancels_active_export(
+    qtbot,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    workspace = QtTableWorkspace(_source())
+    qtbot.addWidget(workspace)
+    started = Event()
+    cancelled = Event()
+
+    def wait_for_cancel(
+        _result,
+        _columns,
+        _destination,
+        cancel_event,
+        _progress,
+        *,
+        chunk_size,
+    ):
+        assert chunk_size == 1
+        started.set()
+        if not cancel_event.wait(2):
+            raise AssertionError("service replacement did not cancel the export")
+        cancelled.set()
+        raise TableExportCancelled("cancelled by service replacement")
+
+    monkeypatch.setattr(
+        workspace.export_service,
+        "export_applied_csv",
+        wait_for_cancel,
+    )
+    assert workspace.start_export(tmp_path / "stale.csv", chunk_size=1)
+    qtbot.waitUntil(started.is_set, timeout=2000)
+    replacement = TableViewService(_source().assign(extra=range(5)))
+
+    workspace.replace_service(replacement, preserve_state=True)
+
+    qtbot.waitUntil(cancelled.is_set, timeout=2000)
+    assert workspace.service is replacement
+    assert not workspace.export_task_controller.busy
+    assert workspace._export_cancel_event is None
 
 
 def test_optional_list_deletion_actions_use_filter_and_multi_column_dialogs(
