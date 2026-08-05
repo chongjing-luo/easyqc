@@ -26,8 +26,9 @@ Three related usability gaps remain in the module/results workflow:
    order and is re-keyed to numeric strings `1..N` by the existing save path.
 3. Wrap tag chips onto additional rows and grow the tag editor vertically;
    never extend the chip strip indefinitely or add an internal horizontal bar.
-4. Add every Master QC list column to each actual rating row in long results,
-   without losing or silently overwriting colliding columns.
+4. Add every Master QC list column to each actual rating row that remains in
+   the current Master list, without losing or silently overwriting colliding
+   columns.
 5. Preserve the current one-rating-load context, composite row identity,
    bilingual behavior, JSON/CSV authorities, and GUI → Core → Models layering.
 
@@ -154,10 +155,13 @@ The GUI never joins DataFrames and never sees excluded raw rating fields.
 ### Row and column contract
 
 - One output row exists for each actual unique
-  `(easyqcid, module_name, rater)` rating identity.
+  `(easyqcid, module_name, rater)` rating identity whose `easyqcid` remains in
+  the current Master QC list.
 - Master rows without a rating do not appear in long mode.
-- Every long rating must match exactly one Master QC list row by `easyqcid`;
-  missing matches fail loudly instead of producing partly contextualized rows.
+- Long results are the intersection of rating identities and the current Master
+  QC list by `easyqcid`. A rating whose Master row was deleted remains unchanged
+  on disk but is omitted from current derived views; restoring the Master row
+  makes it visible again.
 - The Master QC list must have a nonblank, unique `easyqcid` and no duplicate
   column names.
 
@@ -219,8 +223,9 @@ object/string distributions are not inferred from the Core probe.
   boundary; ordinary boundary/no-selection moves are safe no-ops with disabled
   buttons.
 - Malformed tag drafts retain the existing visible validation errors.
-- Duplicate/blank Master identities, duplicate columns, and rating identities
-  not found in Master raise visible Core errors and prevent context acceptance.
+- Duplicate/blank Master identities and duplicate columns raise visible Core
+  errors and prevent context acceptance. Rating identities absent from the
+  current Master list are excluded from derived views without storage mutation.
 - No silent fallback to the old rating-only long view is allowed.
 
 ## Bilingual and accessibility behavior
@@ -252,12 +257,14 @@ object/string distributions are not inferred from the Core probe.
 
 ### Long results
 
-- All Master columns appear in original order for every actual rating row.
+- All Master columns appear in original order for every current-Master rating
+  row.
 - Collision examples above preserve every column deterministically.
 - Multiple module/rater rows duplicate the correct Master facts and retain the
   composite key.
-- Unrated Master rows are absent; orphan ratings, duplicate Master identity and
-  duplicate columns fail loudly.
+- Unrated Master rows and ratings outside the current Master list are absent;
+  duplicate Master identity and duplicate columns fail loudly. The existing
+  deletion regression proves retained rating files are not rewritten.
 - Empty ratings retain the complete schema.
 - Filter/sort/columns/export/right-click work with the enriched long service.
 - Context preparation still calls rating loading once and mode toggles do no

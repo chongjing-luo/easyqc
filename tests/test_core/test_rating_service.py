@@ -571,11 +571,6 @@ def test_attach_master_columns_to_long_rejects_duplicate_master_columns() -> Non
             pd.DataFrame({"easyqcid": ["SUB001"]}),
             "标量|scalar",
         ),
-        (
-            pd.DataFrame({"easyqcid": ["ORPHAN"]}),
-            pd.DataFrame({"easyqcid": ["SUB001"]}),
-            "ORPHAN|匹配|match",
-        ),
     ],
 )
 def test_attach_master_columns_to_long_rejects_invalid_identity_contract(
@@ -585,6 +580,38 @@ def test_attach_master_columns_to_long_rejects_invalid_identity_contract(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         RatingService.attach_master_columns_to_long(professional_long, master)
+
+
+def test_attach_master_columns_to_long_omits_ratings_outside_current_master() -> None:
+    professional_long = pd.DataFrame(
+        {
+            "easyqcid": ["ORPHAN"],
+            "module_name": ["Anat"],
+            "rater": ["r1"],
+            "score1": ["Good"],
+            "notes": ["retained on disk"],
+            "time": ["2026-08-06 07:00:00"],
+        }
+    )
+    master = pd.DataFrame(
+        {
+            "easyqcid": ["SUB001"],
+            "site": ["A"],
+        }
+    )
+
+    result = RatingService.attach_master_columns_to_long(professional_long, master)
+
+    assert result.empty
+    assert result.columns.tolist() == [
+        "easyqcid",
+        "site",
+        "module_name",
+        "rater",
+        "score1",
+        "notes",
+        "time",
+    ]
 
 
 def test_attach_master_columns_to_long_detaches_and_does_not_mutate_inputs() -> None:

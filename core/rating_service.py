@@ -794,8 +794,10 @@ class RatingService:
         """Attach Master QC-list fields to sanitized long rating facts.
 
         Input: one professional-long rating frame and one Master QC-list frame.
-        Output: one detached frame ordered as Master identity/context followed
-        by rating facts. The method performs no scan or persistence.
+        Output: one detached current-Master intersection ordered as Master
+        identity/context followed by rating facts. Ratings outside the current
+        Master list remain untouched in storage and are absent from this
+        derived frame. The method performs no scan or persistence.
         """
 
         if not isinstance(long_df, pd.DataFrame):
@@ -836,18 +838,6 @@ class RatingService:
                 f"{offenders[:5]}"
             )
 
-        orphan_mask = ~normalized_long_ids.isin(normalized_master_ids)
-        if orphan_mask.any():
-            orphans = (
-                normalized_long_ids.loc[orphan_mask]
-                .drop_duplicates()
-                .tolist()
-            )
-            raise ValueError(
-                "评分长表 easyqcid 无法匹配 Master QC list: "
-                f"{orphans[:5]}"
-            )
-
         rating_columns = [
             column for column in long_df.columns if column != "easyqcid"
         ]
@@ -874,7 +864,7 @@ class RatingService:
         result = prepared_long.merge(
             prepared_master,
             on="easyqcid",
-            how="left",
+            how="inner",
             sort=False,
             validate="many_to_one",
             copy=False,
