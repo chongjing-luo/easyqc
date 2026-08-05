@@ -83,8 +83,9 @@ class QtTableWorkspace(QWidget):
 
     def __init__(
         self,
-        source: pd.DataFrame,
+        source: pd.DataFrame | TableViewService,
         *,
+        initial_state: TableViewState | None = None,
         on_open_qc: Callable[[str], None] | None = None,
         derive_column_callback: (
             Callable[[DerivedColumnFormula], str] | None
@@ -106,8 +107,13 @@ class QtTableWorkspace(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        if not isinstance(source, pd.DataFrame):
-            raise TypeError("QtTableWorkspace source must be a pandas DataFrame")
+        if not isinstance(source, (pd.DataFrame, TableViewService)):
+            raise TypeError(
+                "QtTableWorkspace source must be a pandas DataFrame or "
+                "prepared TableViewService"
+            )
+        if initial_state is not None and not isinstance(initial_state, TableViewState):
+            raise TypeError("initial_state must be a TableViewState or None")
         if derive_preview_source is not None and not callable(derive_preview_source):
             raise TypeError("derive_preview_source must be callable")
         deletion_callbacks = (delete_rows_callback, delete_columns_callback)
@@ -140,7 +146,9 @@ class QtTableWorkspace(QWidget):
         self._scroll_refresh_timer.timeout.connect(
             self._refresh_external_scrollbars
         )
-        self.service = TableViewService(source)
+        self.service = (
+            source if isinstance(source, TableViewService) else TableViewService(source)
+        )
         self.export_service = TableExportService(self.service)
         if background_row_threshold <= 0:
             raise ValueError("background_row_threshold must be greater than zero")
@@ -194,7 +202,11 @@ class QtTableWorkspace(QWidget):
         self.on_open_qc_module = on_open_qc_module
         self.on_open_qc_record = on_open_qc_record
         self.active_row_context_menu: QcRowContextMenu | None = None
-        self.initial_state = self.service.default_state(page_size=page_size)
+        self.initial_state = (
+            self.service.default_state(page_size=page_size)
+            if initial_state is None
+            else self.service.validate_state(initial_state)
+        )
         self.applied_state = self.initial_state
         self.draft_state: TableViewState | None = None
         self.filter_dialog: FilterDialog | None = None
@@ -218,6 +230,21 @@ class QtTableWorkspace(QWidget):
         self._build_ui()
         self._update_data_mutation_actions()
         self._render_result()
+
+    @classmethod
+    def from_prepared_service(
+        cls,
+        service: TableViewService,
+        initial_state: TableViewState,
+        **kwargs: Any,
+    ) -> "QtTableWorkspace":
+        """Build over one profiled service without reconstructing its source."""
+
+        if not isinstance(service, TableViewService):
+            raise TypeError("from_prepared_service requires TableViewService")
+        if not isinstance(initial_state, TableViewState):
+            raise TypeError("from_prepared_service requires TableViewState")
+        return cls(service, initial_state=initial_state, **kwargs)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)

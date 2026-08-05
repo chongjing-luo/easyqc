@@ -473,13 +473,16 @@ def test_module_filter_section_prepares_complete_list_profiles_off_gui_thread(
     started = Event()
     release = Event()
     worker_threads = []
+    prepared_services = []
     real_table_view_service = workspace_module.TableViewService
 
     def delayed_table_view_service(subjects):
         worker_threads.append(get_ident())
         started.set()
         release.wait(2)
-        return real_table_view_service(subjects)
+        service = real_table_view_service(subjects)
+        prepared_services.append(service)
+        return service
 
     monkeypatch.setattr(
         workspace_module,
@@ -503,6 +506,10 @@ def test_module_filter_section_prepares_complete_list_profiles_off_gui_thread(
     assert workspace.module_filter_title.text() == "质控名单"
     assert workspace.set_module_filter_button.text() == "设置筛选"
     assert workspace.clear_module_filter_button.text() == "清除筛选"
+    assert workspace.view_master_list_button.text() == "查看总名单"
+    assert workspace.view_filtered_list_button.text() == "查看筛选名单"
+    assert not workspace.view_master_list_button.isEnabled()
+    assert not workspace.view_filtered_list_button.isEnabled()
     assert worker_threads == [worker_threads[0]]
     assert worker_threads[0] != gui_thread
 
@@ -516,6 +523,30 @@ def test_module_filter_section_prepares_complete_list_profiles_off_gui_thread(
         "easyqcid",
         "site",
     )
+    assert workspace.view_master_list_button.isEnabled()
+    assert workspace.view_filtered_list_button.isEnabled()
+
+    qtbot.mouseClick(workspace.view_master_list_button, Qt.LeftButton)
+    master_dialog = workspace._module_list_preview_dialogs[-1]
+    qtbot.mouseClick(workspace.view_filtered_list_button, Qt.LeftButton)
+    filtered_dialog = workspace._module_list_preview_dialogs[-1]
+
+    assert worker_threads == [worker_threads[0]]
+    assert master_dialog.table_workspace.service is prepared_services[0]
+    assert filtered_dialog.table_workspace.service is prepared_services[0]
+    assert master_dialog.table_workspace.applied_state.effective_filter == FilterExpression()
+    assert filtered_dialog.table_workspace.applied_state.effective_filter == _expression()
+    assert master_dialog.table_workspace.result.matched_total == 3
+    assert filtered_dialog.table_workspace.result.matched_total == 2
+
+    dialog_count = len(workspace._module_list_preview_dialogs)
+    workspace._module_filter_revision += 1
+    workspace._update_module_filter_action_state()
+    assert not workspace.view_master_list_button.isEnabled()
+    assert not workspace.view_filtered_list_button.isEnabled()
+    assert workspace._open_module_list_preview(False) is None
+    assert len(workspace._module_list_preview_dialogs) == dialog_count
+    assert "失效" in workspace.error_text
 
     workspace.resize(480, 420)
     workspace.show()
@@ -774,6 +805,14 @@ def test_unsupported_legacy_module_filter_is_visible_replaceable_and_clearable(
     assert "select_filter" in workspace.module_filter_error_label.text()
     assert workspace.module_filter_error_label.isVisibleTo(workspace)
     assert workspace.clear_module_filter_button.isEnabled()
+    assert workspace.view_master_list_button.isEnabled()
+    assert not workspace.view_filtered_list_button.isEnabled()
+    master_dialog = workspace._open_module_list_preview(False)
+    assert master_dialog is not None
+    assert master_dialog.table_workspace.service is workspace._module_list_preview.service
+    assert master_dialog.table_workspace.result.matched_total == 2
+    assert workspace._open_module_list_preview(True) is None
+    assert "失效" in workspace.error_text
 
     qtbot.mouseClick(workspace.set_module_filter_button, Qt.LeftButton)
     dialog = workspace._module_filter_dialog
@@ -841,6 +880,10 @@ def test_stale_module_filter_preview_cannot_replace_new_selection_summary(
 
     assert workspace._selected_module_name == "FuncQC"
     assert workspace.module_filter_summary.text() == "全部名单"
+    assert workspace._module_list_preview.module_name == "FuncQC"
+    assert workspace._module_list_preview.revision == workspace._module_filter_revision
+    assert workspace.view_master_list_button.isEnabled()
+    assert workspace.view_filtered_list_button.isEnabled()
 
     save_started = Event()
     save_release = Event()

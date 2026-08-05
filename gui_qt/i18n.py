@@ -401,6 +401,8 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "只读名单；筛选和排序作用于完整结果。": (
         "Read-only list. Filters and sorting apply to the complete result."
     ),
+    "查看总名单": "View master list",
+    "查看筛选名单": "View filtered list",
     "写入前会校验 easyqcid、重复行和字段冲突；失败不会修改原名单。": (
         "Before writing, EasyQC validates easyqcid, duplicate rows and field "
         "conflicts. A failure leaves the original list unchanged."
@@ -1304,6 +1306,14 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
 
 
 _SOURCE_PATTERNS = (
+    (
+        re.compile(r"^质控总名单：(?P<module>.*)$"),
+        "Master QC list — {module}",
+    ),
+    (
+        re.compile(r"^筛选质控名单：(?P<module>.*)$"),
+        "Filtered QC list — {module}",
+    ),
     (
         re.compile(r"^示例：(?P<value>.*)$"),
         "Example: {value}",

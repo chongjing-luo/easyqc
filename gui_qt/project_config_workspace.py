@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from copy import deepcopy
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pandas as pd
@@ -68,6 +69,7 @@ from gui_qt.module_tag_editor import (
     sync_score_table_height,
 )
 from gui_qt.qc_list_import_page import QtQcListImportPage
+from gui_qt.read_only_table_preview_dialog import ReadOnlyTablePreviewDialog
 from gui_qt.task_runner import RevisionedTaskController
 from gui_qt.template_copy_dialogs import (
     ConstantTemplateCopyDialog,
@@ -75,7 +77,23 @@ from gui_qt.template_copy_dialogs import (
 )
 from gui_qt.theme import set_button_role
 from models.qcmodule import Score, Tag
-from models.table_view_state import FilterExpression
+from models.table_view_state import FilterExpression, TableViewState
+
+
+@dataclass(frozen=True)
+class _PreparedModuleListPreview:
+    """One revision-bound module-list snapshot prepared outside the GUI thread."""
+
+    revision: int
+    module_name: str
+    service: TableViewService
+    expression: FilterExpression
+    matched_total: int | None
+    compatibility_error: str = ""
+
+    def initial_state(self, *, filtered: bool) -> TableViewState:
+        state = self.service.default_state(page_size=200)
+        return state.with_filter(self.expression) if filtered else state
 
 
 class _ElidingLabel(QLabel):
@@ -141,6 +159,8 @@ class QtProjectConfigWorkspace(QWidget):
         self._module_filter_profiles = ()
         self._module_filter_expression = FilterExpression()
         self._module_filter_ready_name: str | None = None
+        self._module_list_preview: _PreparedModuleListPreview | None = None
+        self._module_list_preview_dialogs: list[ReadOnlyTablePreviewDialog] = []
         self._module_filter_revision = 0
         self._pending_module_filter: tuple[
             int,
@@ -587,10 +607,22 @@ class QtProjectConfigWorkspace(QWidget):
             "清除筛选",
             self.module_filter_section,
         )
+        self.view_master_list_button = QPushButton(
+            "查看总名单",
+            self.module_filter_section,
+        )
+        self.view_filtered_list_button = QPushButton(
+            "查看筛选名单",
+            self.module_filter_section,
+        )
         self.set_module_filter_button.setAccessibleName("设置质控名单筛选")
         self.clear_module_filter_button.setAccessibleName("清除质控名单筛选")
+        self.view_master_list_button.setAccessibleName("查看总名单")
+        self.view_filtered_list_button.setAccessibleName("查看筛选名单")
         filter_row.addWidget(self.set_module_filter_button)
         filter_row.addWidget(self.clear_module_filter_button)
+        filter_row.addWidget(self.view_master_list_button)
+        filter_row.addWidget(self.view_filtered_list_button)
         filter_layout.addLayout(filter_row)
         self.module_filter_error_label = QLabel("", self.module_filter_section)
         self.module_filter_error_label.setObjectName("moduleFilterError")
@@ -739,6 +771,12 @@ class QtProjectConfigWorkspace(QWidget):
         )
         self.clear_module_filter_button.clicked.connect(
             self._clear_module_filter
+        )
+        self.view_master_list_button.clicked.connect(
+            lambda: self._open_module_list_preview(False)
+        )
+        self.view_filtered_list_button.clicked.connect(
+            lambda: self._open_module_list_preview(True)
         )
         self._update_module_filter_action_state()
 
@@ -1013,6 +1051,7 @@ class QtProjectConfigWorkspace(QWidget):
             self._selected_module_name = None
             self._module_form_baseline = None
             self._module_filter_ready_name = None
+            self._module_list_preview = None
             self.module_filter_summary.setText("未选择模块")
             self._set_module_filter_error("")
             self._update_module_filter_action_state()
@@ -1076,6 +1115,19 @@ class QtProjectConfigWorkspace(QWidget):
     def _update_module_filter_action_state(self) -> None:
         idle = not self.module_filter_task_controller.busy
         selected = self._selected_module_name is not None
+        prepared = self._module_list_preview
+        master_preview_ready = bool(
+            idle
+            and selected
+            and prepared is not None
+            and prepared.revision == self._module_filter_revision
+            and prepared.module_name == self._selected_module_name
+        )
+        self.view_master_list_button.setEnabled(master_preview_ready)
+        self.view_filtered_list_button.setEnabled(
+            master_preview_ready
+            and not prepared.compatibility_error
+        )
         if not selected:
             self.set_module_filter_button.setEnabled(idle)
             self.clear_module_filter_button.setEnabled(idle)
@@ -1102,6 +1154,8 @@ class QtProjectConfigWorkspace(QWidget):
         if busy:
             self.set_module_filter_button.setEnabled(False)
             self.clear_module_filter_button.setEnabled(False)
+            self.view_master_list_button.setEnabled(False)
+            self.view_filtered_list_button.setEnabled(False)
             return
         self._update_module_filter_action_state()
 
@@ -1142,6 +1196,7 @@ class QtProjectConfigWorkspace(QWidget):
             None,
         )
         self._module_filter_ready_name = None
+        self._module_list_preview = None
         self._module_filter_profiles = ()
         self.module_filter_summary.setText("正在计算…")
         self._set_module_filter_error("")
@@ -1151,23 +1206,24 @@ class QtProjectConfigWorkspace(QWidget):
             try:
                 expression = normalize_module_filter(payload)
             except ModuleFilterCompatibilityError as exc:
-                return (
-                    module_name,
-                    table_view.profiles,
-                    FilterExpression(),
-                    None,
-                    str(exc),
+                return _PreparedModuleListPreview(
+                    revision=revision,
+                    module_name=module_name,
+                    service=table_view,
+                    expression=FilterExpression(),
+                    matched_total=None,
+                    compatibility_error=str(exc),
                 )
             state = table_view.default_state(
                 page_size=max(1, table_view.source_total)
             ).with_filter(expression)
             result = table_view.apply_state(state)
-            return (
-                module_name,
-                table_view.profiles,
-                expression,
-                result.matched_total,
-                "",
+            return _PreparedModuleListPreview(
+                revision=revision,
+                module_name=module_name,
+                service=table_view,
+                expression=expression,
+                matched_total=result.matched_total,
             )
 
         self.module_filter_task_controller.submit(revision, prepare_filter)
@@ -1186,6 +1242,7 @@ class QtProjectConfigWorkspace(QWidget):
         )
         if module is None:
             self._module_filter_ready_name = None
+            self._module_list_preview = None
             self.module_filter_summary.setText("未选择模块")
             self._update_module_filter_action_state()
             return
@@ -1200,26 +1257,31 @@ class QtProjectConfigWorkspace(QWidget):
         self._pending_module_filter = None
 
         if operation == "prepare":
-            if not isinstance(result, tuple) or len(result) != 5:
+            if not isinstance(result, _PreparedModuleListPreview):
                 self._handle_module_filter_result_error(
                     expected_name,
                     ValueError("质控名单筛选任务返回了无效结果"),
                 )
                 return
-            module_name, profiles, expression, matched_total, compatibility = result
             if (
-                module_name != expected_name
+                result.revision != revision
+                or result.module_name != expected_name
                 or self._selected_module_name != expected_name
+                or revision != self._module_filter_revision
             ):
                 return
-            self._module_filter_profiles = tuple(profiles)
-            self._module_filter_expression = expression
-            self._module_filter_ready_name = module_name
-            if compatibility:
+            self._module_filter_profiles = tuple(result.service.profiles)
+            self._module_filter_expression = result.expression
+            self._module_filter_ready_name = result.module_name
+            self._module_list_preview = result
+            if result.compatibility_error:
                 self.module_filter_summary.setText("兼容性错误：旧版筛选不可用")
-                self._set_module_filter_error(str(compatibility))
+                self._set_module_filter_error(result.compatibility_error)
             else:
-                self._set_module_filter_summary(expression, int(matched_total))
+                self._set_module_filter_summary(
+                    result.expression,
+                    int(result.matched_total),
+                )
                 self._set_module_filter_error("")
             self._update_module_filter_action_state()
             return
@@ -1253,6 +1315,15 @@ class QtProjectConfigWorkspace(QWidget):
         if self._selected_module_name == module_name:
             self._module_filter_expression = expression
             self._module_filter_ready_name = module_name
+            prepared = self._module_list_preview
+            if prepared is not None and prepared.module_name == module_name:
+                self._module_list_preview = replace(
+                    prepared,
+                    revision=revision,
+                    expression=expression,
+                    matched_total=len(identities),
+                    compatibility_error="",
+                )
             self._set_module_filter_summary(expression, len(identities))
             self._set_module_filter_error("")
             self._set_error("")
@@ -1276,7 +1347,16 @@ class QtProjectConfigWorkspace(QWidget):
         if self._selected_module_name == module_name:
             if not preserve_ready:
                 self._module_filter_ready_name = None
+                self._module_list_preview = None
                 self.module_filter_summary.setText("筛选不可用")
+            elif (
+                self._module_list_preview is not None
+                and self._module_list_preview.module_name == module_name
+            ):
+                self._module_list_preview = replace(
+                    self._module_list_preview,
+                    revision=self._module_filter_revision,
+                )
             self._set_module_filter_error(message)
             self._set_error(message)
         self._update_module_filter_action_state()
@@ -1308,6 +1388,51 @@ class QtProjectConfigWorkspace(QWidget):
             )
         if self._module_filter_dialog is dialog:
             self._module_filter_dialog = None
+
+    def _preview_dialog_finished(
+        self,
+        dialog: ReadOnlyTablePreviewDialog,
+    ) -> None:
+        if dialog in self._module_list_preview_dialogs:
+            self._module_list_preview_dialogs.remove(dialog)
+
+    def _open_module_list_preview(
+        self,
+        filtered: bool,
+    ) -> ReadOnlyTablePreviewDialog | None:
+        """Open the current revision's prepared module-list snapshot."""
+
+        if type(filtered) is not bool:
+            raise TypeError("filtered must be bool")
+        prepared = self._module_list_preview
+        if (
+            self.module_filter_task_controller.busy
+            or prepared is None
+            or prepared.revision != self._module_filter_revision
+            or prepared.module_name != self._selected_module_name
+            or (filtered and prepared.compatibility_error)
+        ):
+            self._set_error("质控名单预览仍在加载或已失效")
+            return None
+        title = (
+            f"筛选质控名单：{prepared.module_name}"
+            if filtered
+            else f"质控总名单：{prepared.module_name}"
+        )
+        dialog = ReadOnlyTablePreviewDialog(
+            prepared.service,
+            prepared.initial_state(filtered=filtered),
+            title,
+            self,
+            language=self.language,
+        )
+        dialog.finished.connect(
+            lambda _result, target=dialog: self._preview_dialog_finished(target)
+        )
+        self._module_list_preview_dialogs.append(dialog)
+        self._set_error("")
+        dialog.open()
+        return dialog
 
     def _open_module_filter_dialog(self) -> None:
         if not self._module_filter_write_allowed():
@@ -1720,6 +1845,7 @@ class QtProjectConfigWorkspace(QWidget):
             self._pending_module_filter = None
             self.module_filter_task_controller.cancel()
         self._module_filter_ready_name = None
+        self._module_list_preview = None
         self.module_filter_summary.setText("请先保存模块")
         self._set_module_filter_error("")
         self._update_module_filter_action_state()
@@ -1989,6 +2115,9 @@ class QtProjectConfigWorkspace(QWidget):
         self.io_task_controller.cancel()
         self._pending_module_filter = None
         self.module_filter_task_controller.cancel()
+        for dialog in tuple(self._module_list_preview_dialogs):
+            dialog.close()
+        self._module_list_preview_dialogs.clear()
         super().closeEvent(event)
 
     def _set_error(self, message: str) -> None:

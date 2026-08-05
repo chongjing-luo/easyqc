@@ -106,6 +106,16 @@ def test_translation_formatting_is_strict_and_keeps_business_identifiers(tmp_pat
         ("筛选组", "Filter group"),
         ("配置任务失败", "Configuration task failed"),
         ("正在取消导出…", "Cancelling export…"),
+        ("查看总名单", "View master list"),
+        ("查看筛选名单", "View filtered list"),
+        (
+            "质控总名单：Module_User_Text",
+            "Master QC list — Module_User_Text",
+        ),
+        (
+            "筛选质控名单：Module_User_Text",
+            "Filtered QC list — Module_User_Text",
+        ),
         (
             "列名 'visit age' 包含空格或标点，不能直接用于表达式",
             "Column name 'visit age' contains spaces or punctuation and "
