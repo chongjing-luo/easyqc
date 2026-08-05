@@ -6,15 +6,16 @@ from dataclasses import dataclass
 from itertools import count
 from typing import Iterable
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, Slot
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLayout,
+    QLayoutItem,
     QLineEdit,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
@@ -31,8 +32,98 @@ class _TagDraft:
     label: str
 
 
+class _FlowLayout(QLayout):
+    """Small native height-for-width flow layout for complete tag chips."""
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        spacing: int = CONTROL_SPACING,
+    ) -> None:
+        super().__init__(parent)
+        self._items: list[QLayoutItem] = []
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(spacing)
+
+    def addItem(self, item: QLayoutItem) -> None:
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int) -> QLayoutItem | None:
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+
+    def takeAt(self, index: int) -> QLayoutItem | None:
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self) -> Qt.Orientations:
+        return Qt.Orientations(Qt.Orientation(0))
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._do_layout(QRect(0, 0, max(0, width), 0), test_only=True)
+
+    def setGeometry(self, rect: QRect) -> None:
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        left, top, right, bottom = self.getContentsMargins()
+        return size + QSize(left + right, top + bottom)
+
+    def _do_layout(self, rect: QRect, *, test_only: bool) -> int:
+        left, top, right, bottom = self.getContentsMargins()
+        effective = rect.adjusted(left, top, -right, -bottom)
+        available_width = max(0, effective.width())
+        x = effective.x()
+        y = effective.y()
+        line_height = 0
+        spacing = max(0, self.spacing())
+
+        for item in self._items:
+            hint = item.sizeHint()
+            item_width = min(max(0, hint.width()), available_width)
+            item_height = max(0, hint.height())
+            if (
+                line_height > 0
+                and x + item_width > effective.right() + 1
+            ):
+                x = effective.x()
+                y += line_height + spacing
+                line_height = 0
+            if not test_only:
+                item.setGeometry(
+                    QRect(QPoint(x, y), QSize(item_width, item_height))
+                )
+            x += item_width + spacing
+            line_height = max(line_height, item_height)
+
+        content_height = (
+            0
+            if not self._items
+            else y + line_height - effective.y()
+        )
+        return top + content_height + bottom
+
+
 class ModuleTagEditor(QWidget):
     """Own one ordered, non-persistent draft of editable tag labels."""
+
+    _MAX_TAG_TEXT_WIDTH = 240
 
     def __init__(
         self,
@@ -46,25 +137,29 @@ class ModuleTagEditor(QWidget):
         self._token_source = count(1)
         self._drafts: list[_TagDraft] = []
         self._error_key: str | None = None
+        self._last_flow_width = -1
         self.setObjectName("moduleTagEditor")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(CONTROL_SPACING)
 
-        self.scroll_area = QScrollArea(self)
-        self.scroll_area.setObjectName("moduleTagScroll")
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setFrameShape(QFrame.NoFrame)
-        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.scroll_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self._chip_container = QWidget(self.scroll_area)
-        self._chip_layout = QHBoxLayout(self._chip_container)
-        self._chip_layout.setContentsMargins(0, 0, 0, 0)
-        self._chip_layout.setSpacing(CONTROL_SPACING)
-        self.scroll_area.setWidget(self._chip_container)
-        layout.addWidget(self.scroll_area)
+        self._chip_container = QWidget(self)
+        self._chip_container.setObjectName("moduleTagFlowContainer")
+        self._chip_layout = _FlowLayout(self._chip_container)
+        container_policy = QSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Preferred,
+        )
+        container_policy.setHeightForWidth(True)
+        self._chip_container.setSizePolicy(container_policy)
+        layout.addWidget(self._chip_container)
+
+        editor_policy = self.sizePolicy()
+        editor_policy.setHorizontalPolicy(QSizePolicy.Expanding)
+        editor_policy.setVerticalPolicy(QSizePolicy.Preferred)
+        editor_policy.setHeightForWidth(True)
+        self.setSizePolicy(editor_policy)
 
         self.add_button = QPushButton(self._chip_container)
         self.add_button.setObjectName("moduleTagAdd")
@@ -172,8 +267,7 @@ class ModuleTagEditor(QWidget):
         for draft in self._drafts:
             self._chip_layout.addWidget(self._make_chip(draft))
         self._chip_layout.addWidget(self.add_button)
-        self._chip_layout.addStretch(1)
-        self._sync_scroll_height()
+        self._sync_flow_geometry()
 
     def _make_chip(self, draft: _TagDraft) -> QFrame:
         chip = QFrame(self._chip_container)
@@ -186,9 +280,16 @@ class ModuleTagEditor(QWidget):
 
         edit_button = QPushButton(draft.label, chip)
         edit_button.setObjectName("moduleTagText")
-        edit_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        edit_button.setMinimumWidth(0)
+        edit_button.setMaximumWidth(self._MAX_TAG_TEXT_WIDTH)
+        edit_button.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         set_button_role(edit_button, "quiet")
-        protect_user_text(edit_button, "text", "accessibleName")
+        protect_user_text(
+            edit_button,
+            "text",
+            "toolTip",
+            "accessibleName",
+        )
         edit_button.clicked.connect(
             lambda _checked=False, token=draft.token: self._prompt_edit(token)
         )
@@ -205,24 +306,65 @@ class ModuleTagEditor(QWidget):
             lambda _checked=False, token=draft.token: self._remove_tag(token)
         )
         layout.addWidget(remove_button)
+        self._set_visible_tag_text(edit_button, draft.label)
         self._translate_chip(draft, edit_button, remove_button)
         return chip
 
-    def _sync_scroll_height(self) -> None:
-        content_height = max(
-            self._chip_container.sizeHint().height(),
-            self.add_button.sizeHint().height(),
+    def _set_visible_tag_text(
+        self,
+        edit_button: QPushButton,
+        full_label: str,
+    ) -> None:
+        visible = edit_button.fontMetrics().elidedText(
+            full_label,
+            Qt.ElideRight,
+            self._MAX_TAG_TEXT_WIDTH,
         )
-        scrollbar_height = self.scroll_area.horizontalScrollBar().sizeHint().height()
-        self.scroll_area.setFixedHeight(
-            content_height + scrollbar_height + self.scroll_area.frameWidth() * 2
-        )
+        edit_button.setText(visible)
+        edit_button.setToolTip(full_label)
+
+    def _refresh_visible_tag_texts(self) -> None:
+        for chip in self.findChildren(QFrame, "moduleTagChip"):
+            token = int(chip.property("tagToken"))
+            draft = self._drafts[self._index_for_token(token)]
+            edit_button = chip.findChild(QPushButton, "moduleTagText")
+            if edit_button is not None:
+                self._set_visible_tag_text(edit_button, draft.label)
+
+    def _sync_flow_geometry(self) -> None:
+        self._chip_layout.invalidate()
+        self._chip_container.updateGeometry()
+        self.updateGeometry()
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self.layout().heightForWidth(max(0, width))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        width = event.size().width()
+        if width != self._last_flow_width:
+            self._last_flow_width = width
+            self._sync_flow_geometry()
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() in {
+            QEvent.FontChange,
+            QEvent.ApplicationFontChange,
+            QEvent.StyleChange,
+        } and hasattr(self, "_chip_layout"):
+            self._refresh_visible_tag_texts()
+            self._sync_flow_geometry()
 
     def _set_error(self, key: str | None) -> None:
         self._error_key = key
         text = self.language.tr(key) if key is not None else ""
         self.error_label.setText(text)
         self.error_label.setVisible(bool(text))
+        self._sync_flow_geometry()
 
     def _translate_chip(
         self,
@@ -255,7 +397,8 @@ class ModuleTagEditor(QWidget):
             remove_button = chip.findChild(QToolButton, "moduleTagRemove")
             if edit_button is not None and remove_button is not None:
                 self._translate_chip(draft, edit_button, remove_button)
-        self._sync_scroll_height()
+        self._refresh_visible_tag_texts()
+        self._sync_flow_geometry()
 
 
 def normalize_stored_tag_labels(

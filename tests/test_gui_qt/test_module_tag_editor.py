@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QRect, QSettings, Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QInputDialog,
     QPushButton,
+    QScrollArea,
     QToolButton,
 )
 
@@ -144,3 +146,75 @@ def test_language_switch_translates_chrome_without_rewriting_tag_text(
         "质控模块",
     ]
     assert _tag_remove_buttons(editor)[0].accessibleName() == "Remove tag 质控模块"
+
+
+def test_tag_editor_uses_height_for_width_flow_without_internal_scroll_area(
+    qtbot,
+    tmp_path,
+) -> None:
+    editor = ModuleTagEditor(_language(tmp_path))
+    qtbot.addWidget(editor)
+    editor.set_tags(("头动伪影", "覆盖不足", "信号丢失", "需要复核", "其他异常"))
+    editor.show()
+    QApplication.processEvents()
+
+    assert editor.findChild(QScrollArea) is None
+    assert editor._chip_layout.hasHeightForWidth()
+    assert editor.hasHeightForWidth()
+    assert editor._chip_layout.count() == 6
+    assert editor._chip_layout.itemAt(5).widget() is editor.add_button
+
+    narrow_height = editor._chip_layout.heightForWidth(180)
+    wide_height = editor._chip_layout.heightForWidth(900)
+    assert narrow_height > wide_height
+    assert editor.heightForWidth(180) > editor.heightForWidth(900)
+    editor._chip_layout.setGeometry(QRect(0, 0, 180, narrow_height))
+    narrow_rows = {
+        editor._chip_layout.itemAt(index).geometry().y()
+        for index in range(editor._chip_layout.count())
+    }
+    editor._chip_layout.setGeometry(QRect(0, 0, 900, wide_height))
+    wide_rows = {
+        editor._chip_layout.itemAt(index).geometry().y()
+        for index in range(editor._chip_layout.count())
+    }
+    assert len(narrow_rows) > 1
+    assert len(wide_rows) == 1
+    assert editor.tags() == (
+        "头动伪影",
+        "覆盖不足",
+        "信号丢失",
+        "需要复核",
+        "其他异常",
+    )
+    assert [button.text() for button in _tag_text_buttons(editor)] == [
+        "头动伪影",
+        "覆盖不足",
+        "信号丢失",
+        "需要复核",
+        "其他异常",
+    ]
+
+
+def test_overlong_tag_is_bounded_and_elided_but_retains_exact_source_text(
+    qtbot,
+    tmp_path,
+) -> None:
+    editor = ModuleTagEditor(_language(tmp_path))
+    qtbot.addWidget(editor)
+    full_label = "极长标签内容" * 40
+    editor.set_tags((full_label,))
+    editor.resize(180, 120)
+    editor.show()
+    QApplication.processEvents()
+
+    button = _tag_text_buttons(editor)[0]
+    assert editor.tags() == (full_label,)
+    assert button.text() != full_label
+    assert "…" in button.text()
+    assert button.toolTip() == full_label
+    assert full_label in button.accessibleName()
+    assert button.maximumWidth() < button.fontMetrics().horizontalAdvance(full_label)
+    narrow_height = editor._chip_layout.heightForWidth(140)
+    editor._chip_layout.setGeometry(QRect(0, 0, 140, narrow_height))
+    assert editor._chip_layout.itemAt(0).geometry().width() <= 140

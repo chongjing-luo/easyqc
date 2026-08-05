@@ -1201,10 +1201,7 @@ def test_qt_configuration_uses_responsive_toolbars_splitter_and_long_tooltips(
     assert workspace.score_table.columnWidth(0) == (
         workspace.score_table.horizontalHeader().defaultSectionSize()
     )
-    assert (
-        workspace.tag_editor.scroll_area.verticalScrollBarPolicy()
-        == Qt.ScrollBarAlwaysOff
-    )
+    assert workspace.tag_editor.findChild(QScrollArea) is None
     assert workspace.constants_table.item(0, 1).toolTip() == long_path
     selected_item = workspace.module_list.currentItem()
     assert selected_item.text() == ""
