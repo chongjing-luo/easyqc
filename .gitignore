@@ -50,6 +50,10 @@ test_*.py
 debug_*.py
 !tests/**/*.py
 
+# 本机构建和原生安装包产物
+build/
+dist/
+
 # 其他
 .understand-anything/
 .pytest_cache/

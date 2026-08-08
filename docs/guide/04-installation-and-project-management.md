@@ -2,11 +2,36 @@
 
 ## 1. 当前交付形态
 
-EasyQC 当前以源码目录加独立 Python 虚拟环境运行，而不是 PyPI 包、Docker 镜像或每个平台各自维护的一套 GUI。产品只有一套 PySide6/Qt Widgets 代码；Linux、Windows 和 macOS 复用同一业务实现，并让 Qt 与操作系统负责字体、DPI 和原生窗口外观。
+EasyQC 产品只有一套 PySide6/Qt Widgets 代码；Linux、Windows 和 macOS 复用
+同一业务实现，并让 Qt 与操作系统负责字体、DPI 和原生窗口外观。交付有两个
+互不分叉的入口：原生安装包内置私有 Python/Qt 运行时，源码检出则使用项目内
+虚拟环境。EasyQC 不是 PyPI 包，也不使用 Docker 作为日常桌面交付方式。
 
 最低运行要求是 Python 3.10。基础 Python 依赖来自仓库根目录的 `requirements.txt`：NumPy、pandas、Lark、platformdirs、PySide6-Essentials 及其传递依赖。SciPy 不是 EasyQC 的运行依赖，也不应作为安装成功条件。
 
 > `requirements.txt` 只能声明 Python 包。Ubuntu 的 `libxcb-cursor0` 属于操作系统动态库，必须由系统包管理器安装，不能写成 pip requirement。
+
+### 1.1 原生安装包
+
+| 目标 | 产物 | 用户侧 Python |
+|---|---|---|
+| Ubuntu 22.04/24.04 x86_64 | `.deb` | 不需要 |
+| Windows 11 x86_64 | Inno Setup `.exe` | 不需要 |
+| macOS 13+ arm64 | `.dmg` + `EasyQC.app` | 不需要 |
+
+在 GitHub Actions 的 **Native installers** 工作流中手动填写版本，或推送
+`v*` tag，可在对应原生 runner 上构建。每个平台 artifact 必须同时包含原生
+包、`artifact-manifest.json` 和 `SHA256SUMS`。清单明确记录源码 revision、
+目标、大小、哈希和 `signed: false/true`；SHA-256 只证明字节完整性，不等同于
+代码签名。
+
+第一轮流程只生成未签名测试包。Windows/macOS 的系统警告不能通过改名或关闭
+验证来规避；公开发行前需要真实证书、签名/公证步骤和保留的原生证据。完整
+安装、卸载、CI 与维护说明见[原生安装包](12-native-installers.md)。
+
+原生包不会向只读程序目录写 `projects.json` 或模板；这些安装状态进入每用户、
+按 EasyQC 版本隔离的数据目录，真实项目仍保留在用户选择的位置。这样既允许
+`.deb` 安装到 `/opt` 和 macOS 应用签名，也避免不同版本的模板/登记表污染。
 
 ## 2. Linux 与 macOS 安装
 
@@ -45,9 +70,10 @@ sudo apt install libxcb-cursor0
 
 安装脚本会定位 PySide6 自带的 `libqxcb.so`，再使用 `ldd` 检查真实动态依赖。只验证 `import PySide6` 不足以证明图形窗口能够启动，因此任何 `=> not found` 都会明确使检查失败。
 
-## 3. Windows 手动安装
+## 3. Windows 源码安装
 
-Windows 当前使用标准虚拟环境流程；`setup.sh` 面向 Bash 环境，不是 Windows 安装器。
+不使用原生 Setup 时，Windows 可采用标准虚拟环境流程；`setup.sh` 面向 Bash
+环境，不是 Windows 安装器。
 
 ```powershell
 py -3.10 -m venv .venv
@@ -109,7 +135,10 @@ easyqc_<project>/
 - `Table/easyqc_all.csv` 是质控总名单。
 - `RatingFiles/` 保存每个三元身份的当前评分快照。
 
-项目创建后会登记到当前 EasyQC 安装根目录的 `projects.json`。模板和命令执行设置也跟随当前安装目录，而不是写入操作系统级全局共享区。因此两个独立 EasyQC 检出不会自动污染彼此的项目登记或模板。
+源码模式下，项目创建后会登记到当前 EasyQC 源码根目录的 `projects.json`。
+原生冻结包则登记到每用户、按版本隔离的应用状态目录；模板和命令执行设置跟随
+同一状态边界。因此两个源码检出或两个原生版本不会自动污染彼此的项目登记或
+模板。真实项目目录不属于应用状态目录。
 
 ## 7. 导入现有项目
 

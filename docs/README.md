@@ -8,7 +8,7 @@ EasyQC 是一个离线、可配置的人工视觉质量控制（manual visual qu
 
 | 读者 | 建议阅读路径 |
 |---|---|
-| 第一次使用 | [项目概览](guide/01-project-overview.md) → [安装与项目管理](guide/04-installation-and-project-management.md) → [名单与表格](guide/05-qc-list-and-table-workspace.md) → [模块与查看器](guide/07-constants-modules-and-viewers.md) → [评分与结果](guide/08-qc-rating-review-and-results.md) |
+| 第一次使用 | [项目概览](guide/01-project-overview.md) → [安装与项目管理](guide/04-installation-and-project-management.md) → [原生安装包](guide/12-native-installers.md) → [名单与表格](guide/05-qc-list-and-table-workspace.md) → [模块与查看器](guide/07-constants-modules-and-viewers.md) → [评分与结果](guide/08-qc-rating-review-and-results.md) |
 | 配置复杂工作流 | [核心逻辑与灵活性](guide/02-core-logic-and-flexibility.md) → [新增列与 EasyQC Formula](guide/06-derived-columns-and-easyqc-formula.md) → [模块与查看器](guide/07-constants-modules-and-viewers.md) |
 | 维护或审计代码 | [架构与数据流](guide/03-architecture-and-data-flow.md) → [可靠性、性能与平台](guide/09-reliability-performance-and-platforms.md) → [架构决策](architecture-decisions.md) |
 | 准备论文 | [项目概览](guide/01-project-overview.md) → [核心逻辑与灵活性](guide/02-core-logic-and-flexibility.md) → [论文 Agent 事实表](guide/11-paper-agent-fact-sheet.md) |
@@ -78,6 +78,7 @@ EasyQC 的最小模型由五类对象组成：
 | [09 可靠性、性能与平台](guide/09-reliability-performance-and-platforms.md) | 原子写入、并发、基准、Qt 跨平台策略和证据边界 |
 | [10 参考与故障排查](guide/10-reference-and-troubleshooting.md) | 标识符、文件格式、常见错误、日志、备份和恢复 |
 | [11 论文 Agent 事实表](guide/11-paper-agent-fact-sheet.md) | 可安全引用的贡献、方法事实、证据、限制和术语 |
+| [12 原生安装包](guide/12-native-installers.md) | `.deb`、Windows Setup、macOS DMG 的下载、验证、安装、卸载和构建边界 |
 | [架构决策](architecture-decisions.md) | 已接受的长期工程取舍 |
 
 ## 事实状态怎么读

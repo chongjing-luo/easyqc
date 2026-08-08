@@ -1,0 +1,193 @@
+name: Native installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: EasyQC release version (MAJOR.MINOR.PATCH)
+        required: true
+        default: 1.0.0
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-installers-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            runner: ubuntu-22.04
+            lock: packaging/locks/python-3.10.17/linux-x86_64/build.txt
+            app_path: dist/EasyQC-vVERSION-linux-x86_64
+          - target: windows-x86_64
+            runner: windows-2022
+            lock: packaging/locks/python-3.10.17/windows-x86_64/build.txt
+            app_path: dist/EasyQC-vVERSION-windows-AMD64
+          - target: macos-arm64
+            runner: macos-15
+            lock: packaging/locks/python-3.10.17/macos-arm64/build.txt
+            app_path: dist/EasyQC.app
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: '1'
+      # signed: false is deliberate until real signing credentials are configured.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: '0.11.29'
+          python-version: '3.10.17'
+          activate-environment: true
+          enable-cache: false
+
+      - name: Resolve and validate release version
+        id: release
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          version="$REQUESTED_VERSION"
+          if [ -z "$version" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          VERSION="$version" python -c 'import os,pathlib; from scripts.build_native_installer import normalize_version,read_product_version; requested=normalize_version(os.environ["VERSION"]); source=read_product_version(pathlib.Path(".")); assert requested == source, f"requested version {requested} does not match source {source}"; print(requested)'
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install Linux packaging and Qt libraries
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libegl1 libgl1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1 \
+            libxcb-render-util0 libxcb-xinerama0 xvfb
+          curl --fail --location \
+            'https://archive.ubuntu.com/ubuntu/pool/universe/x/xcb-util-cursor/libxcb-cursor0_0.1.1-4ubuntu1_amd64.deb' \
+            --output "$RUNNER_TEMP/libxcb-cursor0_0.1.1-4ubuntu1_amd64.deb"
+          printf '%s  %s\n' \
+            'c9b5d1ad4af57397b1bd77e0a92750e34419def134c0282a0836ae9efc07cf64' \
+            "$RUNNER_TEMP/libxcb-cursor0_0.1.1-4ubuntu1_amd64.deb" \
+            | sha256sum --check --strict
+
+      - name: Verify Windows native compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
+            throw "Pinned Windows runner does not provide Inno Setup 6: $iscc"
+          }
+          "ISCC_EXE=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $compilerVersion = (Get-Item -LiteralPath $iscc).VersionInfo.FileVersion
+          if (-not $compilerVersion) { throw "Inno Setup compiler has no version metadata" }
+          Write-Host "Inno Setup compiler: $compilerVersion"
+
+      - name: Install exact build lock
+        shell: bash
+        run: |
+          uv pip sync --require-hashes "${{ matrix.lock }}"
+          uv pip check
+
+      - name: Run packaging contract tests
+        shell: bash
+        run: >-
+          python -m pytest
+          tests/test_scripts/test_native_installer_build.py
+          tests/test_scripts/test_native_installer_workflow.py
+          tests/test_packaging_tools
+          -q
+
+      - name: Freeze Linux application
+        if: runner.os == 'Linux'
+        shell: bash
+        run: >-
+          python build.py --clean
+          --version "${{ steps.release.outputs.version }}"
+          --linux-cursor-deb "$RUNNER_TEMP/libxcb-cursor0_0.1.1-4ubuntu1_amd64.deb"
+
+      - name: Freeze Windows or macOS application
+        if: runner.os != 'Linux'
+        shell: bash
+        run: >-
+          python build.py --clean
+          --version "${{ steps.release.outputs.version }}"
+
+      - name: Build native installer and integrity metadata
+        shell: bash
+        env:
+          APP_PATH_TEMPLATE: ${{ matrix.app_path }}
+        run: |
+          app_path="${APP_PATH_TEMPLATE/VERSION/${{ steps.release.outputs.version }}}"
+          python scripts/build_native_installer.py \
+            --version "${{ steps.release.outputs.version }}" \
+            --target "${{ matrix.target }}" \
+            --app-path "$app_path" \
+            --output-dir "dist/native/${{ matrix.target }}" \
+            --source-revision "$GITHUB_SHA"
+
+      - name: Validate package integrity metadata
+        shell: bash
+        run: |
+          python -c 'import hashlib,json,pathlib; root=pathlib.Path("dist/native/${{ matrix.target }}"); m=json.loads((root/"artifact-manifest.json").read_text("utf-8")); p=root/m["artifact"]; digest=hashlib.sha256(p.read_bytes()).hexdigest(); assert p.is_file(); assert digest==m["sha256"]; assert (root/"SHA256SUMS").read_text("utf-8")==f"{digest}  {p.name}\n"; assert m["signed"] is False'
+
+      - name: Install, launch and uninstall Debian package
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo dpkg --install "dist/native/${{ matrix.target }}/EasyQC-${{ steps.release.outputs.version }}-linux-x86_64.deb"
+          /usr/bin/easyqc --help
+          sudo dpkg --remove easyqc
+
+      - name: Install, launch and uninstall Windows setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = "dist/native/${{ matrix.target }}/EasyQC-${{ steps.release.outputs.version }}-windows-x86_64-setup.exe"
+          $log = Join-Path $env:RUNNER_TEMP 'easyqc-inno-install.log'
+          $process = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-',"/LOG=$log" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "EasyQC setup failed: $($process.ExitCode)" }
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\EasyQC\EasyQC.exe'
+          & $app --help
+          if ($LASTEXITCODE -ne 0) { throw "Installed EasyQC --help failed" }
+          $uninstaller = Join-Path $env:LOCALAPPDATA 'Programs\EasyQC\unins000.exe'
+          $process = Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "EasyQC uninstall failed: $($process.ExitCode)" }
+
+      - name: Mount and inspect macOS disk image
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mountpoint="$RUNNER_TEMP/easyqc-dmg-mount"
+          mkdir -p "$mountpoint"
+          cleanup() { hdiutil detach "$mountpoint" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          hdiutil attach -readonly -nobrowse \
+            -mountpoint "$mountpoint" \
+            "dist/native/${{ matrix.target }}/EasyQC-${{ steps.release.outputs.version }}-macos-arm64.dmg"
+          "$mountpoint/EasyQC.app/Contents/MacOS/EasyQC" --help
+          hdiutil detach "$mountpoint"
+          trap - EXIT
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() }}
+        with:
+          name: EasyQC-${{ steps.release.outputs.version }}-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/native/${{ matrix.target }}/
+          if-no-files-found: error
+          retention-days: 30

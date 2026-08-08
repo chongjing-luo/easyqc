@@ -13,7 +13,7 @@ EasyQC 是一个可配置的 MRI 人工视觉质量控制工作台。它将"打�
 
 | 要求 | 说明 |
 |---|---|
-| **Python** | 3.10 或更高版本 |
+| **Python** | 原生安装包无需预装；源码安装需要 3.10 或更高版本 |
 | **操作系统** | Linux、macOS、Windows |
 | **内存** | 建议 16GB 以上；100,000 行 × 300 列仅是修订绑定的合成名单/Formula 证据 |
 | **常规规模** | 质控总名单通常不超过约 100,000 行；该约束不等同于评分文件扫描、聚合或迁移基准 |
@@ -23,11 +23,31 @@ EasyQC 是一个可配置的 MRI 人工视觉质量控制工作台。它将"打�
 
 ## 安装
 
-当前源码检出仍使用下面的开发/迁移期安装方式。正式分发的主路线已经确定为：
-由 `easyqc-install` 创建并维护一个固定版本、与系统 Python 隔离的私有环境，
-支持在线/离线载荷、安装后验证、并排更新和一键回滚。该安装器的核心、CLI 与
-启动器已经实现，但 Windows/macOS/Ubuntu 原生发布矩阵尚未全部完成，因此本
-README 不把它描述成已经发布的跨平台安装包。
+EasyQC 现在有一套原生安装包构建流程，同一源码分别在原生 runner 上生成：
+
+| 系统 | 文件 | 安装 |
+|---|---|---|
+| Ubuntu 22.04/24.04 x86_64 | `EasyQC-<version>-linux-x86_64.deb` | `sudo apt install ./EasyQC-...deb` |
+| Windows 11 x86_64 | `EasyQC-<version>-windows-x86_64-setup.exe` | 双击或静默安装 |
+| macOS 13+ arm64 | `EasyQC-<version>-macos-arm64.dmg` | 打开 DMG，将 `EasyQC.app` 拖入 Applications |
+
+每个产物目录同时包含 `artifact-manifest.json` 和 `SHA256SUMS`。原生包内置
+EasyQC 的私有 Python/Qt 运行时，用户无需另装 Python。这些包由
+`.github/workflows/native-installers.yml` 在对应操作系统上构建；不能在 Linux
+上交叉生成并声称 Windows/macOS 已验证。
+
+原生包的可变安装状态不会写入只读程序目录：`projects.json`、模板和命令设置
+使用每用户、按 EasyQC 版本隔离的数据目录，真实项目仍位于用户选择的路径。
+因此卸载应用不会删除项目名单或评分文件。
+
+当前第一轮构建是**未签名测试包**。Windows 可能显示 SmartScreen 提示，macOS
+可能显示 Gatekeeper 提示；在配置真实证书、公证并保留 CI 证据前，不应将其
+描述为已签名公开发行版。详细构建、验证和卸载说明见
+[原生安装包](docs/guide/12-native-installers.md)。
+
+源码检出和项目内虚拟环境仍受支持，适合开发、审计或无法使用原生包的环境。
+长期的 `easyqc-install` 私有 Python 环境也继续保留；原生包是便利发布层，
+不是第二套 GUI 或第二套业务实现。
 
 ### 方式一：安装脚本（推荐 Linux/macOS）
 
@@ -81,8 +101,9 @@ EasyQC 采用 **flat layout**：`easyqc/` 目录本身**不是**可安装的 Pyt
 - **运行方式**：始终在项目根目录执行 `python easyqc.py`（或 `./start.sh`，后者会自动 `cd` 到正确目录）。不要从其他目录直接 `import easyqc`。
 - **不支持 `pip install`**：本项目不打包为可安装包。如需在新机器部署，使用上面的安装脚本或手动创建虚拟环境 + `pip install -r requirements.txt`。
 - **测试配置**：`pytest.ini` 的 `pythonpath = .` 同样依赖 flat layout（pytest 从项目根发现 `core/`/`utils/`/`models/`）。
-- **正式分发**：主路线是 `easyqc-install` 管理的私有 Python 环境；仓库中的
-  PyInstaller 方案仅保留为可选历史/诊断路线，不是当前发布阻塞项。
+- **正式分发**：`easyqc-install` 管理的私有 Python 环境仍是可维护运行时方向；
+  PyInstaller 原生包作为无 Python 前置要求的便利发布层，由三平台原生 CI
+  从同一 revision 构建，不形成第二套产品代码。
 
 这一布局是有意的工程取舍：避免 `easyqc/` 目录与 `easyqc.py` 脚本同名引发的打包冲突，保持运行入口最简。重构为标准 src-layout 包属于未来可选改进，当前 flat layout 已稳定且有测试守卫（`tests/test_scripts/test_startup_scripts.py::test_flat_layout_imports_work_from_easyqc_root`）。
 

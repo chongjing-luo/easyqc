@@ -22,6 +22,21 @@ if __name__ == "__main__" and sys.argv[1:] == ["--version"]:
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
+from core.application_paths import resolve_application_state_root
+
+
+# Source checkouts keep their established installation-scoped registry and
+# templates beside easyqc.py.  Frozen native packages can be installed into a
+# read-only application directory, so their mutable state is per-user and
+# version-isolated instead of being written into /opt, Program Files or an app
+# bundle.
+application_state_root = resolve_application_state_root(
+    source_root=project_root,
+    version=EASYQC_VERSION,
+    frozen=bool(getattr(sys, "frozen", False)),
+)
+registry_path = application_state_root / "projects.json"
+
 # 导入日志系统
 from utils.logger import clear_old_logs, log_error, log_exception, log_info
 
@@ -89,7 +104,7 @@ def main(argv=None):
                 module=module,
                 rater=rater,
                 easyqcid=easyqcid,
-                registry_path=project_root / "projects.json",
+                registry_path=registry_path,
             )
         elif len(args.args) > 0:
             print("错误：参数数量不正确")
@@ -100,7 +115,7 @@ def main(argv=None):
         log_info("启动 EasyQC Qt 应用程序")
         return launch_qt(
             launch_argv,
-            registry_path=project_root / "projects.json",
+            registry_path=registry_path,
         )
         
     except ImportError as e:
