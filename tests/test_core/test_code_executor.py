@@ -1,4 +1,5 @@
 import sys
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -81,6 +82,10 @@ def test_start_command_uses_current_shell_setting(monkeypatch) -> None:
     class FakeProcess:
         pid = 4721
 
+        @staticmethod
+        def wait(timeout):
+            raise subprocess.TimeoutExpired("viewer", timeout)
+
     def fake_popen(command, **options):
         observed.append((command, options))
         return FakeProcess()
@@ -109,6 +114,10 @@ def test_start_command_uses_safe_posix_session_option(monkeypatch) -> None:
 
     class FakeProcess:
         pid = 4722
+
+        @staticmethod
+        def wait(timeout):
+            raise subprocess.TimeoutExpired("viewer", timeout)
 
     def fake_popen(command, **options):
         observed.append((command, options))
@@ -396,3 +405,158 @@ def test_start_command_logs_error_before_raising(monkeypatch) -> None:
         executor.start_command("ghost_viewer_p3e /tmp/x.nii")
 
     assert any("ghost_viewer_p3e" in m for m in logged), "failure must be logged"
+
+
+# ---- Frozen external-viewer environment and startup diagnostics ----
+
+def test_frozen_linux_viewer_environment_restores_original_loader_path() -> None:
+    from core.code_executor import build_external_process_environment
+
+    inherited = {
+        "PATH": "/opt/freesurfer/bin:/usr/bin",
+        "FREESURFER_HOME": "/opt/freesurfer",
+        "SUBJECTS_DIR": "/data/subjects",
+        "DISPLAY": ":12",
+        "XAUTHORITY": "/run/user/1000/xauth",
+        "LD_LIBRARY_PATH": "/opt/easyqc/_internal:/opt/freesurfer/lib",
+        "LD_LIBRARY_PATH_ORIG": "/opt/freesurfer/lib",
+        "QT_PLUGIN_PATH": "/opt/easyqc/_internal/PySide6/Qt/plugins",
+        "QML2_IMPORT_PATH": "/opt/easyqc/_internal/PySide6/Qt/qml",
+    }
+
+    result = build_external_process_environment(
+        inherited,
+        system="Linux",
+        frozen=True,
+    )
+
+    assert result["LD_LIBRARY_PATH"] == "/opt/freesurfer/lib"
+    assert "LD_LIBRARY_PATH_ORIG" not in result
+    assert "QT_PLUGIN_PATH" not in result
+    assert "QML2_IMPORT_PATH" not in result
+    assert result["PATH"] == inherited["PATH"]
+    assert result["FREESURFER_HOME"] == inherited["FREESURFER_HOME"]
+    assert result["SUBJECTS_DIR"] == inherited["SUBJECTS_DIR"]
+    assert result["DISPLAY"] == inherited["DISPLAY"]
+    assert result["XAUTHORITY"] == inherited["XAUTHORITY"]
+    assert inherited["LD_LIBRARY_PATH"].startswith("/opt/easyqc/_internal")
+
+
+def test_frozen_linux_viewer_environment_removes_injected_path_without_original() -> None:
+    from core.code_executor import build_external_process_environment
+
+    result = build_external_process_environment(
+        {
+            "PATH": "/usr/bin:/bin",
+            "LD_LIBRARY_PATH": "/opt/easyqc/_internal",
+        },
+        system="Linux",
+        frozen=True,
+    )
+
+    assert result == {"PATH": "/usr/bin:/bin"}
+
+
+def test_source_viewer_environment_is_an_unchanged_copy() -> None:
+    from core.code_executor import build_external_process_environment
+
+    inherited = {
+        "PATH": "/lab/bin:/usr/bin",
+        "LD_LIBRARY_PATH": "/lab/lib",
+        "LD_LIBRARY_PATH_ORIG": "/older/lib",
+    }
+
+    result = build_external_process_environment(
+        inherited,
+        system="Linux",
+        frozen=False,
+    )
+
+    assert result == inherited
+    assert result is not inherited
+
+
+def test_run_command_passes_clean_environment_to_subprocess(monkeypatch) -> None:
+    observed = []
+
+    def fake_run(command, **options):
+        observed.append((command, options))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("core.code_executor.subprocess.run", fake_run)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/easyqc/_internal:/fs/lib")
+    monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/fs/lib")
+    monkeypatch.setenv("FREESURFER_HOME", "/fs")
+
+    CodeExecutor(system="Linux").run_command("freeview image.mgz")
+
+    child_environment = observed[0][1]["env"]
+    assert child_environment["LD_LIBRARY_PATH"] == "/fs/lib"
+    assert "LD_LIBRARY_PATH_ORIG" not in child_environment
+    assert child_environment["FREESURFER_HOME"] == "/fs"
+
+
+@pytest.mark.parametrize("shell_enabled", [False, True])
+def test_start_command_passes_clean_environment_and_tracks_live_viewer(
+    monkeypatch,
+    shell_enabled,
+) -> None:
+    observed = []
+
+    class LiveProcess:
+        pid = 5091
+
+        @staticmethod
+        def wait(timeout):
+            raise subprocess.TimeoutExpired("freeview", timeout)
+
+    def fake_popen(command, **options):
+        observed.append((command, options))
+        return LiveProcess()
+
+    monkeypatch.setattr("core.code_executor.subprocess.Popen", fake_popen)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/easyqc/_internal:/fs/lib")
+    monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/fs/lib")
+
+    executor = CodeExecutor(system="Linux", shell_enabled=shell_enabled)
+    process = executor.start_command("freeview image.mgz")
+
+    assert observed[0][1]["env"]["LD_LIBRARY_PATH"] == "/fs/lib"
+    assert observed[0][1]["shell"] is shell_enabled
+    assert process in executor.current_processes
+
+
+def test_start_command_reports_immediate_nonzero_stderr(monkeypatch) -> None:
+    monkeypatch.setattr("core.code_executor._VIEWER_STARTUP_TIMEOUT", 2.0)
+    executor = CodeExecutor(system="Linux")
+
+    with pytest.raises(CodeExecutorError) as exc:
+        executor.start_command(
+            [
+                sys.executable,
+                "-c",
+                "import sys; print('freeview loader mismatch', file=sys.stderr); sys.exit(7)",
+            ]
+        )
+
+    message = str(exc.value)
+    assert "freeview loader mismatch" in message
+    assert "7" in message
+    assert executor.current_processes == []
+    assert executor._process_stderr_files == {}
+    assert executor._process_labels == {}
+
+
+def test_viewer_stderr_excerpt_is_bounded_and_removes_control_characters(
+    tmp_path,
+) -> None:
+    stderr_path = tmp_path / "viewer.stderr"
+    stderr_path.write_bytes(b"old\n" + b"x" * 9000 + b"\x1b[31m final-error\n")
+
+    excerpt = CodeExecutor._read_bounded_stderr(stderr_path)
+
+    assert len(excerpt) <= 2000
+    assert "\x1b" not in excerpt
+    assert excerpt.endswith("[31m final-error")

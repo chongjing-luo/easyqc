@@ -116,6 +116,24 @@ viewer ${image_path}
 
 EasyQC 不对可执行程序名称设置 allowlist 或 denylist。两种模式都不是沙箱；`shell=True` 只是扩大了命令字符串的解释能力，也扩大了错误或不可信模板的风险。只应运行用户理解并信任的命令，权限边界就是当前登录用户权限。
 
+### 9.1 冻结版与外部查看器环境
+
+PyInstaller 冻结版必须为 EasyQC 自身设置私有动态库和 Qt 插件路径，但这些
+路径不能继续传给 Freeview、FSLeyes 等独立程序。EasyQC 启动外部查看器时会
+创建子进程专用环境：Linux 恢复冻结前的 `LD_LIBRARY_PATH`（没有原值时移除
+它），并移除只属于 EasyQC 的 `QT_PLUGIN_PATH` 和 `QML2_IMPORT_PATH`；普通
+`PATH`、`DISPLAY`、`XAUTHORITY`、`FREESURFER_HOME`、`SUBJECTS_DIR` 等用户
+环境保持不变。EasyQC 自身的环境不会被修改。
+
+该处理解决冻结包动态库污染，但不会自动加载 `.bashrc` 或
+`SetUpFreeSurfer.sh`。若 FreeSurfer 只在交互终端初始化，应从已初始化的同一
+终端启动 EasyQC，或在可信的模块命令中明确调用固定路径的初始化脚本。优先
+使用查看器绝对路径，可以把“未初始化 PATH”和“动态库冲突”区分开。
+
+查看器若在启动探测期内以非零状态退出，EasyQC 会显示经过长度限制的 stderr
+摘要并写入日志，而不是只表现为按钮没有反应。摘要是外部程序输出，仅用于
+诊断，不会被 EasyQC 当作命令再次执行。
+
 ## 10. 多命令与进程控制
 
 命令模板可以使用 `MULTICMD` 与 `;|` 描述按顺序启动的多个命令。该协议由 `CodeExecutor` 统一解析，而不是 GUI 自己拆字符串。
@@ -179,6 +197,8 @@ sequenceDiagram
 | 模块名 case-only 重复 | 不写入项目 |
 | brace 占位符缺失 | 不启动进程并显示变量名 |
 | 可执行程序不存在 | 保留操作系统启动错误 |
+| 冻结包私有 Qt/动态库污染 | 仅对子进程恢复系统环境 |
+| 查看器启动后立即非零退出 | 显示退出码和受限 stderr 摘要 |
 | 命令引号不匹配 | 解析失败，不尝试猜测修复 |
 | 历史模块身份已被评分占用 | 禁止改名或复用 |
 | 空 rater | 强制只读 QC |

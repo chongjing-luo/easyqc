@@ -6,6 +6,7 @@ import re
 import shlex
 import signal
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -19,6 +20,56 @@ class CodeExecutorError(Exception):
 
 class CommandTimeoutError(CodeExecutorError):
     """Raised when a command exceeds the configured timeout."""
+
+
+_VIEWER_STARTUP_TIMEOUT = 0.35
+_VIEWER_ERROR_LIMIT = 2000
+_VIEWER_ERROR_READ_BYTES = 8192
+_FROZEN_QT_ENVIRONMENT_KEYS = (
+    "QT_PLUGIN_PATH",
+    "QML2_IMPORT_PATH",
+)
+
+
+def build_external_process_environment(
+    environ: Mapping[str, str] | None = None,
+    *,
+    system: str | None = None,
+    frozen: bool | None = None,
+) -> dict[str, str]:
+    """Return a child-only environment suitable for an external viewer.
+
+    PyInstaller must alter the frozen application's loader and Qt paths so
+    EasyQC can find its bundled libraries.  External programs must not inherit
+    those private paths: Freeview and similar viewers ship their own Qt/VTK
+    runtime and can exit immediately after loading an incompatible EasyQC
+    library or plugin.
+
+    Input is one environment mapping; output is an independent string mapping.
+    The function has no side effects and never mutates ``os.environ``.  A
+    platform that needs process-global launcher state rather than environment
+    repair must use a separate platform adapter instead of expanding this
+    function's contract.
+    """
+
+    inherited = os.environ if environ is None else environ
+    result = dict(inherited)
+    target_system = system or platform.system()
+    is_frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
+    if not is_frozen:
+        return result
+
+    for key in _FROZEN_QT_ENVIRONMENT_KEYS:
+        result.pop(key, None)
+
+    if target_system == "Linux":
+        original_library_path = result.pop("LD_LIBRARY_PATH_ORIG", None)
+        if original_library_path:
+            result["LD_LIBRARY_PATH"] = original_library_path
+        else:
+            result.pop("LD_LIBRARY_PATH", None)
+
+    return result
 
 
 class CodeExecutor:
@@ -36,6 +87,8 @@ class CodeExecutor:
         self.current_processes: list[subprocess.Popen] = []
         self._pending_temp_files: list[Path] = []
         self._process_temp_files: dict[int, list[Path]] = {}
+        self._process_stderr_files: dict[int, Path] = {}
+        self._process_labels: dict[int, str] = {}
 
     def set_shell_enabled(self, enabled: bool) -> None:
         """Select direct or Shell execution for future commands."""
@@ -270,6 +323,61 @@ class CodeExecutor:
     def _cleanup_process_temp_files(self, process: subprocess.Popen) -> None:
         self._cleanup_temp_files(self._process_temp_files.pop(process.pid, []))
 
+    def _cleanup_process_diagnostics(self, process: subprocess.Popen) -> None:
+        stderr_path = self._process_stderr_files.pop(process.pid, None)
+        self._process_labels.pop(process.pid, None)
+        if stderr_path is not None:
+            self._cleanup_temp_files([stderr_path])
+
+    @staticmethod
+    def _read_bounded_stderr(stderr_path: Path) -> str:
+        """Return a compact, untrusted diagnostic excerpt without executing it."""
+
+        try:
+            with stderr_path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                handle.seek(max(0, size - _VIEWER_ERROR_READ_BYTES))
+                text = handle.read(_VIEWER_ERROR_READ_BYTES).decode(
+                    "utf-8",
+                    errors="replace",
+                )
+        except OSError:
+            return ""
+        lines = []
+        for raw_line in text.splitlines():
+            line = "".join(
+                character if character.isprintable() else " "
+                for character in raw_line
+            ).strip()
+            if line:
+                lines.append(line)
+        if not lines:
+            return ""
+        return " | ".join(lines[-6:])[-_VIEWER_ERROR_LIMIT:]
+
+    def _startup_failure_message(
+        self,
+        process: subprocess.Popen,
+        command_label: str,
+        returncode: int,
+    ) -> str:
+        stderr_path = self._process_stderr_files.get(process.pid)
+        detail = (
+            self._read_bounded_stderr(stderr_path)
+            if stderr_path is not None
+            else ""
+        )
+        message = f"查看器启动后立即退出: {command_label} (exit={returncode})"
+        return f"{message}: {detail}" if detail else message
+
+    def _forget_process(self, process: subprocess.Popen) -> None:
+        self.current_processes = [
+            current for current in self.current_processes if current is not process
+        ]
+        self._cleanup_process_temp_files(process)
+        self._cleanup_process_diagnostics(process)
+
     def run_command(
         self,
         command: str | Sequence[str],
@@ -287,6 +395,7 @@ class CodeExecutor:
             return subprocess.run(
                 args,
                 cwd=cwd,
+                env=build_external_process_environment(system=self.system),
                 shell=shell_enabled,
                 check=False,
                 text=True,
@@ -319,11 +428,20 @@ class CodeExecutor:
         )
         command_label = self._command_label(args)
         temp_files = self._consume_pending_temp_files()
+        child_environment = build_external_process_environment(system=self.system)
+        stderr_file = tempfile.NamedTemporaryFile(
+            mode="w+b",
+            prefix="easyqc_viewer_",
+            suffix=".stderr",
+            delete=False,
+        )
+        stderr_path = Path(stderr_file.name)
         popen_kwargs: dict[str, Any] = {
             "cwd": cwd,
+            "env": child_environment,
             "shell": shell_enabled,
             "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
+            "stderr": stderr_file,
         }
 
         if self.system == "Windows":
@@ -334,6 +452,8 @@ class CodeExecutor:
         try:
             process = subprocess.Popen(args, **popen_kwargs)
         except OSError as exc:
+            stderr_file.close()
+            self._cleanup_temp_files([stderr_path])
             self._cleanup_temp_files(temp_files)
             log_error(
                 f"viewer 启动失败: {command_label}: {exc}",
@@ -343,9 +463,38 @@ class CodeExecutor:
             raise CodeExecutorError(
                 f"命令启动失败: {command_label}: {exc}"
             ) from exc
+        except Exception:
+            stderr_file.close()
+            self._cleanup_temp_files([stderr_path])
+            self._cleanup_temp_files(temp_files)
+            raise
+        finally:
+            if not stderr_file.closed:
+                stderr_file.close()
         self.current_processes.append(process)
+        self._process_stderr_files[process.pid] = stderr_path
+        self._process_labels[process.pid] = command_label
         if temp_files:
             self._process_temp_files[process.pid] = temp_files
+
+        try:
+            returncode = process.wait(timeout=_VIEWER_STARTUP_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            return process
+
+        if returncode != 0:
+            message = self._startup_failure_message(
+                process,
+                command_label,
+                returncode,
+            )
+            log_error(message, "CodeExecutor", show_popup=False)
+            self._forget_process(process)
+            raise CodeExecutorError(message)
+
+        # Keep a successful short-lived wrapper tracked until normal cleanup.
+        # A Shell wrapper may have delegated to a background GUI process that
+        # still needs any command temp files for a short period.
         return process
 
     def start_commands(
@@ -367,7 +516,22 @@ class CodeExecutor:
 
         for process in self.current_processes:
             if process.poll() is not None:
+                if process.returncode not in (None, 0):
+                    command_label = self._process_labels.get(
+                        process.pid,
+                        "<viewer>",
+                    )
+                    log_error(
+                        self._startup_failure_message(
+                            process,
+                            command_label,
+                            process.returncode,
+                        ),
+                        "CodeExecutor",
+                        show_popup=False,
+                    )
                 self._cleanup_process_temp_files(process)
+                self._cleanup_process_diagnostics(process)
                 continue
 
             try:
@@ -385,8 +549,10 @@ class CodeExecutor:
                         os.killpg(os.getpgid(process.pid), signal.SIGKILL)
                     process.wait()
                 self._cleanup_process_temp_files(process)
+                self._cleanup_process_diagnostics(process)
             except ProcessLookupError:
                 self._cleanup_process_temp_files(process)
+                self._cleanup_process_diagnostics(process)
                 continue
             except Exception as exc:
                 log_error(
