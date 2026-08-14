@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPoint, Qt, Signal
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QModelIndex,
+    QPoint,
+    QSettings,
+    QTimer,
+    Qt,
+    Signal,
+)
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -20,6 +28,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSplitter,
     QTableView,
     QTextEdit,
     QVBoxLayout,
@@ -27,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.qc_workflow_service import QcWorkflowService
+from gui_qt.command_output_panel import QtCommandOutputPanel
 from gui_qt.i18n import (
     LanguageController,
     get_or_create_language_controller,
@@ -42,6 +52,10 @@ DEFAULT_VISIBLE_QUEUE_ROWS = 8
 DEFAULT_CONTROLLER_WIDTH = 560
 DEFAULT_CONTROLLER_HEIGHT = 720
 SCREEN_EDGE_MARGIN = 48
+DEFAULT_COMMAND_OUTPUT_HEIGHT = 184
+MIN_COMMAND_OUTPUT_HEIGHT = 96
+COMMAND_OUTPUT_EXPANDED_KEY = "qc/command_output_expanded"
+COMMAND_OUTPUT_HEIGHT_KEY = "qc/command_output_height"
 
 
 class _QcEditorScrollArea(QScrollArea):
@@ -812,12 +826,16 @@ class QtQcControllerWindow(QMainWindow):
         workflow: QcWorkflowService,
         *,
         language: LanguageController | None = None,
+        settings: QSettings | None = None,
     ) -> None:
         super().__init__(None)
         if not isinstance(workflow, QcWorkflowService):
             raise TypeError("QtQcControllerWindow requires QcWorkflowService")
         self._force_discard_close = False
         self.language = language or get_or_create_language_controller()
+        self.settings = settings if settings is not None else QSettings()
+        self._restoring_output_layout = True
+        self._command_output_height = self._read_command_output_height()
         self.setObjectName("qtQcControllerWindow")
         self.setAccessibleName("EasyQC 质控控制器窗口")
         self.setAttribute(Qt.WA_DeleteOnClose, True)
@@ -829,7 +847,22 @@ class QtQcControllerWindow(QMainWindow):
             self,
             language=self.language,
         )
-        self.setCentralWidget(self.workspace)
+        self.command_output_panel = QtCommandOutputPanel(
+            workflow,
+            language=self.language,
+            parent=self,
+        )
+        self.splitter = QSplitter(Qt.Vertical, self)
+        self.splitter.setObjectName("qcControllerSplitter")
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.addWidget(self.workspace)
+        self.splitter.addWidget(self.command_output_panel)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 0)
+        self.setCentralWidget(self.splitter)
+        self.command_output_panel.set_expanded(
+            self._read_command_output_expanded()
+        )
         available = self.screen().availableGeometry()
         width_cap = max(1, available.width() - SCREEN_EDGE_MARGIN)
         height_cap = max(1, available.height() - SCREEN_EDGE_MARGIN)
@@ -842,7 +875,107 @@ class QtQcControllerWindow(QMainWindow):
             height_cap,
         )
         self.resize(target_width, target_height)
+        self._apply_command_output_layout()
+        self.command_output_panel.expandedChanged.connect(
+            self._command_output_expanded_changed
+        )
+        self.splitter.splitterMoved.connect(self._command_output_splitter_moved)
+        self._restoring_output_layout = False
         self.language.register_root(self)
+
+    def _read_command_output_expanded(self) -> bool:
+        value = self.settings.value(COMMAND_OUTPUT_EXPANDED_KEY, False)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+        return False
+
+    def _read_command_output_height(self) -> int:
+        value = self.settings.value(
+            COMMAND_OUTPUT_HEIGHT_KEY,
+            DEFAULT_COMMAND_OUTPUT_HEIGHT,
+        )
+        try:
+            height = int(value)
+        except (TypeError, ValueError):
+            height = DEFAULT_COMMAND_OUTPUT_HEIGHT
+        if height < MIN_COMMAND_OUTPUT_HEIGHT:
+            return DEFAULT_COMMAND_OUTPUT_HEIGHT
+        return height
+
+    def _bounded_command_output_height(self, height: int) -> int:
+        upper_bound = max(
+            MIN_COMMAND_OUTPUT_HEIGHT,
+            int(max(1, self.height()) * 0.6),
+        )
+        return min(max(int(height), MIN_COMMAND_OUTPUT_HEIGHT), upper_bound)
+
+    def _collapsed_command_output_height(self) -> int:
+        return max(
+            1,
+            self.command_output_panel.header_widget.sizeHint().height(),
+        )
+
+    def _apply_command_output_layout(self) -> None:
+        panel = self.command_output_panel
+        collapsed_height = self._collapsed_command_output_height()
+        panel.setMinimumHeight(collapsed_height)
+        if panel.expanded:
+            panel.setMaximumHeight(16777215)
+            output_height = self._bounded_command_output_height(
+                self._command_output_height
+            )
+        else:
+            panel.setMaximumHeight(collapsed_height)
+            output_height = collapsed_height
+        total_height = max(1, self.splitter.height())
+        self.splitter.setSizes(
+            [max(1, total_height - output_height), output_height]
+        )
+
+    def _command_output_expanded_changed(self, expanded: bool) -> None:
+        if self._restoring_output_layout:
+            return
+        self.settings.setValue(COMMAND_OUTPUT_EXPANDED_KEY, bool(expanded))
+        self.settings.sync()
+        self._restoring_output_layout = True
+        try:
+            self._apply_command_output_layout()
+        finally:
+            self._restoring_output_layout = False
+
+    def _command_output_splitter_moved(self, _position: int, _index: int) -> None:
+        if self._restoring_output_layout or not self.command_output_panel.expanded:
+            return
+        sizes = self.splitter.sizes()
+        if len(sizes) != 2 or sizes[1] < MIN_COMMAND_OUTPUT_HEIGHT:
+            return
+        self._command_output_height = self._bounded_command_output_height(sizes[1])
+        self.settings.setValue(
+            COMMAND_OUTPUT_HEIGHT_KEY,
+            self._command_output_height,
+        )
+        self.settings.sync()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if not hasattr(self, "splitter"):
+            return
+        QTimer.singleShot(0, self._restore_output_height_after_resize)
+
+    def _restore_output_height_after_resize(self) -> None:
+        if self._restoring_output_layout:
+            return
+        self._restoring_output_layout = True
+        try:
+            self._apply_command_output_layout()
+        finally:
+            self._restoring_output_layout = False
 
     @property
     def workflow(self) -> QcWorkflowService:
@@ -868,6 +1001,7 @@ class QtQcControllerWindow(QMainWindow):
             if answer != QMessageBox.Yes:
                 event.ignore()
                 return
+        self.command_output_panel.timer.stop()
         self.workspace.close_workflow()
         self.language.unregister_root(self)
         self.closed.emit()

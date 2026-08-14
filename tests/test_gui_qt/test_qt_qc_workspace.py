@@ -15,10 +15,12 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QSplitter,
     QTableView,
     QWidget,
 )
 
+from core.command_output import CommandOutputBatch, CommandOutputStatus
 from core.qc_workflow_service import QcWorkflowService
 from gui_qt import qc_workspace as qc_workspace_module
 from gui_qt.i18n import LanguageController
@@ -33,9 +35,28 @@ class _FakeExecutor:
     def render_command_plan(self, template, variables):
         return template.format(**variables), {0: template.format(**variables)}
 
-    def start_commands(self, commands, control=False, cwd=None):
-        self.started.append((dict(commands), control))
+    def start_commands(
+        self,
+        commands,
+        control=False,
+        cwd=None,
+        output_contexts=None,
+    ):
+        self.started.append((dict(commands), control, output_contexts))
         return [object()]
+
+    def command_output_since(self, after_sequence):
+        return CommandOutputBatch(
+            events=(),
+            next_sequence=after_sequence,
+            truncated=False,
+            status=CommandOutputStatus(
+                session_id="test-session",
+                file_logging_enabled=False,
+                session_log_path=None,
+                warning_message=None,
+            ),
+        )
 
     def close_current_processes(self):
         self.close_calls += 1
@@ -116,7 +137,14 @@ def test_compact_qc_controller_is_top_level_with_exact_table_and_action_order(
     assert controller.isWindow()
     assert controller.parent() is None
     assert controller.windowTitle() == "EasyQC · AnatQC · rater1"
-    assert controller.centralWidget() is workspace
+    assert controller.centralWidget() is controller.splitter
+    assert isinstance(controller.splitter, QSplitter)
+    assert controller.splitter.orientation() == Qt.Vertical
+    assert controller.splitter.widget(0) is workspace
+    assert controller.splitter.widget(1) is controller.command_output_panel
+    assert not controller.command_output_panel.expanded
+    assert controller.command_output_panel.body_widget.isHidden()
+    assert controller.command_output_panel.header_widget.isVisible()
     assert isinstance(workspace.queue_table, QTableView)
     assert workspace.queue_table.model() is workspace.queue_model
     assert [
@@ -246,6 +274,9 @@ def test_qc_controller_switches_language_without_losing_unsaved_rating(
         assert workspace.notes_edit.toPlainText() == "keep this draft"
         assert workspace.workflow.dirty
         assert workspace.score_buttons["1"]["Good"].isChecked()
+        assert controller.command_output_panel.title_label.text() == "Command output"
+        assert controller.command_output_panel.toggle_button.text() == "Expand"
+        assert controller.command_output_panel.running_label.text() == "Running 0"
         accessibility_texts = {
             text
             for widget in (controller, *controller.findChildren(QWidget))
@@ -522,6 +553,8 @@ def test_dirty_controller_close_rejects_without_cleanup_then_accepts_once(
     controller = _controller_class()(_workflow(tmp_path, executor=executor))
     qtbot.addWidget(controller)
     controller.show()
+    panel_timer = controller.command_output_panel.timer
+    panel_timer.setInterval(60_000)
     qtbot.mouseClick(
         controller.workspace.score_buttons["1"]["Good"],
         Qt.LeftButton,
@@ -536,6 +569,7 @@ def test_dirty_controller_close_rejects_without_cleanup_then_accepts_once(
     assert controller.isVisible()
     assert controller.workspace.workflow.dirty
     assert executor.close_calls == 0
+    assert panel_timer.isActive()
 
     monkeypatch.setattr(
         QMessageBox,
@@ -543,8 +577,122 @@ def test_dirty_controller_close_rejects_without_cleanup_then_accepts_once(
         lambda *args, **kwargs: QMessageBox.Yes,
     )
     assert controller.close()
+    assert not panel_timer.isActive()
     assert not isValid(controller) or not controller.isVisible()
     assert executor.close_calls == 1
+
+
+def test_qc_controller_restores_and_persists_output_panel_layout(
+    qtbot,
+    tmp_path,
+) -> None:
+    settings = QSettings(str(tmp_path / "qc-layout.ini"), QSettings.IniFormat)
+    settings.setValue("qc/command_output_expanded", True)
+    settings.setValue("qc/command_output_height", 184)
+    controller = _controller_class()(_workflow(tmp_path / "first"), settings=settings)
+    qtbot.addWidget(controller)
+    controller.resize(640, 760)
+    controller.show()
+    qtbot.wait(0)
+
+    panel = controller.command_output_panel
+    assert panel.expanded
+    assert panel.body_widget.isVisible()
+    assert controller.splitter.sizes()[1] >= 96
+
+    controller.splitter.moveSplitter(controller.splitter.height() - 228, 1)
+    qtbot.wait(0)
+    saved_height = settings.value("qc/command_output_height", type=int)
+    assert saved_height >= 96
+
+    qtbot.mouseClick(panel.toggle_button, Qt.LeftButton)
+
+    assert not panel.expanded
+    assert panel.body_widget.isHidden()
+    assert panel.header_widget.isVisible()
+    assert settings.value("qc/command_output_expanded", type=bool) is False
+    assert settings.value("qc/command_output_height", type=int) == saved_height
+    assert panel.timer.isActive()
+    assert controller.close()
+
+    reopened = _controller_class()(_workflow(tmp_path / "second"), settings=settings)
+    qtbot.addWidget(reopened)
+    reopened.resize(640, 760)
+    reopened.show()
+    qtbot.wait(0)
+
+    assert not reopened.command_output_panel.expanded
+    assert reopened.command_output_panel.body_widget.isHidden()
+    assert reopened.command_output_panel.header_widget.isVisible()
+    qtbot.mouseClick(reopened.command_output_panel.toggle_button, Qt.LeftButton)
+    qtbot.wait(0)
+    assert reopened.command_output_panel.expanded
+    restored_height = reopened.splitter.sizes()[1]
+    assert 96 <= restored_height <= int(reopened.height() * 0.6) + 2
+    assert abs(restored_height - saved_height) <= 2
+    assert set(settings.allKeys()) == {
+        "qc/command_output_expanded",
+        "qc/command_output_height",
+    }
+
+
+def test_viewer_launch_never_changes_output_panel_state_or_settings(
+    qtbot,
+    tmp_path,
+) -> None:
+    settings = QSettings(str(tmp_path / "qc-launch.ini"), QSettings.IniFormat)
+    settings.setValue("qc/command_output_expanded", False)
+    settings.setValue("qc/command_output_height", 210)
+    executor = _FakeExecutor()
+    controller = _controller_class()(
+        _workflow(tmp_path, executor=executor),
+        settings=settings,
+    )
+    qtbot.addWidget(controller)
+    controller.show()
+    panel = controller.command_output_panel
+    before = {
+        key: settings.value(key)
+        for key in (
+            "qc/command_output_expanded",
+            "qc/command_output_height",
+        )
+    }
+
+    controller.workspace.queue_table.doubleClicked.emit(
+        controller.workspace.queue_model.index(0, 1)
+    )
+
+    assert executor.started
+    assert not panel.expanded
+    assert panel.timer.isActive()
+    assert {
+        key: settings.value(key)
+        for key in (
+            "qc/command_output_expanded",
+            "qc/command_output_height",
+        )
+    } == before
+
+
+def test_filter_busy_rejected_close_keeps_output_polling_active(
+    qtbot,
+    tmp_path,
+) -> None:
+    executor = _FakeExecutor()
+    controller = _controller_class()(_workflow(tmp_path, executor=executor))
+    qtbot.addWidget(controller)
+    controller.show()
+    controller.command_output_panel.timer.setInterval(60_000)
+    controller.workspace.set_filter_busy(True)
+
+    assert not controller.close()
+    assert controller.isVisible()
+    assert controller.command_output_panel.timer.isActive()
+    assert executor.close_calls == 0
+
+    controller.workspace.set_filter_busy(False)
+    assert controller.close()
 
 
 def test_qt_qc_editor_saves_full_draft_then_advances(qtbot, tmp_path) -> None:

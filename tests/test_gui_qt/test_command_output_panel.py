@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication
 
@@ -14,6 +14,7 @@ from core.command_output import (
     ViewerExecutionContext,
 )
 from gui_qt.command_output_panel import QtCommandOutputPanel
+from gui_qt.i18n import LanguageController
 
 
 class _FakeOutputProvider:
@@ -372,3 +373,59 @@ def test_public_controls_and_output_are_accessible_and_keyboard_focusable(
         panel.output_edit,
     ):
         assert control.focusPolicy() != Qt.NoFocus, type(control).__name__
+
+
+def test_language_switch_retranslates_fixed_ui_without_touching_output(
+    qtbot,
+    tmp_path,
+) -> None:
+    provider = _FakeOutputProvider(_status(tmp_path / "viewer.log"))
+    provider.add(
+        _event(1, "start", "module=解剖质控 rater=评分员甲"),
+        _event(2, "stdout", "外部输出 🧠\t不翻译 <scan>&$HOME"),
+    )
+    language = LanguageController(
+        settings=QSettings(str(tmp_path / "panel-language.ini"), QSettings.IniFormat)
+    )
+    panel = QtCommandOutputPanel(provider, language=language)
+    qtbot.addWidget(panel)
+    panel.timer.stop()
+    panel.refresh_output()
+    rendered = panel.output_edit.toPlainText()
+
+    language.set_language("en")
+
+    assert panel.title_label.text() == "Command output"
+    assert panel.toggle_button.text() == "Collapse"
+    assert panel.running_label.text() == "Running 1"
+    assert panel.copy_button.text() == "Copy all"
+    assert panel.clear_button.text() == "Clear display"
+    assert panel.open_log_button.text() == "Open log"
+    assert panel.status_label.text() == "File log available"
+    assert panel.accessibleName() == "Command output panel"
+    assert panel.output_edit.accessibleName() == "Viewer command output timeline"
+    assert panel.output_edit.toPlainText() == rendered
+
+    provider.status = _status(enabled=False, warning="permission denied")
+    provider.truncated = True
+    panel.refresh_output()
+    assert "File log unavailable; in-memory display continues" in (
+        panel.status_label.text()
+    )
+    assert "permission denied" in panel.status_label.text()
+    assert "Earlier in-memory output is no longer available" in (
+        panel.status_label.text()
+    )
+
+    panel.set_expanded(False)
+    assert panel.toggle_button.text() == "Expand"
+    assert panel.toggle_button.accessibleName() == "Expand command output"
+    language.set_language("zh_CN")
+
+    assert panel.title_label.text() == "命令输出"
+    assert panel.toggle_button.text() == "展开"
+    assert panel.running_label.text() == "运行中 1"
+    assert "文件日志不可用；内存显示仍在继续" in panel.status_label.text()
+    assert "permission denied" in panel.status_label.text()
+    assert "较早的内存输出已不可用" in panel.status_label.text()
+    assert panel.output_edit.toPlainText() == rendered

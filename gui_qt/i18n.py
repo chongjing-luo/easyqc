@@ -62,6 +62,94 @@ _LOCALIZABLE_PROPERTY_NAMES = frozenset(
 
 MESSAGES: Mapping[str, Mapping[str, str]] = {
     "app.workspace": {"zh_CN": "EasyQC 工作区", "en": "EasyQC workspace"},
+    "command_output.accessible.clear": {
+        "zh_CN": "清空当前命令输出显示",
+        "en": "Clear the current command output display",
+    },
+    "command_output.accessible.collapse": {
+        "zh_CN": "收起命令输出",
+        "en": "Collapse command output",
+    },
+    "command_output.accessible.copy": {
+        "zh_CN": "复制全部命令输出",
+        "en": "Copy all command output",
+    },
+    "command_output.accessible.expand": {
+        "zh_CN": "展开命令输出",
+        "en": "Expand command output",
+    },
+    "command_output.accessible.open_log": {
+        "zh_CN": "使用系统应用打开完整命令日志",
+        "en": "Open the complete command log with the system application",
+    },
+    "command_output.accessible.panel": {
+        "zh_CN": "命令输出面板",
+        "en": "Command output panel",
+    },
+    "command_output.accessible.running": {
+        "zh_CN": "运行中的查看器命令数量",
+        "en": "Number of running viewer commands",
+    },
+    "command_output.accessible.status": {
+        "zh_CN": "命令输出和文件日志状态",
+        "en": "Command output and file log status",
+    },
+    "command_output.accessible.timeline": {
+        "zh_CN": "查看器命令输出时间线",
+        "en": "Viewer command output timeline",
+    },
+    "command_output.accessible.title": {
+        "zh_CN": "命令输出标题",
+        "en": "Command output title",
+    },
+    "command_output.action.clear": {
+        "zh_CN": "清空显示",
+        "en": "Clear display",
+    },
+    "command_output.action.collapse": {"zh_CN": "收起", "en": "Collapse"},
+    "command_output.action.copy": {"zh_CN": "复制全部", "en": "Copy all"},
+    "command_output.action.expand": {"zh_CN": "展开", "en": "Expand"},
+    "command_output.action.open_log": {
+        "zh_CN": "打开日志",
+        "en": "Open log",
+    },
+    "command_output.running": {
+        "zh_CN": "运行中 {count}",
+        "en": "Running {count}",
+    },
+    "command_output.status.log_available": {
+        "zh_CN": "文件日志可用",
+        "en": "File log available",
+    },
+    "command_output.status.log_unavailable": {
+        "zh_CN": "文件日志不可用",
+        "en": "File log unavailable",
+    },
+    "command_output.status.log_unavailable_memory_continues": {
+        "zh_CN": "文件日志不可用；内存显示仍在继续",
+        "en": "File log unavailable; in-memory display continues",
+    },
+    "command_output.status.open_failed": {
+        "zh_CN": "无法打开命令日志：{error}",
+        "en": "Could not open the command log: {error}",
+    },
+    "command_output.status.open_failed_without_detail": {
+        "zh_CN": "无法打开命令日志",
+        "en": "Could not open the command log",
+    },
+    "command_output.status.refresh_failed": {
+        "zh_CN": "命令输出刷新失败：{error}",
+        "en": "Command output refresh failed: {error}",
+    },
+    "command_output.status.truncated": {
+        "zh_CN": "较早的内存输出已不可用",
+        "en": "Earlier in-memory output is no longer available",
+    },
+    "command_output.status.waiting": {
+        "zh_CN": "等待命令输出",
+        "en": "Waiting for command output",
+    },
+    "command_output.title": {"zh_CN": "命令输出", "en": "Command output"},
     "field.easyqcid": {"zh_CN": "easyqcid", "en": "easyqcid"},
     "language.label": {"zh_CN": "语言", "en": "Language"},
     "language.switch_to_english": {
