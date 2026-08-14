@@ -92,8 +92,9 @@ QtCommandOutputPanel ──poll(last_sequence)──▶ QcWorkflowService
 
 主要合同：
 
-- `register_execution(context, command, stdout_path, stderr_path)`：登记一条执行，
-  分配稳定的会话内编号，例如 `C001`，写入 START 和 CMD 记录。
+- `begin_execution(context, command)`：登记一条执行，创建 journal 自有的
+  stdout/stderr capture，分配稳定的会话内编号（例如 `C001`），写入 START 和
+  CMD 记录，并把 `CommandCapture` 交给 `CodeExecutor`。
 - `poll()`：按既有偏移读取新增输出，以有限批量生成事件并写入会话日志。
 - `finalize(execution_id, returncode)`：完成最后一次采集并写入 EXIT 记录。
 - `events_since(sequence)`：非破坏性返回指定序号之后的事件，使多个窗口不会互相
@@ -106,9 +107,11 @@ QtCommandOutputPanel ──poll(last_sequence)──▶ QcWorkflowService
 
 `CodeExecutor` 继续作为唯一外部进程控制器：
 
-- 创建每条命令的 `stdout` / `stderr` 暂存文件并传给 `Popen`。
+- 向 journal 请求每条命令的 `CommandCapture`，再把其中的 `stdout` / `stderr`
+  文件句柄传给 `Popen`；暂存文件的存储与清理仍由 journal 负责。
 - 继续使用清理后的冻结版子进程环境。
-- 启动后向 journal 登记命令和调用方提供的执行上下文。
+- `begin_execution` 在启动前写入 START/CMD；`Popen` 成功后只向 journal
+  登记子进程 PID 并关闭 EasyQC 继承的写句柄副本。
 - 启动探测期内非零退出时，先完成日志采集，再抛出 GUI 可见错误。
 - 在轮询、显式关闭和应用关闭时完成进程状态与输出日志收尾。
 - Windows 上只有在父进程文件句柄关闭、子进程结束且 journal 不再读取后才删除
@@ -255,7 +258,7 @@ viewer_commands_YYYYMMDD_HHMMSS_<pid>.log
 
 | 情况 | 行为 |
 |---|---|
-| 可执行文件不存在 | 写 START/CMD/ERROR，现有 GUI 错误路径显示失败 |
+| 可执行文件不存在 | 已登记的 START/CMD 保留；现有 GUI 错误路径显示失败，不伪造 EXIT 或不存在的 ERROR 事件 |
 | 启动探测期非零退出 | 采集完整可用 stderr，写 EXIT，GUI 显示受限摘要 |
 | 启动后稍晚非零退出 | 时间线写 EXIT code，错误状态可见，完整输出留在日志 |
 | 日志目录不可写 | 查看器继续启动；面板显示持久化不可用警告 |
@@ -263,7 +266,7 @@ viewer_commands_YYYYMMDD_HHMMSS_<pid>.log
 | 非 UTF-8 输出 | replacement 解码，记录发生过解码替换 |
 | 多命令同时输出 | 每行保留 execution id；按观测序列进入统一时间线 |
 | 面板收起 | 不停止采集，不改变日志完整性 |
-| GUI 关闭 | 最后采集并关闭 journal；现有进程控制策略保持不变 |
+| QC 窗口关闭 | workflow 按现有策略收尾其托管进程；EasyQC 应用终止时再完成最后采集并关闭共享 journal |
 
 ## 11. 性能约束
 
