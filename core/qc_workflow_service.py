@@ -12,6 +12,7 @@ from typing import Any, Mapping
 import pandas as pd
 
 from core.code_executor import CodeExecutor
+from core.command_output import CommandOutputBatch, ViewerExecutionContext
 from core.event_bus import Event, EventBus, EventType
 from core.rating_identity import (
     RatingIdentityError,
@@ -420,6 +421,20 @@ class QcWorkflowService:
         rendered, commands = self._code_executor.render_command_plan(template, variables)
         if not commands:
             raise QcSessionError("Viewer template produced no commands")
+        invalid_command_indices = [
+            key
+            for key in commands
+            if (
+                not isinstance(key, int)
+                or isinstance(key, bool)
+                or key < 0
+            )
+        ]
+        if invalid_command_indices:
+            raise QcSessionError(
+                "Viewer template produced invalid command indices: "
+                f"{invalid_command_indices!r}"
+            )
         self._working_module.code_exe = {str(key): command for key, command in commands.items()}
         return ViewerPlan(
             rendered_template=rendered,
@@ -429,15 +444,38 @@ class QcWorkflowService:
 
     def launch_viewer(self) -> list[Any]:
         self._require_active()
+        previous_code_exe = deepcopy(self._working_module.code_exe)
         plan = self.viewer_plan()
+        rater = (
+            "" if self._working_module.rater is None else self._working_module.rater
+        )
+        output_contexts = {
+            command_key: ViewerExecutionContext(
+                module_name=self._working_module.name,
+                rater=rater,
+                easyqcid=self.current_easyqcid,
+                command_index=command_key,
+            )
+            for command_key in plan.commands
+        }
         try:
-            return list(self._code_executor.start_commands(
-                plan.commands,
-                control=plan.control,
-            ))
+            return list(
+                self._code_executor.start_commands(
+                    plan.commands,
+                    control=plan.control,
+                    output_contexts=output_contexts,
+                )
+            )
         except Exception:
+            self._working_module.code_exe = previous_code_exe
             self._code_executor.close_current_processes()
             raise
+
+    def command_output_since(self, after_sequence: int) -> CommandOutputBatch:
+        """Return one immutable executor-owned output snapshot."""
+
+        self._require_active()
+        return self._code_executor.command_output_since(after_sequence)
 
     def save(self) -> Path:
         self._require_writable()

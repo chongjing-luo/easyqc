@@ -1,11 +1,22 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
+from core.command_output import (
+    CommandOutputBatch,
+    CommandOutputEvent,
+    CommandOutputJournal,
+    CommandOutputStatus,
+    ViewerExecutionContext,
+)
 from core.code_executor import CodeExecutor
 from core.qc_workflow_service import (
     QcIdentityError,
@@ -58,13 +69,41 @@ class _FakeExecutor:
         self.planner = CodeExecutor()
         self.started = []
         self.close_calls = 0
+        self.output_queries = []
+        self.output_batch = CommandOutputBatch(
+            events=(),
+            next_sequence=0,
+            truncated=False,
+            status=CommandOutputStatus(
+                session_id="fake-session",
+                file_logging_enabled=False,
+                session_log_path=None,
+            ),
+        )
 
     def render_command_plan(self, template, variables):
         return self.planner.render_command_plan(template, variables)
 
-    def start_commands(self, commands, control=False, cwd=None):
-        self.started.append((dict(commands), control, cwd))
+    def start_commands(
+        self,
+        commands,
+        control=False,
+        cwd=None,
+        output_contexts=None,
+    ):
+        self.started.append(
+            (
+                dict(commands),
+                control,
+                cwd,
+                None if output_contexts is None else dict(output_contexts),
+            )
+        )
         return [object() for _ in commands]
+
+    def command_output_since(self, after_sequence):
+        self.output_queries.append(after_sequence)
+        return self.output_batch
 
     def close_current_processes(self):
         self.close_calls += 1
@@ -129,13 +168,174 @@ def test_viewer_plan_launch_navigation_and_close_use_code_executor(tmp_path) -> 
     assert plan.control is True
 
     workflow.launch_viewer()
-    assert executor.started == [(plan.commands, True, None)]
+    first_contexts = executor.started[0][3]
+    assert executor.started[0][:3] == (plan.commands, True, None)
+    assert tuple(first_contexts) == tuple(plan.commands)
+    assert first_contexts == {
+        0: ViewerExecutionContext("AnatQC", "rater1", "SUB001", 0),
+        1: ViewerExecutionContext("AnatQC", "rater1", "SUB001", 1),
+    }
     assert workflow.navigate_to("SUB002")
     assert executor.close_calls == 1
     assert workflow.current_easyqcid == "SUB002"
 
+    workflow.launch_viewer()
+    second_contexts = executor.started[1][3]
+    assert tuple(second_contexts) == tuple(plan.commands)
+    assert second_contexts == {
+        0: ViewerExecutionContext("AnatQC", "rater1", "SUB002", 0),
+        1: ViewerExecutionContext("AnatQC", "rater1", "SUB002", 1),
+    }
+
     workflow.close()
     assert executor.close_calls == 2
+
+
+def test_viewer_context_keeps_an_explicit_empty_rater(tmp_path) -> None:
+    executor = _FakeExecutor()
+    workflow = _workflow(tmp_path, module=_module(rater=None), executor=executor)
+
+    workflow.launch_viewer()
+
+    contexts = executor.started[0][3]
+    assert contexts
+    assert {context.rater for context in contexts.values()} == {""}
+
+
+def test_viewer_context_uses_sparse_integer_plan_keys_as_command_indices(
+    tmp_path,
+) -> None:
+    executor = _FakeExecutor()
+    executor.render_command_plan = lambda *_args: (
+        "viewer three; viewer seven",
+        {3: "viewer three", 7: "viewer seven"},
+    )
+    workflow = _workflow(tmp_path, executor=executor)
+
+    workflow.launch_viewer()
+
+    commands, _control, _cwd, contexts = executor.started[0]
+    assert tuple(commands) == (3, 7)
+    assert tuple(contexts) == (3, 7)
+    assert contexts == {
+        3: ViewerExecutionContext("AnatQC", "rater1", "SUB001", 3),
+        7: ViewerExecutionContext("AnatQC", "rater1", "SUB001", 7),
+    }
+
+
+def test_viewer_plan_rejects_non_integer_command_keys_before_launch(tmp_path) -> None:
+    executor = _FakeExecutor()
+    executor.render_command_plan = lambda *_args: (
+        "viewer invalid",
+        {"first": "viewer invalid"},
+    )
+    workflow = _workflow(tmp_path, executor=executor)
+
+    with pytest.raises(QcSessionError, match="command ind"):
+        workflow.launch_viewer()
+
+    assert executor.started == []
+    assert workflow.current_module.code_exe is None
+
+
+def test_command_output_query_is_exact_non_destructive_and_requires_active_workflow(
+    tmp_path,
+) -> None:
+    executor = _FakeExecutor()
+    context = ViewerExecutionContext("AnatQC", "rater1", "SUB001", 0)
+    event = CommandOutputEvent(
+        sequence=4,
+        timestamp=datetime.now().astimezone(),
+        execution_id="C001",
+        kind="stdout",
+        text="same retained event",
+        context=context,
+    )
+    batch = CommandOutputBatch(
+        events=(event,),
+        next_sequence=4,
+        truncated=False,
+        status=CommandOutputStatus(
+            session_id="fake-session",
+            file_logging_enabled=False,
+            session_log_path=None,
+        ),
+    )
+    executor.output_batch = batch
+    workflow = _workflow(tmp_path, executor=executor)
+
+    first = workflow.command_output_since(3)
+    second = workflow.command_output_since(3)
+
+    assert first is batch
+    assert second is batch
+    assert first.events[0] is second.events[0]
+    assert executor.output_queries == [3, 3]
+
+    workflow.close()
+    with pytest.raises(QcSessionError, match="closed"):
+        workflow.command_output_since(3)
+    assert executor.output_queries == [3, 3]
+
+
+def test_real_subprocess_output_crosses_workflow_with_qc_context_and_log(
+    tmp_path,
+) -> None:
+    script = (
+        "import sys;"
+        "print('workflow-out',flush=True);"
+        "print('workflow-err',file=sys.stderr,flush=True)"
+    )
+    module = _module()
+    module["code"] = subprocess.list2cmdline([sys.executable, "-c", script])
+    module["control"] = False
+    journal = CommandOutputJournal(log_root=tmp_path / "viewer-logs")
+    executor = CodeExecutor(command_output_journal=journal)
+    workflow = _workflow(tmp_path, module=module, executor=executor)
+
+    try:
+        processes = workflow.launch_viewer()
+        first = workflow.command_output_since(0)
+        second = workflow.command_output_since(0)
+
+        assert len(processes) == 1
+        assert {event.kind for event in first.events} >= {
+            "start",
+            "command",
+            "stdout",
+            "stderr",
+            "exit",
+        }
+        assert any(
+            event.kind == "stdout" and event.text == "workflow-out"
+            for event in first.events
+        )
+        assert any(
+            event.kind == "stderr" and event.text == "workflow-err"
+            for event in first.events
+        )
+        assert any(
+            event.kind == "exit" and event.returncode == 0
+            for event in first.events
+        )
+        assert {
+            event.context for event in first.events
+        } == {ViewerExecutionContext("AnatQC", "rater1", "SUB001", 0)}
+        assert first.events == second.events
+        assert all(
+            left is right for left, right in zip(first.events, second.events)
+        )
+
+        log_path = first.status.session_log_path
+        assert log_path is not None
+        log_text = log_path.read_text(encoding="utf-8")
+        assert "module=AnatQC rater=rater1 easyqcid=SUB001 index=0" in log_text
+        assert "workflow-out" in log_text
+        assert "workflow-err" in log_text
+        assert "EXIT    code=0" in log_text
+    finally:
+        workflow.close()
+        journal.close()
 
 
 def test_viewer_plan_rejects_project_constant_row_column_collision(tmp_path) -> None:
@@ -156,16 +356,36 @@ def test_viewer_plan_rejects_project_constant_row_column_collision(tmp_path) -> 
 
 def test_partial_viewer_launch_failure_cleans_started_processes(tmp_path) -> None:
     executor = _FakeExecutor()
+    module_source = _module()
+    subjects_source = _subjects()
+    original_module_source = deepcopy(module_source)
+    original_subjects_source = subjects_source.copy(deep=True)
 
     def fail_start(*_args, **_kwargs):
         raise OSError("second viewer failed")
 
     executor.start_commands = fail_start
-    workflow = _workflow(tmp_path, executor=executor)
+    workflow = QcWorkflowService(
+        module_source,
+        subjects_source,
+        rating_dir=tmp_path / "RatingFiles" / "AnatQC" / "rater1",
+        constants={"project": "synthetic"},
+        code_executor=executor,
+    )
+    workflow.set_notes("unsaved draft must survive")
+    before_module = workflow.current_module
+    before_index = workflow.current_index
+    before_dirty = workflow.dirty
 
     with pytest.raises(OSError, match="second viewer failed"):
         workflow.launch_viewer()
     assert executor.close_calls == 1
+    assert workflow.current_module == before_module
+    assert workflow.current_index == before_index
+    assert workflow.dirty is before_dirty
+    assert not (tmp_path / "RatingFiles").exists()
+    assert module_source == original_module_source
+    pd.testing.assert_frame_equal(subjects_source, original_subjects_source)
 
 
 def test_watch_mode_without_rater_rejects_edits_and_writes_nothing(tmp_path) -> None:
