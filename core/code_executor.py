@@ -11,6 +11,12 @@ import tempfile
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from core.command_output import (
+    CommandOutputBatch,
+    CommandOutputEvent,
+    CommandOutputJournal,
+    ViewerExecutionContext,
+)
 from utils.logger import log_error
 
 
@@ -28,6 +34,12 @@ _VIEWER_ERROR_READ_BYTES = 8192
 _FROZEN_QT_ENVIRONMENT_KEYS = (
     "QT_PLUGIN_PATH",
     "QML2_IMPORT_PATH",
+)
+_GENERIC_OUTPUT_CONTEXT = ViewerExecutionContext(
+    module_name="EasyQC",
+    rater="",
+    easyqcid="",
+    command_index=0,
 )
 
 
@@ -78,6 +90,7 @@ class CodeExecutor:
         shell_enabled: bool = False,
         timeout: float = 300,
         system: str | None = None,
+        command_output_journal: CommandOutputJournal | None = None,
     ) -> None:
         if not isinstance(shell_enabled, bool):
             raise TypeError("shell_enabled must be a Boolean")
@@ -85,10 +98,21 @@ class CodeExecutor:
         self.timeout = timeout
         self.system = system or platform.system()
         self.current_processes: list[subprocess.Popen] = []
+        self._command_output_journal = command_output_journal
         self._pending_temp_files: list[Path] = []
         self._process_temp_files: dict[int, list[Path]] = {}
-        self._process_stderr_files: dict[int, Path] = {}
+        self._process_execution_ids: dict[int, str] = {}
+        self._process_shell_modes: dict[int, bool] = {}
+        self._finalized_process_ids: set[int] = set()
+        self._process_stderr_paths: dict[int, Path] = {}
         self._process_labels: dict[int, str] = {}
+
+    def _output_journal(self) -> CommandOutputJournal:
+        """Return the one command-output journal owned by this executor."""
+
+        if self._command_output_journal is None:
+            self._command_output_journal = CommandOutputJournal()
+        return self._command_output_journal
 
     def set_shell_enabled(self, enabled: bool) -> None:
         """Select direct or Shell execution for future commands."""
@@ -323,11 +347,12 @@ class CodeExecutor:
     def _cleanup_process_temp_files(self, process: subprocess.Popen) -> None:
         self._cleanup_temp_files(self._process_temp_files.pop(process.pid, []))
 
-    def _cleanup_process_diagnostics(self, process: subprocess.Popen) -> None:
-        stderr_path = self._process_stderr_files.pop(process.pid, None)
+    def _cleanup_process_identity(self, process: subprocess.Popen) -> None:
+        self._process_execution_ids.pop(process.pid, None)
+        self._process_shell_modes.pop(process.pid, None)
+        self._finalized_process_ids.discard(process.pid)
+        self._process_stderr_paths.pop(process.pid, None)
         self._process_labels.pop(process.pid, None)
-        if stderr_path is not None:
-            self._cleanup_temp_files([stderr_path])
 
     @staticmethod
     def _read_bounded_stderr(stderr_path: Path) -> str:
@@ -362,7 +387,7 @@ class CodeExecutor:
         command_label: str,
         returncode: int,
     ) -> str:
-        stderr_path = self._process_stderr_files.get(process.pid)
+        stderr_path = self._process_stderr_paths.get(process.pid)
         detail = (
             self._read_bounded_stderr(stderr_path)
             if stderr_path is not None
@@ -371,12 +396,45 @@ class CodeExecutor:
         message = f"查看器启动后立即退出: {command_label} (exit={returncode})"
         return f"{message}: {detail}" if detail else message
 
+    def _finalize_process_output(
+        self,
+        process: subprocess.Popen,
+        returncode: int,
+    ) -> tuple[CommandOutputEvent, ...]:
+        execution_id = self._process_execution_ids.get(process.pid)
+        if execution_id is None or process.pid in self._finalized_process_ids:
+            return ()
+        journal = self._output_journal()
+        events = journal.finalize(execution_id, returncode)
+        self._finalized_process_ids.add(process.pid)
+        return events
+
     def _forget_process(self, process: subprocess.Popen) -> None:
+        if (
+            process.pid in self._process_execution_ids
+            and process.pid not in self._finalized_process_ids
+        ):
+            raise RuntimeError(
+                "viewer command output must be finalized before process cleanup"
+            )
         self.current_processes = [
             current for current in self.current_processes if current is not process
         ]
         self._cleanup_process_temp_files(process)
-        self._cleanup_process_diagnostics(process)
+        self._cleanup_process_identity(process)
+
+    def _render_command_for_output(
+        self,
+        command: str | Sequence[str],
+    ) -> str:
+        """Render a sequence command for display without changing execution."""
+
+        if isinstance(command, str):
+            return command
+        parts = [str(part) for part in command]
+        if self.system == "Windows":
+            return subprocess.list2cmdline(parts)
+        return shlex.join(parts)
 
     def run_command(
         self,
@@ -420,6 +478,7 @@ class CodeExecutor:
         self,
         command: str | Sequence[str],
         cwd: str | os.PathLike[str] | None = None,
+        output_context: ViewerExecutionContext | None = None,
     ) -> subprocess.Popen:
         shell_enabled = self.shell_enabled
         args = self._command_for_subprocess(
@@ -429,19 +488,21 @@ class CodeExecutor:
         command_label = self._command_label(args)
         temp_files = self._consume_pending_temp_files()
         child_environment = build_external_process_environment(system=self.system)
-        stderr_file = tempfile.NamedTemporaryFile(
-            mode="w+b",
-            prefix="easyqc_viewer_",
-            suffix=".stderr",
-            delete=False,
-        )
-        stderr_path = Path(stderr_file.name)
+        journal = self._output_journal()
+        try:
+            capture = journal.begin_execution(
+                output_context or _GENERIC_OUTPUT_CONTEXT,
+                self._render_command_for_output(command),
+            )
+        except Exception:
+            self._cleanup_temp_files(temp_files)
+            raise
         popen_kwargs: dict[str, Any] = {
             "cwd": cwd,
             "env": child_environment,
             "shell": shell_enabled,
-            "stdout": subprocess.DEVNULL,
-            "stderr": stderr_file,
+            "stdout": capture.stdout_handle,
+            "stderr": capture.stderr_handle,
         }
 
         if self.system == "Windows":
@@ -452,8 +513,7 @@ class CodeExecutor:
         try:
             process = subprocess.Popen(args, **popen_kwargs)
         except OSError as exc:
-            stderr_file.close()
-            self._cleanup_temp_files([stderr_path])
+            capture.close_parent_handles()
             self._cleanup_temp_files(temp_files)
             log_error(
                 f"viewer 启动失败: {command_label}: {exc}",
@@ -464,18 +524,21 @@ class CodeExecutor:
                 f"命令启动失败: {command_label}: {exc}"
             ) from exc
         except Exception:
-            stderr_file.close()
-            self._cleanup_temp_files([stderr_path])
+            capture.close_parent_handles()
             self._cleanup_temp_files(temp_files)
             raise
-        finally:
-            if not stderr_file.closed:
-                stderr_file.close()
         self.current_processes.append(process)
-        self._process_stderr_files[process.pid] = stderr_path
+        self._process_execution_ids[process.pid] = capture.execution_id
+        self._process_shell_modes[process.pid] = shell_enabled
+        self._process_stderr_paths[process.pid] = capture.stderr_path
         self._process_labels[process.pid] = command_label
         if temp_files:
             self._process_temp_files[process.pid] = temp_files
+        try:
+            journal.mark_started(capture.execution_id, process.pid)
+        except Exception:
+            capture.close_parent_handles()
+            raise
 
         try:
             returncode = process.wait(timeout=_VIEWER_STARTUP_TIMEOUT)
@@ -483,6 +546,7 @@ class CodeExecutor:
             return process
 
         if returncode != 0:
+            self._finalize_process_output(process, returncode)
             message = self._startup_failure_message(
                 process,
                 command_label,
@@ -502,58 +566,132 @@ class CodeExecutor:
         commands: Mapping[Any, str | Sequence[str]],
         control: bool = False,
         cwd: str | os.PathLike[str] | None = None,
+        output_contexts: Mapping[Any, ViewerExecutionContext] | None = None,
     ) -> list[subprocess.Popen]:
+        if output_contexts is not None:
+            missing_contexts = [
+                key for key in commands if key not in output_contexts
+            ]
+            if missing_contexts:
+                raise CodeExecutorError(
+                    "命令输出上下文缺少命令键: "
+                    f"{missing_contexts!r}"
+                )
+            invalid_contexts = [
+                key
+                for key in commands
+                if not isinstance(
+                    output_contexts[key],
+                    ViewerExecutionContext,
+                )
+            ]
+            if invalid_contexts:
+                raise CodeExecutorError(
+                    "命令输出上下文类型无效，命令键: "
+                    f"{invalid_contexts!r}"
+                )
         if control:
             self.close_current_processes()
 
         processes = []
-        for _, command in commands.items():
-            processes.append(self.start_command(command, cwd=cwd))
+        for key, command in commands.items():
+            context = (
+                output_contexts[key]
+                if output_contexts is not None
+                else None
+            )
+            processes.append(
+                self.start_command(
+                    command,
+                    cwd=cwd,
+                    output_context=context,
+                )
+            )
         return processes
+
+    def command_output_since(self, after_sequence: int) -> CommandOutputBatch:
+        """Poll bounded output and return a non-destructive sequence view."""
+
+        journal = self._output_journal()
+        journal.poll()
+        for process in tuple(self.current_processes):
+            returncode = process.poll()
+            if returncode is None:
+                continue
+            if (
+                self._process_shell_modes.get(process.pid, False)
+                and returncode == 0
+            ):
+                continue
+            self._finalize_process_output(process, returncode)
+            self._forget_process(process)
+        return journal.events_since(after_sequence)
 
     def close_current_processes(self, timeout: float = 5) -> None:
         remaining: list[subprocess.Popen] = []
 
         for process in self.current_processes:
-            if process.poll() is not None:
-                if process.returncode not in (None, 0):
-                    command_label = self._process_labels.get(
-                        process.pid,
-                        "<viewer>",
-                    )
-                    log_error(
-                        self._startup_failure_message(
-                            process,
-                            command_label,
-                            process.returncode,
-                        ),
-                        "CodeExecutor",
-                        show_popup=False,
-                    )
-                self._cleanup_process_temp_files(process)
-                self._cleanup_process_diagnostics(process)
-                continue
-
             try:
+                returncode = process.poll()
+                if returncode is not None:
+                    self._finalize_process_output(process, returncode)
+                    if returncode != 0:
+                        command_label = self._process_labels.get(
+                            process.pid,
+                            "<viewer>",
+                        )
+                        log_error(
+                            self._startup_failure_message(
+                                process,
+                                command_label,
+                                returncode,
+                            ),
+                            "CodeExecutor",
+                            show_popup=False,
+                        )
+                    self._forget_process(process)
+                    continue
+
                 if self.system == "Windows":
                     process.terminate()
                 else:
                     os.killpg(os.getpgid(process.pid), signal.SIGTERM)
 
                 try:
-                    process.wait(timeout=timeout)
+                    returncode = process.wait(timeout=timeout)
                 except subprocess.TimeoutExpired:
                     if self.system == "Windows":
                         process.kill()
                     else:
                         os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                    process.wait()
-                self._cleanup_process_temp_files(process)
-                self._cleanup_process_diagnostics(process)
-            except ProcessLookupError:
-                self._cleanup_process_temp_files(process)
-                self._cleanup_process_diagnostics(process)
-                continue
+                    returncode = process.wait()
+                if returncode is None:
+                    returncode = process.returncode
+                if returncode is None:
+                    raise RuntimeError(
+                        "viewer process ended without an observable return code"
+                    )
+                self._finalize_process_output(process, returncode)
+                self._forget_process(process)
+            except ProcessLookupError as exc:
+                try:
+                    returncode = process.poll()
+                    if returncode is None:
+                        raise RuntimeError(
+                            "viewer process disappeared before its return code "
+                            f"became observable: {exc}"
+                        ) from exc
+                    self._finalize_process_output(process, returncode)
+                    self._forget_process(process)
+                except Exception as recovery_exc:
+                    log_error(
+                        "viewer 进程清理失败 "
+                        f"(PID {getattr(process, 'pid', '?')}): "
+                        f"{recovery_exc}",
+                        "CodeExecutor",
+                        show_popup=False,
+                    )
+                    remaining.append(process)
             except Exception as exc:
                 log_error(
                     f"viewer 进程清理失败 (PID {getattr(process, 'pid', '?')}): "
