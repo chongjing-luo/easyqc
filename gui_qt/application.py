@@ -91,18 +91,21 @@ def run_qt_application(
             language=language,
         )
     except Exception as exc:
-        startup.close()
-        startup.deleteLater()
-        QCoreApplication.sendPostedEvents(
-            startup,
-            QEvent.Type.DeferredDelete,
-        )
-        QMessageBox.critical(
-            None,
-            language.translate_source("启动失败"),
-            str(exc),
-        )
-        app.processEvents()
+        try:
+            startup.close()
+            startup.deleteLater()
+            QCoreApplication.sendPostedEvents(
+                startup,
+                QEvent.Type.DeferredDelete,
+            )
+            QMessageBox.critical(
+                None,
+                language.translate_source("启动失败"),
+                str(exc),
+            )
+            app.processEvents()
+        finally:
+            services.code_executor.close()
         return 1
     main_presented = False
 
@@ -132,11 +135,14 @@ def run_qt_application(
     try:
         return int(app.exec())
     finally:
-        window.close()
-        window.deleteLater()
-        startup.close()
-        startup.deleteLater()
-        app.processEvents()
+        try:
+            window.close()
+            window.deleteLater()
+            startup.close()
+            startup.deleteLater()
+            app.processEvents()
+        finally:
+            services.code_executor.close()
 
 
 def launch_qt(
@@ -185,11 +191,14 @@ def run_qt_qc(
     try:
         return int(app.exec())
     finally:
-        if isValid(window) and window.isVisible():
-            window.close_discarding_draft()
-        if isValid(window):
-            window.deleteLater()
-        app.processEvents()
+        try:
+            if isValid(window) and window.isVisible():
+                window.close_discarding_draft()
+            if isValid(window):
+                window.deleteLater()
+            app.processEvents()
+        finally:
+            services.code_executor.close()
 
 
 def launch_qt_qc(

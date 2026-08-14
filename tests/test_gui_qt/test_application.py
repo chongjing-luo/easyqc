@@ -25,6 +25,15 @@ from gui_qt.i18n import LanguageController
 from gui_qt.startup_screen import QtStartupScreen
 
 
+def _application_services(events=None):
+    recorded = [] if events is None else events
+    return SimpleNamespace(
+        code_executor=SimpleNamespace(
+            close=lambda: recorded.append("executor.close")
+        )
+    )
+
+
 def test_get_or_create_qapplication_reuses_instance_without_overriding_host_theme(qapp):
     original_stylesheet = qapp.styleSheet()
     original_font = QFont(qapp.font())
@@ -178,6 +187,121 @@ def test_direct_qt_qc_uses_cli_rater_and_exits_cleanly(
     ).exists()
 
 
+def test_direct_qt_qc_closes_window_workflow_before_executor(
+    monkeypatch,
+) -> None:
+    events = []
+
+    class FakeApplication:
+        @staticmethod
+        def exec():
+            events.append("app.exec")
+            return 0
+
+        @staticmethod
+        def processEvents():
+            events.append("app.process")
+
+    class FakeWorkflow:
+        def close(self):
+            events.append("workflow.close")
+
+    workflow = FakeWorkflow()
+
+    class FakeProjectContextService:
+        @staticmethod
+        def load_project(project):
+            events.append(f"project.load:{project}")
+            return object()
+
+        @staticmethod
+        def create_qc_workflow(
+            _snapshot,
+            *,
+            module_name,
+            rater_override,
+            initial_easyqcid,
+        ):
+            events.append(
+                "workflow.create:"
+                f"{module_name}:{rater_override}:{initial_easyqcid}"
+            )
+            return workflow
+
+    class FakeWindow:
+        def __init__(self, current_workflow, *, language=None):
+            assert current_workflow is workflow
+            self.current_workflow = current_workflow
+
+        @staticmethod
+        def show():
+            events.append("window.show")
+
+        @staticmethod
+        def raise_():
+            events.append("window.raise")
+
+        @staticmethod
+        def activateWindow():
+            events.append("window.activate")
+
+        @staticmethod
+        def isVisible():
+            return True
+
+        def close_discarding_draft(self):
+            events.append("window.close")
+            self.current_workflow.close()
+            return True
+
+        @staticmethod
+        def deleteLater():
+            events.append("window.delete")
+
+    services = SimpleNamespace(
+        project_context_service=FakeProjectContextService(),
+        code_executor=SimpleNamespace(
+            close=lambda: events.append("executor.close")
+        ),
+    )
+    monkeypatch.setattr(
+        application_module,
+        "get_or_create_qapplication",
+        lambda _argv=None: FakeApplication(),
+    )
+    monkeypatch.setattr(
+        application_module,
+        "get_or_create_language_controller",
+        lambda _app=None: object(),
+    )
+    monkeypatch.setattr(application_module, "QtQcControllerWindow", FakeWindow)
+    monkeypatch.setattr(application_module, "isValid", lambda _window: True)
+    monkeypatch.setattr(
+        application_module,
+        "get_logging_status",
+        lambda: SimpleNamespace(warning_message=None),
+    )
+    monkeypatch.setattr(
+        application_module,
+        "schedule_qt_startup_warning",
+        lambda *_args: None,
+    )
+
+    result = application_module.run_qt_qc(
+        ["easyqc-test"],
+        services,
+        project="SAMPLE",
+        module="example",
+        rater="rater1",
+        easyqcid="SUB001",
+    )
+
+    assert result == 0
+    assert events.index("window.close") < events.index("workflow.close")
+    assert events.index("workflow.close") < events.index("executor.close")
+    assert events.count("executor.close") == 1
+
+
 def test_empty_preview_explains_that_no_project_table_is_connected(qtbot, tmp_path):
     services = build_app_services(tmp_path / "projects.json")
     window = build_table_window(
@@ -314,7 +438,7 @@ def test_qt_event_loop_consumes_current_logging_status_once(monkeypatch):
     assert (
         application_module.run_qt_application(
             ["easyqc-test"],
-            object(),
+            _application_services(),
             startup_minimum_ms=0,
         )
         == 0
@@ -372,6 +496,7 @@ def test_qt_event_loop_shows_startup_before_constructing_and_showing_main(
 
     fake_app = FakeApplication()
     fake_language = object()
+    services = _application_services(events)
     monkeypatch.setattr(
         application_module,
         "get_or_create_qapplication",
@@ -404,7 +529,7 @@ def test_qt_event_loop_shows_startup_before_constructing_and_showing_main(
     assert (
         application_module.run_qt_application(
             ["easyqc-test"],
-            object(),
+            services,
             pd.DataFrame({"easyqcid": ["A"]}),
             startup_minimum_ms=0,
         )
@@ -413,6 +538,8 @@ def test_qt_event_loop_shows_startup_before_constructing_and_showing_main(
     assert events.index("startup.show") < events.index("window.init")
     assert events.index("window.init") < events.index("window.show")
     assert events.index("window.show") < events.index("startup.close")
+    assert events.index("window.close") < events.index("executor.close")
+    assert events.count("executor.close") == 1
 
 
 def test_qt_event_loop_closes_startup_and_shows_main_error_after_initialization_failure(
@@ -514,7 +641,7 @@ def test_qt_event_loop_closes_startup_and_shows_main_error_after_initialization_
     assert (
         application_module.run_qt_application(
             ["easyqc-test"],
-            object(),
+            _application_services(),
             startup_minimum_ms=0,
         )
         == 0
@@ -562,6 +689,7 @@ def test_synchronous_main_window_construction_failure_closes_startup_and_is_visi
         language="en",
     )
     fake_app = FakeApplication()
+    services = _application_services(events)
     monkeypatch.setattr(
         application_module,
         "get_or_create_qapplication",
@@ -593,13 +721,15 @@ def test_synchronous_main_window_construction_failure_closes_startup_and_is_visi
     assert (
         application_module.run_qt_application(
             ["easyqc-test"],
-            object(),
+            services,
             startup_minimum_ms=0,
         )
         == 1
     )
     assert events.index("startup.show") < events.index("startup.close")
     assert events.index("startup.close") < events.index("startup.delete")
+    assert events.index("startup.delete") < events.index("executor.close")
+    assert events.count("executor.close") == 1
     assert shown == [
         (
             None,
@@ -660,7 +790,7 @@ def test_synchronous_construction_failure_delivers_startup_deferred_delete(
     assert (
         application_module.run_qt_application(
             ["easyqc-test"],
-            object(),
+            _application_services(),
             startup_minimum_ms=0,
         )
         == 1

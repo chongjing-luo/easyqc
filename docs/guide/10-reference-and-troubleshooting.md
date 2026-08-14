@@ -176,22 +176,31 @@ stderr 摘要，而不是在模块中长期手工拼接 EasyQC 的 `_internal` �
 
 ## 14. 日志在哪里
 
-若设置绝对环境变量 `EASYQC_LOG_DIR`，日志写到该目录；否则使用 platformdirs 选择当前用户日志目录。当天文件名是：
+若设置绝对环境变量 `EASYQC_LOG_DIR`，日志写到该目录；否则使用 platformdirs 选择当前用户日志目录。EasyQC 在其中维护两类用途不同的日志：
 
 ```text
 easyqc_YYYYMMDD.log
+viewer-commands/viewer_commands_YYYYMMDD_HHMMSS_<pid>.log
 ```
 
-文件日志失败时控制台仍保留日志，GUI 启动后显示一次退化警告。排查报告应包含：
+`easyqc_YYYYMMDD.log` 是按日期记录应用事件、异常和 traceback 的日常应用日志。`viewer-commands/...` 是一次 EasyQC 应用会话内全部查看器命令的时间线，包含 `START`、`CMD`、`OUT`、`ERR`、`EXIT` 和 `WARN` 记录，并保留 14 天。质控窗口底部的命令输出面板适合即时观察；需要完整诊断时，应使用“打开日志”查看本次会话的查看器日志，因为界面仅保留最新 5,000 行。
+
+查看器日志持久化失败时，当前运行的输出采集和面板内存显示仍可能继续，但“打开日志”不可用，也不能保证重启后仍有完整记录。日常应用文件日志失败时，控制台仍保留日志，GUI 启动后显示一次退化警告。外部程序还可能缓冲 stdout/stderr；EasyQC 只能采集程序已经写出的内容，不能强制其及时 flush，因此输出可能延迟到稍后或进程退出时出现。
+
+日志可能包含模块名、rater、`easyqcid`、本地或网络路径、实际命令以及外部程序输出。向他人提交排查材料前应逐项检查并脱敏，不要只删除一处路径后就假定日志不含隐私信息。
+
+排查报告应包含：
 
 - 操作系统和 Python 版本；
 - EasyQC commit；
 - 完整错误和 traceback；
 - 去除隐私数据后的相关日志；
 - 最小复现步骤；
-- 是否使用 `shell=True`、网络盘或外部查看器。
+- 是否使用 `shell=True`、网络盘或外部查看器；
 - 原生冻结包出现外部查看器问题时，`command -v <viewer>`、相关应用环境变量
   名称（敏感值可脱敏）以及界面显示的退出码/stderr 摘要。
+
+源代码测试和候选包检查不能替代目标机器验证。除非已经保存相应原生证据，不应据此宣称 Windows、macOS、HCP 环境或某个外部查看器已验证成功；冻结版重建以及 Linux/HCP 原生 smoke test 属于后续发布验证。
 
 ## 15. 项目备份与恢复
 

@@ -98,6 +98,7 @@ class CodeExecutor:
         self.timeout = timeout
         self.system = system or platform.system()
         self.current_processes: list[subprocess.Popen] = []
+        self._closed = False
         self._command_output_journal = command_output_journal
         self._pending_temp_files: list[Path] = []
         self._process_temp_files: dict[int, list[Path]] = {}
@@ -113,6 +114,10 @@ class CodeExecutor:
         if self._command_output_journal is None:
             self._command_output_journal = CommandOutputJournal()
         return self._command_output_journal
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise CodeExecutorError("CodeExecutor is closed")
 
     def set_shell_enabled(self, enabled: bool) -> None:
         """Select direct or Shell execution for future commands."""
@@ -480,6 +485,7 @@ class CodeExecutor:
         cwd: str | os.PathLike[str] | None = None,
         output_context: ViewerExecutionContext | None = None,
     ) -> subprocess.Popen:
+        self._require_open()
         shell_enabled = self.shell_enabled
         args = self._command_for_subprocess(
             command,
@@ -568,6 +574,7 @@ class CodeExecutor:
         cwd: str | os.PathLike[str] | None = None,
         output_contexts: Mapping[Any, ViewerExecutionContext] | None = None,
     ) -> list[subprocess.Popen]:
+        self._require_open()
         if output_contexts is not None:
             missing_contexts = [
                 key for key in commands if key not in output_contexts
@@ -612,6 +619,7 @@ class CodeExecutor:
     def command_output_since(self, after_sequence: int) -> CommandOutputBatch:
         """Poll bounded output and return a non-destructive sequence view."""
 
+        self._require_open()
         journal = self._output_journal()
         journal.poll()
         for process in tuple(self.current_processes):
@@ -702,6 +710,25 @@ class CodeExecutor:
                 remaining.append(process)
 
         self.current_processes = remaining
+
+    def close(self) -> None:
+        """Finalize managed viewers, then close the application journal once."""
+
+        if self._closed:
+            return
+        self.close_current_processes()
+        if self.current_processes:
+            process_ids = [
+                getattr(process, "pid", "?")
+                for process in self.current_processes
+            ]
+            raise CodeExecutorError(
+                "viewer process cleanup is incomplete for PID(s): "
+                f"{process_ids!r}"
+            )
+        if self._command_output_journal is not None:
+            self._command_output_journal.close()
+        self._closed = True
 
 
 def validate_template_columns(code: str, available_columns: set[str]) -> list[str]:

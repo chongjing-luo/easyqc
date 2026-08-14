@@ -1138,3 +1138,159 @@ def test_close_current_processes_finalizes_before_forgetting_every_exit_path(
     assert executor.current_processes == []
     assert executor._process_execution_ids == {}
     journal.close()
+
+
+def test_executor_close_finalizes_forgets_then_closes_journal_once(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    class ClosingJournal(_RecordingJournal):
+        def close(self):
+            self.lifecycle.append(("journal.close", None))
+            return super().close()
+
+    class CompletedAfterStartup:
+        pid = 6401
+        returncode = 0
+
+        @staticmethod
+        def wait(timeout):
+            raise subprocess.TimeoutExpired("viewer", timeout)
+
+        @classmethod
+        def poll(cls):
+            return cls.returncode
+
+    journal = ClosingJournal(log_root=tmp_path)
+    process = CompletedAfterStartup()
+    monkeypatch.setattr(
+        "core.code_executor.subprocess.Popen",
+        lambda *_args, **_kwargs: process,
+    )
+    executor = CodeExecutor(
+        system="Linux",
+        command_output_journal=journal,
+    )
+    executor.start_command("viewer complete")
+    original_forget = executor._forget_process
+
+    def recording_forget(current):
+        journal.lifecycle.append(("forget", current.pid))
+        return original_forget(current)
+
+    monkeypatch.setattr(executor, "_forget_process", recording_forget)
+
+    executor.close()
+    executor.close()
+
+    actions = [name for name, _value in journal.lifecycle]
+    assert actions.index("finalize") < actions.index("forget")
+    assert actions.index("forget") < actions.index("journal.close")
+    assert actions.count("finalize") == 1
+    assert actions.count("forget") == 1
+    assert actions.count("journal.close") == 1
+    assert executor.current_processes == []
+
+
+def test_executor_close_unused_does_not_lazily_create_journal(
+    monkeypatch,
+) -> None:
+    created = []
+    monkeypatch.setattr(
+        "core.code_executor.CommandOutputJournal",
+        lambda: created.append("journal") or (_ for _ in ()).throw(
+            AssertionError("unused close must not create a journal")
+        ),
+    )
+    executor = CodeExecutor()
+
+    executor.close()
+    executor.close()
+
+    assert created == []
+    assert executor._command_output_journal is None
+
+
+def test_closed_executor_rejects_launch_and_query_before_side_effects(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    journal = _RecordingJournal(log_root=tmp_path)
+    executor = CodeExecutor(
+        system="Linux",
+        command_output_journal=journal,
+    )
+    subprocess_calls = []
+    poll_calls = []
+    monkeypatch.setattr(
+        "core.code_executor.subprocess.Popen",
+        lambda *_args, **_kwargs: subprocess_calls.append("popen"),
+    )
+    monkeypatch.setattr(
+        journal,
+        "poll",
+        lambda: poll_calls.append("poll"),
+    )
+    executor.close()
+
+    with pytest.raises(CodeExecutorError, match="closed"):
+        executor.start_command(
+            "TMP=$(mktemp /tmp/mgl.XXXXXX); "
+            'TMP="$TMP.py"; '
+            "printf 'print(1)\\n' > \"$TMP\"; "
+            '/opt/MRIcroGL/MRIcroGL "$TMP"; '
+            'rm -f "$TMP"'
+        )
+    with pytest.raises(CodeExecutorError, match="closed"):
+        executor.start_commands(
+            {0: "viewer first"},
+            control=True,
+        )
+    with pytest.raises(CodeExecutorError, match="closed"):
+        executor.command_output_since(0)
+
+    assert subprocess_calls == []
+    assert poll_calls == []
+    assert executor._pending_temp_files == []
+    assert executor.render_command_plan(
+        "viewer ${image}",
+        {"image": "scan.nii.gz"},
+    ) == ("viewer scan.nii.gz", {0: "viewer scan.nii.gz"})
+
+
+def test_executor_close_keeps_journal_open_when_process_cleanup_is_incomplete(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    class ClosingJournal(_RecordingJournal):
+        def close(self):
+            self.lifecycle.append(("journal.close", None))
+            return super().close()
+
+    class UncleanableProcess:
+        pid = 6402
+
+        @staticmethod
+        def poll():
+            return None
+
+    process = UncleanableProcess()
+    journal = ClosingJournal(log_root=tmp_path)
+    executor = CodeExecutor(
+        system="Linux",
+        command_output_journal=journal,
+    )
+    executor.current_processes = [process]
+    monkeypatch.setattr("core.code_executor.os.getpgid", lambda _pid: process.pid)
+    monkeypatch.setattr(
+        "core.code_executor.os.killpg",
+        lambda *_args: (_ for _ in ()).throw(PermissionError("denied")),
+    )
+
+    with pytest.raises(CodeExecutorError, match="6402"):
+        executor.close()
+
+    assert executor.current_processes == [process]
+    assert not any(
+        action == "journal.close" for action, _value in journal.lifecycle
+    )
