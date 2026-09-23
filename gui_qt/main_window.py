@@ -12,6 +12,7 @@ from PySide6.QtCore import QSettings, QSize, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QCloseEvent, QFont, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -41,6 +42,7 @@ from core.project_context_service import (
 from core.qc_workflow_service import QcWorkflowService
 from core.table_view_service import TableViewService
 from gui_qt.cross_project_settings_page import QtCrossProjectSettingsPage
+from gui_qt.command_output_panel import QtCommandOutputPanel
 from gui_qt.filter_dialog import FilterDialog
 from gui_qt.i18n import (
     LanguageController,
@@ -85,6 +87,7 @@ class _QcFilterTransaction:
     expression: FilterExpression | None = None
     identities: tuple[str, ...] = ()
     candidate_controller: QtQcControllerWindow | None = None
+    launch_viewer: bool = False
 
 
 class QtMainWindow(QMainWindow):
@@ -92,7 +95,6 @@ class QtMainWindow(QMainWindow):
 
     initializationFinished = Signal(bool)
     NAVIGATION_KEYS = (
-        "nav.cross_project",
         "nav.projects",
         "nav.import",
         "nav.pre_qc",
@@ -101,8 +103,7 @@ class QtMainWindow(QMainWindow):
         "nav.results",
     )
     NAVIGATION_LABELS = (
-        "跨项目设置",
-        "项目选择",
+        "项目管理",
         "质控名单导入",
         "质控前名单",
         "常量设置",
@@ -138,6 +139,13 @@ class QtMainWindow(QMainWindow):
         self._context_revision = 0
         self._pending_context: tuple[int, str, bool] | None = None
         self._event_subscriptions: list[tuple[EventType, object]] = []
+        self.association_dialog = None
+        self.command_output_window = None
+        self.row_command_controller = RevisionedTaskController(self)
+        self.row_command_controller.resultReady.connect(self._row_command_finished)
+        self.row_command_controller.errorRaised.connect(self._row_command_failed)
+        self.row_command_controller.busyChanged.connect(lambda _busy: self._update_context_controls())
+        self._row_command_revision = 0
         self.context_task_controller = RevisionedTaskController(self)
         self.context_task_controller.resultReady.connect(self._handle_context_result)
         self.context_task_controller.errorRaised.connect(self._handle_context_error)
@@ -298,16 +306,16 @@ class QtMainWindow(QMainWindow):
         for row in range(self.navigation.count()):
             self._set_navigation_item_height(row, line_count=1)
         self.navigation_layout.addWidget(self.navigation, 1)
-        self.language_bar = QWidget(self.navigation_panel)
-        self.language_bar.setObjectName("languageBar")
-        language_layout = QVBoxLayout(self.language_bar)
-        language_layout.setContentsMargins(0, 12, 0, 0)
-        language_layout.setSpacing(CONTROL_SPACING)
-        self.language_button = QPushButton("English", self.language_bar)
-        self.language_button.setObjectName("languageToggle")
-        self.language_button.clicked.connect(self._toggle_language)
-        language_layout.addWidget(self.language_button)
-        self.navigation_layout.addWidget(self.language_bar)
+        self.settings_bar = QWidget(self.navigation_panel)
+        self.settings_bar.setObjectName("settingsBar")
+        settings_layout = QVBoxLayout(self.settings_bar)
+        settings_layout.setContentsMargins(0, 12, 0, 0)
+        settings_layout.setSpacing(CONTROL_SPACING)
+        self.settings_button = QPushButton("设置", self.settings_bar)
+        self.settings_button.setObjectName("settingsButton")
+        self.settings_button.clicked.connect(self._open_cross_project_settings)
+        settings_layout.addWidget(self.settings_button)
+        self.navigation_layout.addWidget(self.settings_bar)
         self.navigation_panel.setMinimumWidth(
             self.EXPANDED_NAVIGATION_MIN_WIDTH
         )
@@ -417,7 +425,7 @@ class QtMainWindow(QMainWindow):
         table_layout = QVBoxLayout(self.pre_qc_list_page)
         table_layout.setContentsMargins(12, 12, 12, 12)
         self.shell_empty_label = QLabel(
-            "尚未打开项目，请在“项目选择”中创建或导入项目。",
+            "尚未打开项目，请在“项目管理”中创建或导入项目。",
             self.pre_qc_list_page,
         )
         self.shell_empty_label.setObjectName("shellEmptyState")
@@ -450,6 +458,10 @@ class QtMainWindow(QMainWindow):
                 if self._injected_preview
                 else self._delete_pre_qc_columns
             ),
+            rename_column_callback=(
+                None if self._injected_preview else self._rename_pre_qc_column
+            ),
+            rename_source_columns=lambda: tuple(self.current_context.subjects.columns),
             on_data_mutation_committed=(
                 None
                 if self._injected_preview
@@ -510,36 +522,41 @@ class QtMainWindow(QMainWindow):
             parent=self.workspace_stack,
         )
         self.results_workspace = self.results_page.table_workspace
+        self.association_action = QAction("结果关联", self)
+        self.results_association_action = QAction("结果关联", self)
+        for action, workspace in ((self.association_action, self.table_workspace),
+                                  (self.results_association_action, self.results_workspace)):
+            action.triggered.connect(self._open_result_associations)
+            workspace.action_toolbar.addAction(action)
         self.results_workspace.deriveBusyChanged.connect(
             lambda _busy: self._update_context_controls()
         )
 
         self.cross_project_settings_page = QtCrossProjectSettingsPage(
             self.services.template_service,
-            self.services.code_executor,
             self.language,
             self.workspace_stack,
         )
 
         self.direct_pages = (
-            self.cross_project_settings_page,
             self.project_page,
             self.qc_list_import_page,
             self.pre_qc_list_page,
             self.constants_page,
             self.modules_page,
             self.results_page,
+            self.cross_project_settings_page,
         )
         for page in self.direct_pages:
             self.workspace_stack.addWidget(page)
         (
-            self.cross_project_settings_page_index,
             self.project_page_index,
             self.qc_list_import_page_index,
             self.pre_qc_list_page_index,
             self.constants_page_index,
             self.modules_page_index,
             self.results_page_index,
+            self.cross_project_settings_page_index,
         ) = range(len(self.direct_pages))
         self.variables_page_index = self.qc_list_import_page_index
         self.subjects_page_index = self.pre_qc_list_page_index
@@ -571,9 +588,11 @@ class QtMainWindow(QMainWindow):
         return tuple(self.language.tr(key) for key in self.NAVIGATION_KEYS)
 
     @Slot()
-    def _toggle_language(self) -> None:
-        target = "en" if self.language.language == "zh_CN" else "zh_CN"
-        self.language.set_language(target)
+    def _open_cross_project_settings(self) -> None:
+        self.navigation.blockSignals(True)
+        self.navigation.setCurrentRow(-1)
+        self.navigation.blockSignals(False)
+        self.workspace_stack.setCurrentIndex(self.cross_project_settings_page_index)
 
     @Slot()
     def _toggle_navigation(self) -> None:
@@ -588,7 +607,7 @@ class QtMainWindow(QMainWindow):
             self.product_name_label,
             self.product_tagline_label,
             self.navigation,
-            self.language_bar,
+            self.settings_bar,
         ):
             widget.setVisible(visible)
         if self.navigation_collapsed:
@@ -654,18 +673,10 @@ class QtMainWindow(QMainWindow):
             else ""
         )
         self._set_project_navigation_context(project_name)
-        if self.language.language == "zh_CN":
-            self.language_button.setText("English")
-            language_description = self.language.tr(
-                "language.switch_to_english"
-            )
-        else:
-            self.language_button.setText("中文")
-            language_description = self.language.tr(
-                "language.switch_to_chinese"
-            )
-        self.language_button.setAccessibleName(language_description)
-        self.language_button.setToolTip(language_description)
+        self.settings_button.setText(self.language.tr("settings.button"))
+        settings_description = self.language.tr("settings.open_action")
+        self.settings_button.setAccessibleName(settings_description)
+        self.settings_button.setToolTip(settings_description)
         self._update_navigation_toggle_presentation()
         self.table_workspace.retranslate_ui()
         self.results_workspace.retranslate_ui()
@@ -713,6 +724,9 @@ class QtMainWindow(QMainWindow):
         self.shell_error_label.setVisible(bool(message))
 
     def _submit_context(self, operation: str, function, *, preserve_qc: bool) -> bool:
+        if self._pending_qc_filter is not None and self._pending_qc_filter.phase == "launch_viewer":
+            self._set_error("命令或项目任务正在启动，请稍候")
+            return False
         if self.context_task_controller.busy:
             self._set_error("另一项项目加载任务仍在运行")
             return False
@@ -792,10 +806,15 @@ class QtMainWindow(QMainWindow):
             message = str(exc).strip() or type(exc).__name__
             self._set_error(message)
             self.results_page.show_error(message)
+            self.config_workspace.subjects_tab.set_context_error(message)
+            if operation == "association_save" and self.association_dialog is not None:
+                self.association_dialog.set_error("关联规则已保存，但界面刷新失败：" + message)
             if initial_operation:
                 self._finish_initialization(False)
+            self.language.localize_widget_tree(self)
             return
         self._pending_context = None
+        self.config_workspace.subjects_tab.set_context_error("")
         self.shell_status_label.setText(
             "质控结果已刷新"
             if operation in {"rating_refresh", "results_refresh"}
@@ -806,6 +825,8 @@ class QtMainWindow(QMainWindow):
             )
         )
         self._set_error("")
+        if operation == "association_save" and self.association_dialog is not None:
+            self.association_dialog.complete_apply()
         if initial_operation:
             self._finish_initialization(True)
         self.language.localize_widget_tree(self)
@@ -820,6 +841,9 @@ class QtMainWindow(QMainWindow):
         message = str(error).strip() or type(error).__name__
         self._set_error(message)
         self.results_page.show_error(message)
+        self.config_workspace.subjects_tab.set_context_error(message)
+        if self.association_dialog is not None:
+            self.association_dialog.set_error(message)
         if initial_operation:
             self._finish_initialization(False)
         self.language.localize_widget_tree(self)
@@ -872,6 +896,8 @@ class QtMainWindow(QMainWindow):
                     lambda entry, revision=snapshot.context_revision: (
                         self._open_qc_row_record(entry, revision)
                     ),
+                    on_execute=lambda identity, entry, revision=snapshot.context_revision: self._execute_qc_row_module(identity, entry, revision),
+                    on_open_execute=lambda identity, entry, revision=snapshot.context_revision: self._open_execute_qc_row_module(identity, entry, revision),
                 )
             else:
                 workspace.set_row_context_actions(None, None, None)
@@ -938,7 +964,7 @@ class QtMainWindow(QMainWindow):
             self._updating_controls = False
 
     def _set_project_navigation_context(self, project_name: str) -> None:
-        """Show the active project only as secondary text on 项目选择."""
+        """Show the active project only as secondary text on 项目管理."""
 
         item = self.navigation.item(self.project_page_index)
         if item is None:
@@ -957,9 +983,9 @@ class QtMainWindow(QMainWindow):
             project_label
             if not name
             else (
-                f"项目选择，当前项目 {name}"
+                f"项目管理，当前项目 {name}"
                 if self.language.language == "zh_CN"
-                else f"Project selection, current project {name}"
+                else f"Project management, current project {name}"
             ),
         )
         self._set_navigation_item_height(
@@ -1008,6 +1034,11 @@ class QtMainWindow(QMainWindow):
             columns,
             notify=False,
         )
+
+    def _rename_pre_qc_column(self, old: str, new: str) -> int:
+        """Worker-side header-only write; module references remain user-owned."""
+
+        return self.services.configuration_service.rename_subject_column(old, new, notify=False)
 
     def _subject_data_mutation_committed(self) -> None:
         """Publish the existing subject event from the Qt thread."""
@@ -1065,6 +1096,8 @@ class QtMainWindow(QMainWindow):
         expression: FilterExpression | None = None,
         *,
         require_current_identity: bool = False,
+        rater_override: str | None = None,
+        initial_read_only: bool = False,
     ) -> tuple[str, int, tuple[str, ...], QcWorkflowService]:
         """Worker-side construction of one exact, nonempty QC workflow."""
 
@@ -1103,6 +1136,8 @@ class QtMainWindow(QMainWindow):
             module_name=module_name,
             initial_easyqcid=initial,
             navigation_ids=identities,
+            rater_override=rater_override,
+            initial_read_only=initial_read_only,
         )
         return module_name, snapshot.context_revision, identities, workflow
 
@@ -1234,6 +1269,14 @@ class QtMainWindow(QMainWindow):
             )
             return
 
+        if transaction.phase == "launch_viewer":
+            self._pending_qc_filter = None
+            transaction.source_controller.command_output_panel.timer.start()
+            transaction.source_controller.command_output_panel.clear_button.setEnabled(True)
+            transaction.source_controller.command_output_panel.refresh_output()
+            self._set_error("")
+            return
+
         if transaction.phase == "prepare_dialog":
             if not isinstance(result, tuple) or len(result) != 4:
                 self._fail_qc_filter_transaction(
@@ -1308,6 +1351,14 @@ class QtMainWindow(QMainWindow):
                     f"已启动质控：{module_name}"
                 )
                 self._set_error("")
+                if transaction.launch_viewer:
+                    transaction.phase = "launch_viewer"
+                    transaction.source_controller = candidate
+                    self._pending_qc_filter = transaction
+                    candidate.workspace.set_filter_busy(True)
+                    candidate.command_output_panel.timer.stop()
+                    candidate.command_output_panel.clear_button.setEnabled(False)
+                    self.qc_filter_task_controller.submit(revision, workflow.launch_viewer)
                 return
             transaction.phase = "persist_candidate"
             transaction.identities = identities
@@ -1377,6 +1428,11 @@ class QtMainWindow(QMainWindow):
             return
         self._pending_qc_filter = None
         self._discard_qc_filter_candidate(transaction.candidate_controller)
+        if transaction.phase == "launch_viewer" and transaction.source_controller is not None:
+            transaction.source_controller.command_output_panel.timer.start()
+            transaction.source_controller.command_output_panel.clear_button.setEnabled(True)
+            transaction.source_controller.command_output_panel.set_expanded(True)
+            transaction.source_controller.command_output_panel.refresh_output()
         message = str(error).strip() or type(error).__name__
         if transaction.dialog is not None:
             transaction.dialog.set_error(message)
@@ -1428,6 +1484,9 @@ class QtMainWindow(QMainWindow):
         module_name: str,
         *,
         initial_easyqcid: str | None = None,
+        launch_viewer: bool = False,
+        rater_override: str | None = None,
+        initial_read_only: bool = False,
     ) -> bool:
         """Install the exact requested module through the existing QC factory."""
 
@@ -1464,6 +1523,7 @@ class QtMainWindow(QMainWindow):
             source_controller=self.qc_controller,
             context_revision=snapshot.context_revision,
             module_name=requested,
+            launch_viewer=launch_viewer,
         )
 
         def prepare_launch():
@@ -1472,6 +1532,8 @@ class QtMainWindow(QMainWindow):
                 requested,
                 preferred_identity,
                 require_current_identity=initial_easyqcid is not None,
+                rater_override=rater_override,
+                initial_read_only=initial_read_only,
             )
 
         self.qc_filter_task_controller.submit(revision, prepare_launch)
@@ -1503,6 +1565,9 @@ class QtMainWindow(QMainWindow):
         )
 
     def _open_table_qc(self, identity: str, context_revision: int) -> None:
+        if self.qc_filter_task_controller.busy:
+            self._set_error("命令或项目任务正在启动，请稍候")
+            return
         if context_revision != self.current_context.context_revision:
             self._set_error("该表格操作属于已失效的项目上下文")
             return
@@ -1550,14 +1615,126 @@ class QtMainWindow(QMainWindow):
             return
         self.start_qc_module(
             entry.module_name,
-            initial_easyqcid=identity,
+            initial_easyqcid=entry.easyqcid or identity,
+            rater_override=entry.rater or None,
+            initial_read_only=entry.read_only,
         )
+
+    def _open_execute_qc_row_module(self, identity, entry, context_revision):
+        if context_revision != self.current_context.context_revision:
+            self._set_error("该表格操作属于已失效的项目上下文")
+            return
+        if not entry.enabled:
+            self._set_error(entry.disabled_reason)
+            return
+        self.start_qc_module(entry.module_name, initial_easyqcid=entry.easyqcid or identity,
+                             rater_override=entry.rater or None, launch_viewer=True,
+                             initial_read_only=entry.read_only)
+
+    def _execute_qc_row_module(self, identity, entry, context_revision):
+        if context_revision != self.current_context.context_revision:
+            self._set_error("该表格操作属于已失效的项目上下文")
+            return
+        if not entry.enabled:
+            self._set_error(entry.disabled_reason)
+            return
+        if self.row_command_controller.busy or self.context_task_controller.busy:
+            self._set_error("命令或项目任务正在启动，请稍候")
+            return
+        snapshot = self.current_context
+        source_identity = entry.easyqcid or identity
+        self._show_command_output()
+        # The collector resumes after startup, avoiding concurrent mutation of
+        # the executor's process registry by the worker and Qt timer.
+        self.row_command_output_panel.timer.stop()
+        self.row_command_output_panel.clear_button.setEnabled(False)
+        self._row_command_revision += 1
+        self.row_command_controller.submit(
+            self._row_command_revision,
+            lambda: self.context_service.launch_row_command(
+                snapshot, source_identity, entry.module_name, rater_override=entry.rater or None,
+            ),
+        )
+
+    def _show_command_output(self):
+        if self.command_output_window is None:
+            self.command_output_window = QDialog(self)
+            self.command_output_window.setObjectName("rowCommandOutputWindow")
+            self.command_output_window.setWindowTitle("命令输出")
+            self.command_output_window.resize(950, 420)
+            layout = QVBoxLayout(self.command_output_window)
+            self.row_command_output_panel = QtCommandOutputPanel(
+                self.context_service.command_executor, language=self.language,
+                parent=self.command_output_window,
+            )
+            layout.addWidget(self.row_command_output_panel)
+            self.row_command_output_panel.set_expanded(True)
+            self.language.register_root(self.command_output_window)
+        self.command_output_window.show()
+        self.command_output_window.raise_()
+
+    def _row_command_finished(self, _revision, _result):
+        self.row_command_output_panel.timer.start()
+        self.row_command_output_panel.clear_button.setEnabled(True)
+        self.row_command_output_panel.refresh_output()
+        self._set_error("")
+
+    def _row_command_failed(self, _revision, error):
+        self.row_command_output_panel.timer.start()
+        self.row_command_output_panel.clear_button.setEnabled(True)
+        self.row_command_output_panel.refresh_output()
+        message = str(error).strip() or type(error).__name__
+        self._set_error(message)
+        self._show_command_output()
+
+    def _open_result_associations(self):
+        from gui_qt.result_association_dialog import ResultAssociationDialog
+
+        if not self.association_action.isEnabled():
+            return
+        if self.association_dialog is not None:
+            self.association_dialog.raise_()
+            return
+        snapshot = self.current_context
+        save_state = {"expected": self.services.configuration_service.capture_settings_state()}
+        dialog = ResultAssociationDialog(
+            snapshot.subjects, snapshot.modules, snapshot.ratings, snapshot.association_rules,
+            parent=self, language=self.language,
+        )
+        self.association_dialog = dialog
+        dialog.finished.connect(lambda _result: setattr(self, "association_dialog", None))
+        dialog.applyRequested.connect(
+            lambda rules: self._save_result_associations(snapshot, save_state, rules, dialog)
+        )
+        dialog.open()
+
+    def _save_result_associations(self, snapshot, save_state, rules, dialog):
+        if self.active_workflow is not None and self.active_workflow.dirty:
+            dialog.set_error("请先保存或放弃当前质控修改，再刷新结果")
+            return
+        def save_and_prepare():
+            # The optimistic settings token pins both project and configuration.
+            # Advance it only after our own successful commit, so a refresh
+            # failure is retryable without discarding the user's draft.
+            self.services.configuration_service.save_result_associations(
+                rules, expected_state=save_state["expected"], notify=False,
+            )
+            save_state["expected"] = self.services.configuration_service.capture_settings_state()
+            try:
+                return self.context_service.prepare_initial()
+            except Exception as exc:
+                raise ProjectContextError("关联规则已保存，但界面刷新失败：" + str(exc)) from exc
+        if not self._submit_context("association_save", save_and_prepare, preserve_qc=True):
+            dialog.set_error("另一项项目加载任务仍在运行")
 
     def _open_qc_row_record(
         self,
         entry: QcRecordMenuEntry,
         context_revision: int,
     ) -> None:
+        if self.qc_filter_task_controller.busy:
+            self._set_error("命令或项目任务正在启动，请稍候")
+            return
         if context_revision != self.current_context.context_revision:
             self._set_error("该表格操作属于已失效的项目上下文")
             return
@@ -1608,6 +1785,8 @@ class QtMainWindow(QMainWindow):
                 lambda entry, revision=context_revision: (
                     self._open_qc_row_record(entry, revision)
                 ),
+                on_execute=lambda identity, entry, revision=context_revision: self._execute_qc_row_module(identity, entry, revision),
+                on_open_execute=lambda identity, entry, revision=context_revision: self._open_execute_qc_row_module(identity, entry, revision),
             )
         replacement.closed.connect(
             lambda controller=replacement: self._qc_controller_closed(controller)
@@ -1681,6 +1860,7 @@ class QtMainWindow(QMainWindow):
         dirty = bool(self.active_workflow is not None and self.active_workflow.dirty)
         enabled = (
             not busy
+            and not self.row_command_controller.busy
             and not self.qc_filter_task_controller.busy
             and not self.config_workspace.module_filter_write_busy
             and not derive_busy
@@ -1704,6 +1884,8 @@ class QtMainWindow(QMainWindow):
             enabled and self.current_context.has_project
         )
         self.config_workspace.setEnabled(enabled)
+        self.association_action.setEnabled(enabled and self.current_context.has_project)
+        self.results_association_action.setEnabled(enabled and self.current_context.has_project)
         for section in (
             self.config_workspace.constants_tab,
             self.config_workspace.subjects_tab,
@@ -1742,6 +1924,13 @@ class QtMainWindow(QMainWindow):
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self.row_command_controller.busy or (
+            self.context_task_controller.busy and self._pending_context
+            and self._pending_context[1] == "association_save"
+        ):
+            self._set_error("命令或项目任务正在启动，请稍候")
+            event.ignore()
+            return
         if self.table_workspace.mutation_busy:
             self._set_error("名单删除正在完成，请稍候")
             event.ignore()
@@ -1779,6 +1968,11 @@ class QtMainWindow(QMainWindow):
         self.results_page.close()
         self.config_workspace.close()
         self._clear_qc_workspace(discard_draft=True)
+        if self.command_output_window is not None:
+            self.row_command_output_panel.timer.stop()
+            self.language.unregister_root(self.command_output_window)
+            self.command_output_window.close()
+        self.context_service.close_row_commands()
         self.language.unregister_root(self)
         super().closeEvent(event)
 

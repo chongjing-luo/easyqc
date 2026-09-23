@@ -690,7 +690,7 @@ def test_list_import_merge_columns_and_append_rows_use_exact_validated_easyqcid(
             "重复",
         ),
         (pd.DataFrame({"easyqcid": ["SUB001"], "site": ["changed"]}), "columns", "overlap"),
-        (pd.DataFrame({"easyqcid": ["SUB003"], "other": ["X"]}), "rows", "same columns"),
+        (pd.DataFrame({"easyqcid": ["SUB001"], "other": ["X"]}), "rows", "重复"),
     ],
 )
 def test_failed_list_import_preserves_memory_and_atomic_table(
@@ -1297,10 +1297,10 @@ def test_explicit_subject_import_replace_is_atomic_and_retains_ratings(
             "重复字段",
         ),
         (
-            pd.DataFrame({"easyqcid": ["SUB003"], "other": ["C"]}),
+            pd.DataFrame({"other": ["C"]}),
             "append",
             "replace",
-            "相同字段",
+            "缺少 easyqcid",
         ),
         (
             pd.DataFrame({"easyqcid": ["SUB003"], "site": ["C"]}),

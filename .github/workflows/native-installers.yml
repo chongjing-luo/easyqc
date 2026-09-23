@@ -43,6 +43,8 @@ jobs:
     env:
       QT_QPA_PLATFORM: offscreen
       PYTHONUTF8: '1'
+      # CI 保持仓库内 dist 布局；本地构建默认输出到 easyqc 仓库之外。
+      EASYQC_DIST_DIR: ${{ github.workspace }}/dist
       # signed: false is deliberate until real signing credentials are configured.
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

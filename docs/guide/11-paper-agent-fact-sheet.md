@@ -11,6 +11,8 @@
 
 不得把后一类改写为已实现，也不得把 offscreen CI 改写成真实临床/研究现场验证。
 
+2026-09-15 已针对引言与方法稿核对模块、查看器、评分快照、结果和入口实现；结论与可定位证据见[方法描述与实现证据](13-methods-implementation-evidence.md)。当前工作区有未提交改动，版本号 `1.0.0` 和 Git HEAD 均不能单独代表本次审计内容。第 7 节历史性能数据未在本次重测。
+
 ## 2. 推荐的一句话定位
 
 中文：
@@ -50,6 +52,8 @@ EasyQC 的贡献应围绕“可配置工作流编排与可靠本地记录”展�
 
 一个 module 统一：record selection、viewer invocation、rating schema 和 rater ownership。这是项目适配的主要扩展单元。
 
+“质控任务”是具体检查内容，“质控任务模块”是软件配置单元。一个模块可用多个评分项、标签组织多项相关检查，但共用队列、启动配置和单一模块级 `notes`，没有独立子任务实体或每项独立备注。
+
 ### 4.4 复用专业查看器
 
 EasyQC 不实现 NIfTI/MRI rendering，而是把 Freeview、FSLeyes、MRIcroGL、wb_view、ITK-SNAP 等工具作为外部进程。贡献是稳定传递上下文和记录判断，不是替代专业交互显示。
@@ -62,9 +66,11 @@ EasyQC Formula 用封闭单表达式模型覆盖数值、文本、路径、条�
 
 每个 rating JSON 保存完整模块快照。目录、文件名与正文冗余声明 `(module_name, rater, easyqcid)`，使混放、误移和身份错配可以被检测。
 
+快照保留评分定义、模板、筛选和当次记录值；不冻结总名单、项目常量、应用级 Shell 选择、查看器版本或交互状态。复查依赖当前名单与常量，不能据此声称完全重现过去检查环境。
+
 ### 4.7 评分事实与结果投影分离
 
-评分 JSON 是当前事实；宽结果由严格扫描、展平、透视和对总名单左连接得到。名单清理不静默删除评分，结果损坏可从事实重建。
+评分 JSON 是当前事实；宽结果由严格扫描、展平、透视和对总名单左连接得到。用户长表选取评分身份和值字段，再与当前总名单内连接并附加其字段。两种结果都可在界面查看和分别导出。名单清理不静默删除评分，当前名单外的评分不进入两种用户结果。
 
 ### 4.8 copy-only 模板
 
@@ -78,19 +84,19 @@ EasyQC Formula 用封闭单表达式模型覆盖数值、文本、路径、条�
 
 | 主题 | 当前事实 |
 |---|---|
-| GUI | PySide6 / Qt Widgets；唯一 GUI |
+| GUI | PySide6 / Qt Widgets；常规启动与四参数 CLI 均使用唯一 Qt GUI |
 | Python | 3.10+；当前源码目录 + `.venv` 运行 |
 | 持久化 | 本地 JSON/CSV；无数据库 |
 | 项目设置/评分 schema | `schema_version: 3` only；无运行时旧格式兼容 |
 | 主名单 | `Table/easyqc_all.csv`；`easyqcid` 唯一且 casefold 唯一 |
 | 模块队列 | 总名单 + 每模块独立结构化筛选 |
 | 执行上下文 | 当前行普通列 + 项目常量 |
-| 模块 | rater、scores、Boolean tags、notes、viewer command、queue filter |
+| 模块 | rater、多个 scores、多个 Boolean tags、单一模块级 notes、viewer command、queue filter |
 | Formula | Lark 解析的封闭 Excel/VBA-style 单表达式；23 函数；不使用 eval/exec |
-| 查看器执行 | `CodeExecutor`；默认 `shell=False`；用户可显式 `shell=True`；无命令名黑白名单 |
+| 查看器执行 | `CodeExecutor`；默认 `shell=False`；用户可显式 `shell=True`；两种模式均支持 `MULTICMD … ;| …`；无命令名黑白名单 |
 | 评分身份 | 一份当前快照 / `(module_name, rater, easyqcid)` |
 | 评分路径 | `RatingFiles/<module>/<rater>/<module>-<rater>-<easyqcid>.json` |
-| 结果 | rating JSON → validate → flatten → wide pivot → left join master list |
+| 结果 | 宽表保留当前总名单全部条目；长表保留当前总名单中已保存评分的三元身份；两者附名单字段，可切换查看和分别导出 CSV |
 | 写入 | 同目录临时文件、flush/fsync、`os.replace`；表格含 SHA-256 CAS |
 | 并发 | 进程内锁 + 本机非阻塞文件锁；不是分布式事务 |
 | i18n | 运行时中/英文切换；用户业务文本不翻译 |
@@ -102,7 +108,7 @@ EasyQC Formula 用封闭单表达式模型覆盖数值、文本、路径、条�
 | EasyQC supports configurable module-specific QC queues over one master list | Core + tests: `core/configuration_service.py`, `core/project_context_service.py`, `tests/test_core/test_qc_workflow_service.py` | 不代表跨机器协同队列 |
 | EasyQC Formula avoids arbitrary code execution | parser/engine + tests: `core/formula_parser.py`, `core/formula_engine.py`, `tests/test_core/test_formula_parser.py`, `tests/test_core/test_formula_functions.py` | viewer command 是独立的真实进程执行边界 |
 | Ratings are isolated by module, rater and record | identity/service + tests: `core/rating_identity.py`, `core/rating_service.py`, `tests/test_core/test_rating_identity.py`, `tests/test_core/test_rating_service_v3_safety.py` | 同一三元组只保留最新快照，不是事件日志 |
-| Result tables are rebuildable from rating facts | `core/rating_service.py`, `tests/test_core/test_rating_service.py` | 左连接当前总名单；已删除名单行不会出现在当前投影 |
+| Result tables are rebuildable from rating facts and the current master list | `core/rating_service.py`, `core/project_context_service.py`, `tests/test_core/test_rating_service.py` | 宽表左连接，用户长表内连接；已删除名单行不进入当前投影；CSV 导出不包含完整模块定义 |
 | Local writes resist partial publication and stale overwrite | `utils/file_utils.py`, `core/table_service.py`, rating lock tests | 不是网络文件系统/数据库的分布式事务 |
 | The UI uses one cross-platform Qt implementation | `gui_qt/`, `.github/workflows/qt-platform.yml`, Qt tests | offscreen CI 不等于 Windows/macOS 原生人工验证 |
 | 100k-scale synthetic workloads met declared gates | archived benchmark evidence，见第 7 节 | 不能外推到任意数据/磁盘/平台/viewer |
@@ -152,6 +158,8 @@ Formula 可称为 restricted expression language，不能称为通用脚本执�
 ## 10. 主要限制
 
 - 只保存每个三元身份的最新评分，不内建不可变编辑历史；
+- 不保存逐轮名单版本、完整研究环境或查看器交互状态；
+- 多评分项不等于独立子任务表单，备注为模块级；
 - 无数据库、服务器、账户系统和多机协同事务；
 - 不执行自动 QC 或 AI 判别；
 - 不实现医学图像渲染，依赖外部查看器及其安装；
@@ -202,7 +210,8 @@ Validated rating snapshots → rebuildable results/export
 | 模块独立队列 | module-specific QC queue | copied master table |
 | 项目常量 | project constant | global variable（易与安装全局混淆） |
 | 行变量 | row variable | runtime code |
-| 质控模块 | QC module | plugin（当前不是代码插件系统） |
+| 质控任务 | QC task / inspection task | 与配置模块强制一一对应 |
+| 质控任务模块（简称模块） | QC module | plugin（当前不是代码插件系统） |
 | 质控员 | rater | user account（当前无账户系统） |
 | 评分快照 | rating snapshot | immutable event |
 | 结果投影 | result projection | source-of-truth result database |
@@ -236,6 +245,9 @@ Validated rating snapshots → rebuildable results/export
 - 把模板写成 explicit copy-only；
 - 把历史记录写成 toggleable initial read-only，而非一律强制只读；
 - 把同一三元组写成 latest snapshot overwrite；
+- 写明完整模块快照已实现，同时区分模块配置与完整检查环境；
+- 长表和宽表都是界面结果模式，均可导出；不要把内部展平表直接当成用户长表；
+- 多项检查共用模块级备注；常量是项目内跨条目共享，并非跨项目自动同步；
 - 给每个性能数字附工作负载、环境与限制；
 - 区分 offscreen tests 与 native validation；
 - Formula 与 viewer command 的安全边界没有混淆；
@@ -247,3 +259,4 @@ Validated rating snapshots → rebuildable results/export
 - [核心逻辑与灵活性](02-core-logic-and-flexibility.md)
 - [架构与数据流](03-architecture-and-data-flow.md)
 - [可靠性、性能与平台](09-reliability-performance-and-platforms.md)
+- [方法描述与实现证据](13-methods-implementation-evidence.md)

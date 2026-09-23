@@ -131,6 +131,46 @@ class TableViewState:
     def next_revision(self) -> "TableViewState":
         return replace(self, revision=self.revision + 1)
 
+    def rename_column(self, old_name: str, new_name: str) -> "TableViewState":
+        """Remap a view field without touching data or module configuration."""
+
+        if old_name not in self.columns.order or not isinstance(new_name, str) or not new_name:
+            raise TableViewStateContractError("Invalid column rename")
+        if new_name in self.columns.order and new_name != old_name:
+            raise TableViewStateContractError("Column name already exists")
+
+        def renamed(name: str) -> str:
+            return new_name if name == old_name else name
+
+        columns = ColumnViewState(
+            order=tuple(map(renamed, self.columns.order)),
+            hidden=tuple(map(renamed, self.columns.hidden)),
+            widths=tuple((renamed(name), width) for name, width in self.columns.widths),
+            pinned=tuple(map(renamed, self.columns.pinned)),
+        )
+        if new_name == "easyqcid":
+            # Import drafts can acquire their identity column through a rename.
+            columns = replace(
+                columns,
+                order=(new_name,) + tuple(name for name in columns.order if name != new_name),
+                pinned=(new_name,) + tuple(name for name in columns.pinned if name != new_name),
+                hidden=tuple(name for name in columns.hidden if name != new_name),
+            )
+        expression = self.effective_filter
+        return replace(
+            self,
+            columns=columns,
+            conditions=(),
+            filter=replace(expression, groups=tuple(
+                replace(group, conditions=tuple(
+                    replace(condition, column=renamed(condition.column))
+                    for condition in group.conditions
+                )) for group in expression.groups
+            )),
+            sort_rules=tuple(replace(rule, column=renamed(rule.column)) for rule in self.sort_rules),
+            revision=self.revision + 1,
+        )
+
     @property
     def effective_filter(self) -> FilterExpression:
         if self.filter is not None:

@@ -21,6 +21,8 @@ class QcModuleMenuEntry:
     enabled: bool
     disabled_reason: str = ""
     read_only: bool = False
+    easyqcid: str = ""
+    rater: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -33,6 +35,11 @@ class QcModuleMenuEntry:
         if not self.enabled and not reason:
             raise ValueError("禁用的质控模块菜单项必须说明原因")
         object.__setattr__(self, "disabled_reason", reason)
+        for name in ("easyqcid", "rater"):
+            value = getattr(self, name)
+            if not isinstance(value, str):
+                raise TypeError(f"{name}必须是字符串")
+            object.__setattr__(self, name, value.strip())
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,18 +83,34 @@ class QcRowContext:
     easyqcid: str
     modules: tuple[QcModuleMenuEntry, ...]
     records: tuple[QcRecordMenuEntry, ...]
+    linked_modules: tuple[QcModuleMenuEntry, ...] = ()
+    linked_records: tuple[QcRecordMenuEntry, ...] = ()
 
     def __post_init__(self) -> None:
         identity = _required_text(self.easyqcid, "easyqcid")
         object.__setattr__(self, "easyqcid", identity)
         modules = tuple(self.modules)
         records = tuple(self.records)
+        linked_modules = tuple(self.linked_modules)
+        linked_records = tuple(self.linked_records)
         if any(not isinstance(entry, QcModuleMenuEntry) for entry in modules):
             raise TypeError("质控模块菜单必须由 QcModuleMenuEntry 组成")
         if any(not isinstance(entry, QcRecordMenuEntry) for entry in records):
             raise TypeError("质控记录菜单必须由 QcRecordMenuEntry 组成")
         if any(entry.easyqcid != identity for entry in records):
             raise ValueError("质控记录与右键行 easyqcid 不一致")
+        if any(not isinstance(entry, QcModuleMenuEntry) for entry in linked_modules):
+            raise TypeError("关联质控模块菜单必须由 QcModuleMenuEntry 组成")
+        if any(not entry.easyqcid or not entry.rater for entry in linked_modules):
+            raise ValueError("关联质控模块必须有来源 easyqcid 和评分者")
+        if any(not isinstance(entry, QcRecordMenuEntry) for entry in linked_records):
+            raise TypeError("关联质控记录菜单必须由 QcRecordMenuEntry 组成")
+        linked_keys = [(entry.easyqcid, entry.module_name, entry.rater) for entry in linked_modules]
+        if len(linked_keys) != len(set(linked_keys)):
+            raise ValueError("关联质控模块菜单包含重复来源")
+        linked_record_keys = [entry.key for entry in linked_records]
+        if len(linked_record_keys) != len(set(linked_record_keys)):
+            raise ValueError("关联质控记录菜单包含重复记录")
         module_names = [entry.module_name for entry in modules]
         if len(module_names) != len(set(module_names)):
             raise ValueError("质控模块菜单包含重复模块")
@@ -96,6 +119,8 @@ class QcRowContext:
             raise ValueError("质控记录菜单包含重复记录")
         object.__setattr__(self, "modules", modules)
         object.__setattr__(self, "records", records)
+        object.__setattr__(self, "linked_modules", linked_modules)
+        object.__setattr__(self, "linked_records", linked_records)
 
 
 __all__ = [

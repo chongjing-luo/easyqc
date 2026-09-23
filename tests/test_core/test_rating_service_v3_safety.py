@@ -29,7 +29,12 @@ def _rating(
             "label": "Anatomical QC",
             "rater": rater,
             "easyqcid": easyqcid,
-            "scores": {"1": {"label": "Overall", "value": "Good"}},
+            "scores": {
+                "1": {
+                    "label": "Overall", "num": "Poor,Good",
+                    "num_": "Poor,Good", "value": "Good",
+                }
+            },
             "tags": {"1": {"label": "Review", "value": False}},
             "notes": None,
             "time": "2026-07-28 10:00:00",

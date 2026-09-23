@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLayout,
     QLineEdit,
     QMessageBox,
+    QMenu,
     QPushButton,
     QScrollArea,
     QScrollBar,
@@ -49,12 +50,17 @@ from core.table_view_service import QcIdentityError, TableViewError, TableViewSe
 from gui_qt.columns_dialog import ColumnsDialog
 from gui_qt.columns_panel import ColumnsPanel
 from gui_qt.delete_columns_dialog import DeleteColumnsDialog
+from gui_qt.rename_column_dialog import RenameColumnDialog
 from gui_qt.delete_rows_dialog import DeleteRowsDialog
 from gui_qt.derived_column_dialog import DerivedColumnDialog
 from gui_qt.filter_dialog import FilterDialog
 from gui_qt.filter_panel import FilterPanel, operator_label
 from gui_qt.i18n import LanguageController, translate_ui_text
 from gui_qt.qc_row_context_menu import QcRowContextMenu
+from gui_qt.table_clipboard import (
+    copy_selected_cells, create_copy_menu, install_table_copy_shortcut,
+    prepare_cell_context_selection, selected_cell_count,
+)
 from gui_qt.sort_dialog import SortDialog
 from gui_qt.sort_panel import SortPanel
 from gui_qt.table_model import QtTableModel, QtTableRowReference
@@ -94,6 +100,8 @@ class QtTableWorkspace(QWidget):
         on_derived_column_committed: Callable[[str], None] | None = None,
         delete_rows_callback: Callable[[tuple[str, ...]], int] | None = None,
         delete_columns_callback: Callable[[tuple[str, ...]], int] | None = None,
+        rename_column_callback: Callable[[str, str], int] | None = None,
+        rename_source_columns: Callable[[], tuple[str, ...]] | None = None,
         on_data_mutation_committed: Callable[[], None] | None = None,
         protected_delete_columns: tuple[str, ...] = (),
         row_key_columns: tuple[str, ...] = ("easyqcid",),
@@ -117,6 +125,8 @@ class QtTableWorkspace(QWidget):
             raise TypeError("initial_state must be a TableViewState or None")
         if derive_preview_source is not None and not callable(derive_preview_source):
             raise TypeError("derive_preview_source must be callable")
+        if any(value is not None and not callable(value) for value in (rename_column_callback, rename_source_columns)):
+            raise TypeError("Column rename callbacks must be callable")
         deletion_callbacks = (delete_rows_callback, delete_columns_callback)
         if any(callback is not None for callback in deletion_callbacks) and not all(
             callable(callback) for callback in deletion_callbacks
@@ -178,7 +188,7 @@ class QtTableWorkspace(QWidget):
                 int,
                 str,
                 tuple[str, ...],
-                DeleteRowsDialog | DeleteColumnsDialog,
+                DeleteRowsDialog | DeleteColumnsDialog | RenameColumnDialog,
             ]
             | None
         ) = None
@@ -198,15 +208,20 @@ class QtTableWorkspace(QWidget):
         self.on_derived_column_committed = on_derived_column_committed
         self.delete_rows_callback = delete_rows_callback
         self.delete_columns_callback = delete_columns_callback
+        self.rename_column_callback = rename_column_callback
+        self.rename_source_columns = rename_source_columns
+        self._renamed_view_state: TableViewState | None = None
         self.on_data_mutation_committed = on_data_mutation_committed
         self.protected_delete_columns = frozenset(protected_delete_columns)
         self._data_mutation_enabled = bool(
-            delete_rows_callback is not None and delete_columns_callback is not None
+            delete_rows_callback is not None or rename_column_callback is not None
         )
         self.row_context_provider = row_context_provider
         self.on_open_qc_module = on_open_qc_module
         self.on_open_qc_record = on_open_qc_record
-        self.active_row_context_menu: QcRowContextMenu | None = None
+        self.on_execute_qc_module: Callable[[str, QcModuleMenuEntry], None] | None = None
+        self.on_open_execute_qc_module: Callable[[str, QcModuleMenuEntry], None] | None = None
+        self.active_row_context_menu: QMenu | None = None
         self.initial_state = (
             self.service.default_state(page_size=page_size)
             if initial_state is None
@@ -220,6 +235,7 @@ class QtTableWorkspace(QWidget):
         self.derived_column_dialog: DerivedColumnDialog | None = None
         self.delete_rows_dialog: DeleteRowsDialog | None = None
         self.delete_columns_dialog: DeleteColumnsDialog | None = None
+        self.rename_column_dialog: RenameColumnDialog | None = None
         self._derive_busy = False
         self._inspector_origin_revision: int | None = None
         self.result = self.service.apply_state(self.applied_state)
@@ -292,6 +308,10 @@ class QtTableWorkspace(QWidget):
             if self.derive_column_callback is not None
             else None
         )
+        self.rename_column_action = (
+            self._add_toolbar_action(self.action_toolbar, "重命名列", QKeySequence(), self.open_rename_column_dialog)
+            if self.rename_column_callback is not None else None
+        )
         self.delete_rows_action = (
             self._add_toolbar_action(
                 self.action_toolbar,
@@ -316,6 +336,10 @@ class QtTableWorkspace(QWidget):
         self.filter_button = self.action_toolbar.widgetForAction(self.filter_action)
         self.sort_button = self.action_toolbar.widgetForAction(self.sort_action)
         self.columns_button = self.action_toolbar.widgetForAction(self.columns_action)
+        self.rename_column_button = (
+            self.action_toolbar.widgetForAction(self.rename_column_action)
+            if self.rename_column_action is not None else None
+        )
         self.derive_button = (
             self.action_toolbar.widgetForAction(self.derive_action)
             if self.derive_action is not None
@@ -452,6 +476,8 @@ class QtTableWorkspace(QWidget):
         self.table_view.setModel(self.table_model)
         self.pinned_view.setModel(self.table_model)
         self.pinned_view.setSelectionModel(self.table_view.selectionModel())
+        self._copy_views = (self.pinned_view, self.table_view)
+        self._copy_shortcuts = [install_table_copy_shortcut(view, self._copy_views) for view in self._copy_views]
         self.pinned_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.pinned_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.pinned_view.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
@@ -806,8 +832,8 @@ class QtTableWorkspace(QWidget):
     @staticmethod
     def _configure_table(table: QTableView) -> None:
         table.setAlternatingRowColors(True)
-        table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        table.setSelectionMode(QAbstractItemView.SingleSelection)
+        table.setSelectionBehavior(QAbstractItemView.SelectItems)
+        table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setSortingEnabled(False)
         table.setWordWrap(False)
@@ -981,6 +1007,7 @@ class QtTableWorkspace(QWidget):
             "derived_column_dialog",
             "delete_rows_dialog",
             "delete_columns_dialog",
+            "rename_column_dialog",
         ):
             dialog = getattr(self, attribute)
             if dialog is not None:
@@ -1132,6 +1159,9 @@ class QtTableWorkspace(QWidget):
         previous_identity = self._selected_identity()
         previous_source_position = self.selected_source_position
         previous = self.capture_state()
+        if preserve_state and self._renamed_view_state is not None:
+            previous = self._renamed_view_state
+        self._renamed_view_state = None
         self._close_open_dialogs()
         self.close_view_inspector()
         self.task_controller.cancel()
@@ -1703,15 +1733,17 @@ class QtTableWorkspace(QWidget):
             result_position // self.applied_state.page_size
         ) * self.applied_state.page_size
         self._render_result()
-        return bool(self.table_view.selectionModel().selectedRows())
+        return bool(self.table_view.selectionModel().selectedIndexes())
 
     def _selection_changed(self, *_args: Any) -> None:
         if self._rendering:
             return
-        selected = self.table_view.selectionModel().selectedRows()
+        selected = self.table_view.selectionModel().selectedIndexes()
         if not selected:
             return
-        reference = self.table_model.row_reference(selected[0].row())
+        current = self.table_view.currentIndex()
+        index = current if current in selected else selected[0]
+        reference = self.table_model.row_reference(index.row())
         self.selected_source_position = reference.source_position
         self.selection_outside_view = False
         self._set_error("")
@@ -1724,8 +1756,6 @@ class QtTableWorkspace(QWidget):
         self._update_data_mutation_actions()
 
     def _update_data_mutation_actions(self) -> None:
-        if self.delete_rows_action is None or self.delete_columns_action is None:
-            return
         enabled = (
             self._data_mutation_enabled
             and not self._derive_busy
@@ -1739,10 +1769,46 @@ class QtTableWorkspace(QWidget):
             column not in self.protected_delete_columns
             for column in source_columns
         )
-        self.delete_rows_action.setEnabled(enabled and self.service.source_total > 0)
-        self.delete_columns_action.setEnabled(
-            enabled and has_deletable_columns
+        if self.delete_rows_action is not None:
+            self.delete_rows_action.setEnabled(enabled and self.service.source_total > 0)
+        if self.delete_columns_action is not None:
+            self.delete_columns_action.setEnabled(enabled and has_deletable_columns)
+        if self.rename_column_action is not None:
+            self.rename_column_action.setEnabled(enabled and bool(self._renamable_columns()))
+
+    def _renamable_columns(self) -> tuple[str, ...]:
+        columns = (
+            self.rename_source_columns() if self.rename_source_columns is not None
+            else tuple(profile.name for profile in self.service.profiles)
         )
+        return tuple(name for name in columns if name != "easyqcid")
+
+    def open_rename_column_dialog(self) -> RenameColumnDialog | None:
+        if self.rename_column_action is None or not self.rename_column_action.isEnabled():
+            return None
+        if self.rename_column_dialog is not None:
+            self.rename_column_dialog.raise_()
+            return self.rename_column_dialog
+        columns = tuple(profile.name for profile in self.service.profiles)
+        allowed = set(self._renamable_columns())
+        dialog = RenameColumnDialog(columns, self,
+            protected_columns=tuple(name for name in columns if name not in allowed),
+            language=self.language)
+        self.rename_column_dialog = dialog
+        service = self.service
+
+        def apply_rename(old: str, new: str) -> None:
+            if self.service is not service or not self._data_mutation_enabled or old not in self._renamable_columns():
+                dialog.set_error("名单已变化，请重新打开重命名列")
+                return
+            if not self._submit_data_mutation("rename", (old, new), dialog,
+                lambda: self.rename_column_callback(old, new)):
+                dialog.set_error(self.error_text)
+
+        dialog.renameRequested.connect(apply_rename)
+        dialog.finished.connect(lambda _result: setattr(self, "rename_column_dialog", None))
+        dialog.open()
+        return dialog
 
     def open_delete_rows_dialog(self) -> DeleteRowsDialog | None:
         """Open a filter-backed deletion draft over the complete source list."""
@@ -1945,10 +2011,10 @@ class QtTableWorkspace(QWidget):
         self,
         operation: str,
         targets: tuple[str, ...],
-        dialog: DeleteRowsDialog | DeleteColumnsDialog,
+        dialog: DeleteRowsDialog | DeleteColumnsDialog | RenameColumnDialog,
         function: Callable[[], int],
     ) -> bool:
-        if operation not in {"rows", "columns"}:
+        if operation not in {"rows", "columns", "rename"}:
             raise ValueError(f"Unsupported table mutation: {operation}")
         if self.mutation_task_controller.busy:
             self._set_error("另一项名单删除任务仍在运行")
@@ -1970,7 +2036,7 @@ class QtTableWorkspace(QWidget):
         if pending is None or pending[0] != revision:
             return
         operation, targets, dialog = pending[1], pending[2], pending[3]
-        expected = len(targets)
+        expected = 1 if operation == "rename" else len(targets)
         if isinstance(result, bool) or not isinstance(result, int) or result != expected:
             self._handle_mutation_error(
                 revision,
@@ -1982,6 +2048,18 @@ class QtTableWorkspace(QWidget):
             )
             return
         self._pending_mutation = None
+        if operation == "rename":
+            self._renamed_view_state = self.capture_state().rename_column(*targets)
+            self.mutation_status_label.setText(self._ui_text("列已重命名；评分记录已保留"))
+            self._set_error("")
+            dialog.complete_rename()
+            if self.on_data_mutation_committed is not None:
+                try:
+                    self.on_data_mutation_committed()
+                except Exception as exc:
+                    self._set_error(str(exc).strip() or type(exc).__name__)
+            self._update_data_mutation_actions()
+            return
         self.selected_source_position = None
         self.selection_outside_view = False
         self.table_view.clearSelection()
@@ -2011,7 +2089,9 @@ class QtTableWorkspace(QWidget):
         dialog = pending[3]
         self._pending_mutation = None
         message = str(error).strip() or type(error).__name__
-        self.mutation_status_label.setText(self._ui_text("名单删除失败"))
+        self.mutation_status_label.setText(self._ui_text(
+            "列重命名失败" if pending[1] == "rename" else "名单删除失败"
+        ))
         dialog.set_error(message)
         self._set_error(message)
         self._update_data_mutation_actions()
@@ -2019,18 +2099,25 @@ class QtTableWorkspace(QWidget):
     @Slot(bool)
     def _set_mutation_busy(self, busy: bool) -> None:
         if busy:
-            self.mutation_status_label.setText(self._ui_text("正在删除名单…"))
+            self.mutation_status_label.setText(self._ui_text(
+                "正在重命名列…" if self._pending_mutation and self._pending_mutation[1] == "rename"
+                else "正在删除名单…"
+            ))
         self._update_data_mutation_actions()
         self.mutationBusyChanged.emit(bool(busy))
 
     def open_selected_qc(self) -> bool:
-        selected = self.table_view.selectionModel().selectedRows()
+        selected = self.table_view.selectionModel().selectedIndexes()
         if not selected:
             self._set_error(
                 "所选记录不在当前视图中"
                 if self.selected_source_position is not None
                 else "请先选择一行"
             )
+            return False
+        rows = {index.row() for index in selected}
+        if len(rows) != 1:
+            self._set_error("请先选择一行")
             return False
         return self.open_qc_reference(self.table_model.row_reference(selected[0].row()))
 
@@ -2079,17 +2166,24 @@ class QtTableWorkspace(QWidget):
         provider: Callable[[str], QcRowContext] | None,
         on_module: Callable[[str, QcModuleMenuEntry], None] | None,
         on_record: Callable[[QcRecordMenuEntry], None] | None,
+        *,
+        on_execute: Callable[[str, QcModuleMenuEntry], None] | None = None,
+        on_open_execute: Callable[[str, QcModuleMenuEntry], None] | None = None,
     ) -> None:
-        """Install or clear the three callbacks required by row menus."""
+        """Install row facts/open callbacks and optional explicit execution modes."""
 
         supplied = (provider, on_module, on_record)
         if any(item is not None for item in supplied) and not all(
             callable(item) for item in supplied
         ):
             raise TypeError("QC row context actions must be all callable or all None")
+        if any(callback is not None and not callable(callback) for callback in (on_execute, on_open_execute)):
+            raise TypeError("QC execution callbacks must be callable or None")
         self.row_context_provider = provider
         self.on_open_qc_module = on_module
         self.on_open_qc_record = on_record
+        self.on_execute_qc_module = on_execute
+        self.on_open_execute_qc_module = on_open_execute
         if self.active_row_context_menu is not None:
             self.active_row_context_menu.close()
             self.active_row_context_menu.deleteLater()
@@ -2105,8 +2199,11 @@ class QtTableWorkspace(QWidget):
         index = view.indexAt(point)
         if not index.isValid():
             return
-        view.setCurrentIndex(index)
-        view.selectRow(index.row())
+        prepare_cell_context_selection(view, index)
+        if selected_cell_count(self._copy_views) > 1 or self.row_context_provider is None:
+            menu = create_copy_menu(self._copy_views, view, language=self.language)
+            self._show_row_context_menu(menu, view, point)
+            return
         reference = self.table_model.row_reference(index.row())
         try:
             if (
@@ -2140,11 +2237,20 @@ class QtTableWorkspace(QWidget):
                 context,
                 on_module=lambda entry: module_callback(identity, entry),
                 on_record=record_callback,
+                on_copy=lambda: copy_selected_cells(self._copy_views),
+                on_execute=(lambda entry, callback=self.on_execute_qc_module: callback(identity, entry))
+                if self.on_execute_qc_module is not None else None,
+                on_open_execute=(lambda entry, callback=self.on_open_execute_qc_module: callback(identity, entry))
+                if self.on_open_execute_qc_module is not None else None,
                 parent=view,
+                language=self.language,
             )
         except (ArithmeticError, RuntimeError, TypeError, ValueError) as exc:
             self._set_error(str(exc).strip() or type(exc).__name__)
             return
+        self._show_row_context_menu(menu, view, point)
+
+    def _show_row_context_menu(self, menu: QMenu, view: QTableView, point: QPoint) -> None:
         if self.active_row_context_menu is not None:
             self.active_row_context_menu.close()
             self.active_row_context_menu.deleteLater()
@@ -2335,7 +2441,7 @@ class QtTableWorkspace(QWidget):
         index = self.table_model.index(local_row, 0)
         selection_model.select(
             index,
-            QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
+            QItemSelectionModel.ClearAndSelect,
         )
         selection_model.setCurrentIndex(index, QItemSelectionModel.NoUpdate)
         self.selection_outside_view = False
@@ -2427,6 +2533,9 @@ class QtTableWorkspace(QWidget):
         self.columns_action.setText(
             self._ui_text(f"列显示 ({visible}/{column_total})")
         )
+        if self.rename_column_action is not None:
+            self.rename_column_action.setText(self._ui_text("重命名列"))
+            self.rename_column_action.setToolTip(self._ui_text("重命名列"))
         self.sort_status_label.setText(
             " · ".join(
                 f"{priority} {rule.column} {'↑' if rule.ascending else '↓'}"

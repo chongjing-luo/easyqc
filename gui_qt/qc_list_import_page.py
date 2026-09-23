@@ -42,8 +42,12 @@ from gui_qt.delete_rows_dialog import DeleteRowsDialog
 from gui_qt.derived_column_dialog import DerivedColumnDialog
 from gui_qt.filter_dialog import FilterDialog
 from gui_qt.i18n import translate_ui_text
+from gui_qt.rename_column_dialog import RenameColumnDialog
 from gui_qt.sort_dialog import SortDialog
 from gui_qt.table_model import QtTableModel
+from gui_qt.table_clipboard import (
+    create_copy_menu, install_table_copy_shortcut, prepare_cell_context_selection,
+)
 from gui_qt.task_runner import RevisionedTaskController
 from gui_qt.theme import set_button_role
 from models.derived_formula import DerivedColumnFormula
@@ -103,6 +107,8 @@ class QtQcListImportPage(QWidget):
         self.derived_column_dialog: DerivedColumnDialog | None = None
         self.delete_rows_dialog: DeleteRowsDialog | None = None
         self.delete_columns_dialog: DeleteColumnsDialog | None = None
+        self.rename_column_dialog: RenameColumnDialog | None = None
+        self._pending_rename: tuple[int, str, str, RenameColumnDialog] | None = None
 
         self.task_controller = RevisionedTaskController(self)
         self.task_controller.resultReady.connect(self._handle_result)
@@ -324,7 +330,11 @@ class QtQcListImportPage(QWidget):
         self.sort_button = QPushButton("排序", self)
         self.columns_button = QPushButton("列显示", self)
         self.derive_button = QPushButton("新增列", self)
+        self.rename_column_button = QPushButton("重命名列", self)
+        self.rename_column_button.clicked.connect(self.open_rename_column_dialog)
         self.delete_rows_button = QPushButton("删除行", self)
+        self.add_row_button = QPushButton("增加空行", self)
+        self.add_row_button.clicked.connect(self._insert_blank_row_after_current)
         self.delete_rows_button.setAccessibleName("按条件删除导入草稿行")
         self.delete_rows_button.setToolTip(
             "使用筛选条件删除当前导入草稿行；评分记录不会被删除"
@@ -349,8 +359,10 @@ class QtQcListImportPage(QWidget):
             self.sort_button,
             self.columns_button,
             self.derive_button,
+            self.rename_column_button,
             self.delete_rows_button,
             self.delete_column_button,
+            self.add_row_button,
         ):
             button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
             preview_actions.addWidget(button, 1)
@@ -360,8 +372,10 @@ class QtQcListImportPage(QWidget):
         self.preview_table.setObjectName("qcListImportPreview")
         self.preview_table.setAccessibleName("只读导入预览")
         self.preview_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.preview_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.preview_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.preview_table.setSelectionBehavior(QAbstractItemView.SelectItems)
+        self.preview_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self._copy_shortcut = install_table_copy_shortcut(self.preview_table, (self.preview_table,))
+        self.active_preview_context_menu: QMenu | None = None
         self.preview_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.preview_table.setAlternatingRowColors(True)
         self.preview_table.setWordWrap(False)
@@ -446,6 +460,13 @@ class QtQcListImportPage(QWidget):
         self.status_label.setProperty("role", "secondary")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
+        self.context_error_label = QLabel("", self)
+        self.context_error_label.setObjectName("qcListImportContextError")
+        self.context_error_label.setAccessibleName("项目加载错误")
+        self.context_error_label.setProperty("role", "error")
+        self.context_error_label.setWordWrap(True)
+        self.context_error_label.hide()
+        layout.addWidget(self.context_error_label)
         self.error_label = QLabel("", self)
         self.error_label.setObjectName("qcListImportError")
         self.error_label.setProperty("role", "error")
@@ -489,7 +510,10 @@ class QtQcListImportPage(QWidget):
                 self,
                 translate_ui_text("选择导入文件"),
                 "",
-                translate_ui_text("名单文件 (*.csv *.xlsx *.xls *.txt *.list)"),
+                ";;".join((
+                    translate_ui_text("所有文件 (*)"),
+                    translate_ui_text("名单文件 (*.csv *.xlsx *.xls *.txt *.list)"),
+                )),
             )
         if selected:
             self.source_path_edit.setText(selected)
@@ -653,10 +677,21 @@ class QtQcListImportPage(QWidget):
                 "replace": "用导入行替换",
             }[conflict_policy]
             detail = f"写入方式：{mode_label}；冲突处理：{policy_label}。"
+            if mode == "append":
+                detail = translate_ui_text("写入方式：{mode}；冲突处理：{policy}。").format(
+                    mode=translate_ui_text(mode_label), policy=translate_ui_text(policy_label),
+                )
+                lines = [detail, translate_ui_text("同名列对齐，新列保留；新行缺少的字段留空。")]
+                if conflict_policy == "replace":
+                    lines.append(translate_ui_text("重复编号：只更新导入表提供的列（含空值），未提供的列保留旧值。"))
+                else:
+                    lines.append(translate_ui_text("重复编号整行跳过，不补写新字段。"))
+                lines.append(translate_ui_text("现有评分记录不会被删除。是否继续？"))
+                return "\n".join(lines)
         return f"{detail}\n现有评分记录不会被删除。是否继续？"
 
     def _submit(self, operation: str, function: Callable[[], object]) -> bool:
-        if operation not in {"read", "search", "apply"}:
+        if operation not in {"read", "search", "apply", "rename"}:
             raise ValueError(f"Unsupported list-import operation: {operation}")
         if self.task_controller.busy:
             self._set_error("另一项名单导入任务仍在运行")
@@ -667,6 +702,8 @@ class QtQcListImportPage(QWidget):
         self.status_label.setText(
             "正在读取导入预览…"
             if operation == "read"
+            else "正在重命名列…"
+            if operation == "rename"
             else "正在搜索导入预览…"
             if operation == "search"
             else "正在写入质控前名单…"
@@ -680,7 +717,22 @@ class QtQcListImportPage(QWidget):
             return
         operation = self._pending[1]
         try:
-            if operation in {"read", "search"}:
+            if operation == "rename":
+                pending = self._pending_rename
+                if pending is None or pending[0] != self._draft_revision:
+                    raise ValueError("导入草稿已变化，请重新打开重命名列")
+                if not isinstance(result, _PreparedImportPreview):
+                    raise TypeError("名单预览任务返回了无效结果")
+                _origin, old, new, dialog = pending
+                preferred = (
+                    self._preview_state.rename_column(old, new)
+                    if self._preview_state is not None else None
+                )
+                self._install_prepared_draft(result, preferred_state=preferred)
+                self.status_label.setText(translate_ui_text("导入草稿列已重命名；尚未写入"))
+                self._pending_rename = None
+                dialog.complete_rename()
+            elif operation in {"read", "search"}:
                 if not isinstance(result, _PreparedImportPreview):
                     raise TypeError("名单预览任务返回了无效结果")
                 if operation == "read":
@@ -707,6 +759,9 @@ class QtQcListImportPage(QWidget):
                 self.configuration.publish_subjects_changed()
                 self.status_label.setText(f"已写入质控前名单，共 {len(result):,} 条")
         except Exception as exc:
+            if operation == "rename" and self._pending_rename is not None:
+                self._pending_rename[3].set_error(str(exc))
+                self._pending_rename = None
             self._pending = None
             self.status_label.setText("名单导入任务失败")
             self._set_error(str(exc))
@@ -719,6 +774,9 @@ class QtQcListImportPage(QWidget):
     def _handle_error(self, revision: int, error: object) -> None:
         if self._pending is None or self._pending[0] != revision:
             return
+        if self._pending[1] == "rename" and self._pending_rename is not None:
+            self._pending_rename[3].set_error(str(error))
+            self._pending_rename = None
         self._pending = None
         self.status_label.setText("名单导入任务失败")
         self._set_error(str(error).strip() or type(error).__name__)
@@ -753,6 +811,7 @@ class QtQcListImportPage(QWidget):
             self.derive_button,
             self.delete_rows_button,
             self.delete_column_button,
+            self.rename_column_button,
             self.write_mode_combo,
             self.conflict_policy_combo,
             self.clear_button,
@@ -803,9 +862,12 @@ class QtQcListImportPage(QWidget):
         prepared: _PreparedImportPreview,
         *,
         reset_state: bool = True,
+        preferred_state: TableViewState | None = None,
     ) -> None:
         if prepared.draft is None:
             raise TypeError("Prepared import draft is missing its source table")
+        if preferred_state is not None:
+            prepared.service.validate_state(preferred_state)
         self._draft = prepared.draft
         self._draft_revision += 1
         self._derived_draft_result = None
@@ -814,6 +876,7 @@ class QtQcListImportPage(QWidget):
             prepared.service,
             draft_positions=prepared.draft_positions,
             reset_state=reset_state,
+            preferred_state=preferred_state,
         )
         self._update_stats()
         self._update_actions()
@@ -868,6 +931,7 @@ class QtQcListImportPage(QWidget):
         *,
         draft_positions: tuple[int, ...],
         reset_state: bool,
+        preferred_state: TableViewState | None = None,
     ) -> None:
         previous = self._preview_state
         default = service.default_state(page_size=self.PAGE_SIZE)
@@ -879,8 +943,12 @@ class QtQcListImportPage(QWidget):
         ):
             state = replace(previous, page_size=self.PAGE_SIZE)
         try:
+            if preferred_state is not None:
+                state = preferred_state
             result = service.apply_state(state)
         except TableViewError:
+            if preferred_state is not None:
+                raise
             state = default
             result = service.apply_state(state)
         self._preview_service = service
@@ -1017,6 +1085,15 @@ class QtQcListImportPage(QWidget):
     def set_derive_column_enabled(self, enabled: bool) -> None:
         self._derive_enabled = bool(enabled)
         self._update_actions()
+
+    def set_context_error(self, message: str) -> None:
+        """Keep project-load failures visible independently of draft operations."""
+        text = (
+            "项目加载失败；请返回项目管理页重新加载。\n" + message
+            if message else ""
+        )
+        self.context_error_label.setText(text)
+        self.context_error_label.setVisible(bool(text))
 
     def open_derived_column_dialog(self) -> DerivedColumnDialog | None:
         if not self._derive_enabled or self.configuration.current_project is None:
@@ -1160,7 +1237,7 @@ class QtQcListImportPage(QWidget):
         )
         self._replace_draft(result, reset_state=True)
         if insertion < self.preview_model.rowCount():
-            self.preview_table.selectRow(insertion)
+            self.preview_table.setCurrentIndex(self.preview_model.index(insertion, 0))
         self.status_label.setText("已增加 1 行导入草稿；尚未写入")
         self._set_error("")
         return True
@@ -1306,6 +1383,45 @@ class QtQcListImportPage(QWidget):
         else:
             dialog.set_error(self.error_text)
 
+    def open_rename_column_dialog(self) -> RenameColumnDialog | None:
+        if self.task_controller.busy or self._derive_busy or not self._draft.columns.size:
+            return None
+        if self.rename_column_dialog is not None:
+            self.rename_column_dialog.raise_()
+            return self.rename_column_dialog
+        dialog = RenameColumnDialog(tuple(map(str, self._draft.columns)), self)
+        self.rename_column_dialog = dialog
+        origin = self._draft_revision
+        dialog.renameRequested.connect(
+            lambda old, new: self._rename_draft_from_dialog(dialog, old, new, origin)
+        )
+        dialog.finished.connect(lambda _result: setattr(self, "rename_column_dialog", None))
+        dialog.open()
+        return dialog
+
+    def _rename_draft_from_dialog(
+        self, dialog: RenameColumnDialog, old: str, new: str, origin: int,
+    ) -> None:
+        if origin != self._draft_revision:
+            dialog.set_error("导入草稿已变化，请重新打开重命名列")
+            return
+        if new in self.configuration.constants():
+            dialog.set_error("新列名与常量冲突")
+            return
+        if self.task_controller.busy or self._derive_busy:
+            dialog.set_error("另一项名单导入任务仍在运行")
+            return
+        draft = self._draft
+        self._pending_rename = (origin, old, new, dialog)
+
+        def rename():
+            candidate = TableTransformEngine().rename_columns(draft, {old: new})
+            return self._prepare_import_preview(candidate, keep_draft=True)
+
+        if not self._submit("rename", rename):
+            self._pending_rename = None
+            dialog.set_error(self.error_text)
+
     def open_delete_columns_dialog(self) -> DeleteColumnsDialog | None:
         columns = tuple(str(column) for column in self._draft.columns)
         if not columns:
@@ -1374,34 +1490,25 @@ class QtQcListImportPage(QWidget):
         *,
         after_position: int | None,
     ) -> QMenu:
-        """Build the row-maintenance menu for one draft source position."""
+        """Build a copy-only menu; draft rows have no accepted QC identity."""
+        return create_copy_menu((self.preview_table,), self.preview_table)
 
-        menu = QMenu(self.preview_table)
-        add_action = menu.addAction(translate_ui_text("增加空行"))
-        delete_action = menu.addAction(translate_ui_text("按条件删除行…"))
-        enabled = (
-            not self.task_controller.busy
-            and not self._derive_busy
-            and bool(self._draft.columns.size)
-        )
-        add_action.setEnabled(enabled)
-        delete_action.setEnabled(enabled and not self._draft.empty)
-        add_action.triggered.connect(
-            lambda _checked=False, position=after_position: self.insert_blank_draft_row(
-                after_position=position
-            )
-        )
-        delete_action.triggered.connect(self.open_delete_rows_dialog)
-        return menu
+    def _insert_blank_row_after_current(self) -> None:
+        index = self.preview_table.currentIndex()
+        position = self.draft_position_for_preview_row(index.row()) if index.isValid() else None
+        self.insert_blank_draft_row(after_position=position)
 
     @Slot(object)
     def _show_preview_context_menu(self, position: object) -> None:
         index = self.preview_table.indexAt(position)
-        after_position: int | None = None
         if index.isValid():
-            after_position = self.draft_position_for_preview_row(index.row())
-        menu = self.create_preview_context_menu(after_position=after_position)
-        menu.exec(self.preview_table.viewport().mapToGlobal(position))
+            prepare_cell_context_selection(self.preview_table, index)
+        menu = self.create_preview_context_menu(after_position=None)
+        if self.active_preview_context_menu is not None:
+            self.active_preview_context_menu.close()
+            self.active_preview_context_menu.deleteLater()
+        self.active_preview_context_menu = menu
+        menu.popup(self.preview_table.viewport().mapToGlobal(position))
 
     def _render_empty_preview(self) -> None:
         empty = RowWindow(
@@ -1514,11 +1621,12 @@ class QtQcListImportPage(QWidget):
                 if conflict_policy == "deduplicate"
                 else "用导入行替换"
             )
-            schema_mismatch = set(self._draft.columns) != set(self._current.columns)
-            detail = (
-                f"重复行 {matches:,} · {policy_label}"
-                + (" · 字段不一致" if schema_mismatch else "")
-            )
+            new_columns = len(set(self._draft.columns) - set(self._current.columns))
+            self.stats_label.setText(translate_ui_text(
+                "匹配 {matched} · 新增 {added} · 草稿问题 {issues} · 重复行 {duplicates} · {policy} · 新增列 {columns}"
+            ).format(matched=f"{matches:,}", added=f"{new:,}", issues=f"{identity_conflicts:,}",
+                     duplicates=f"{matches:,}", policy=translate_ui_text(policy_label), columns=f"{new_columns:,}"))
+            return
         else:
             self.stats_label.setText(
                 f"替换现有名单 · {len(self._current):,} 行 → "
@@ -1546,9 +1654,11 @@ class QtQcListImportPage(QWidget):
         self.delete_rows_button.setEnabled(
             draft_actions_enabled and not self._draft.empty
         )
+        self.add_row_button.setEnabled(draft_actions_enabled)
         self.delete_column_button.setEnabled(
             draft_actions_enabled
         )
+        self.rename_column_button.setEnabled(draft_actions_enabled)
         self.derive_button.setEnabled(
             not busy
             and not self._derive_busy
@@ -1571,6 +1681,7 @@ class QtQcListImportPage(QWidget):
             self.derived_column_dialog,
             self.delete_rows_dialog,
             self.delete_columns_dialog,
+            self.rename_column_dialog,
         ):
             if dialog is not None:
                 dialog.reject()

@@ -76,11 +76,15 @@ class TemplateService:
             )
         if old_name is not None:
             normalized_old = self._constant_name(old_name)
+            if normalized_old not in constants:
+                raise TemplateServiceError(
+                    f"unknown constant template: {normalized_old}"
+                )
             if normalized_old != normalized and normalized in constants:
                 raise TemplateServiceError(
                     f"constant template already exists: {normalized}"
                 )
-            constants.pop(normalized_old, None)
+            del constants[normalized_old]
         constants[normalized] = deepcopy(value)
         FileUtils.safe_json_save(
             self.constant_path,

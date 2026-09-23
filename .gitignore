@@ -57,3 +57,10 @@ dist/
 # 其他
 .understand-anything/
 .pytest_cache/
+
+# 安装根目录的运行时数据(独立于源码发布)
+/app_settings.json
+/constant_templates.json
+/modules/
+/project_backups/
+projects/*/RatingFiles/*.lock

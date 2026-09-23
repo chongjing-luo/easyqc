@@ -50,7 +50,7 @@ _OPERATORS_BY_KIND = {
         "isna",
         "notna",
     ),
-    ColumnKind.BOOLEAN: ("==", "!=", "isna", "notna"),
+    ColumnKind.BOOLEAN: ("==", "!=", "in", "not_in", "isna", "notna"),
     ColumnKind.DATETIME: (
         "==",
         "!=",

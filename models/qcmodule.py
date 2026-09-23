@@ -142,7 +142,7 @@ class QCModule:
     code_exe: dict[str, str] | None = None
     notes: str | None = None
     time: datetime | None = None
-    interper: str = "shell"
+    interper: str = "direct"
     control: bool = False
     showing: bool = True
     select_filter: str | None = None
@@ -171,7 +171,7 @@ class QCModule:
             else data.get("code_exe"),
             notes=data.get("notes"),
             time=_parse_datetime(data.get("time")),
-            interper=data.get("interper", "shell"),
+            interper=data.get("interper", "direct"),
             control=bool(data.get("control", False)),
             showing=bool(data.get("showing", True)),
             select_filter=data.get("select_filter"),

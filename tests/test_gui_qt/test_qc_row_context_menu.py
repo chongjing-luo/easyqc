@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pytest
+
 from PySide6.QtCore import QSettings
 
 from gui_qt.i18n import LanguageController
@@ -90,7 +92,7 @@ def test_shared_qc_row_menu_renders_disabled_modules_and_typed_record_actions(
     )
     qtbot.addWidget(menu)
 
-    assert menu.modules_menu.title() == "质控模块"
+    assert menu.modules_menu.title() == "打开质控页"
     assert menu.records_menu.title() == "已有质控记录"
     assert menu.module_actions["AnatQC"].isEnabled()
     assert not menu.module_actions["FuncQC"].isEnabled()
@@ -150,7 +152,7 @@ def test_pinned_and_unpinned_tables_resolve_the_same_right_clicked_identity(
     )
 
     assert identities == ["SUB002", "SUB002"]
-    assert workspace.table_view.selectionModel().selectedRows()[0].row() == 1
+    assert workspace.table_view.selectionModel().selectedIndexes()[0].row() == 1
 
 
 def test_qc_queue_uses_the_shared_context_menu_for_its_clicked_identity(
@@ -196,10 +198,66 @@ def test_qc_row_menu_switches_shell_text_to_english_without_translating_data(
     controller.set_language("en")
 
     assert [action.text() for action in menu.actions()] == [
-        "QC modules",
+        "Copy",
+        "Open QC page",
         "Existing QC records",
+        "Execute command only",
+        "Open QC page and execute command",
     ]
     assert menu.module_actions["AnatQC"].text() == "Anatomical quality"
     assert menu.module_actions["FuncQC"].toolTip() == (
         "This item is not in the module's independent QC list"
     )
+
+
+def test_five_actions_dispatch_distinct_callbacks_and_disable_missing(qtbot):
+    calls = []
+    context = _context("SUB001")
+    menu = QcRowContextMenu(
+        context, on_module=lambda entry: calls.append(("open", entry)),
+        on_record=lambda entry: calls.append(("record", entry)),
+        on_copy=lambda: calls.append(("copy", None)),
+        on_execute=lambda entry: calls.append(("execute", entry)),
+        on_open_execute=lambda entry: calls.append(("both", entry)),
+    )
+    qtbot.addWidget(menu)
+    assert [action.text() for action in menu.actions()] == [
+        "复制", "打开质控页", "已有质控记录", "仅执行命令", "打开质控页并执行命令",
+    ]
+    menu.copy_action.trigger()
+    menu.execute_actions["AnatQC"].trigger()
+    menu.open_execute_actions["AnatQC"].trigger()
+    assert calls == [("copy", None), ("execute", context.modules[0]), ("both", context.modules[0])]
+    missing = QcRowContextMenu(context, on_module=lambda _: None, on_record=lambda _: None)
+    qtbot.addWidget(missing)
+    assert not missing.copy_action.isEnabled()
+    assert not missing.execute_menu.isEnabled()
+    assert not missing.open_execute_menu.isEnabled()
+
+
+def test_linked_sources_are_exact_read_only_entries_inside_existing_menus(qtbot):
+    source = QcModuleMenuEntry("AnatQC", "Anatomical quality", True,
+                               read_only=True, easyqcid="SOURCE001", rater="alice")
+    record = QcRecordMenuEntry("SOURCE001", "AnatQC", "Anatomical quality", "alice")
+    context = QcRowContext("TARGET001", (), (), linked_modules=[source], linked_records=[record])
+    opened = []
+    menu = QcRowContextMenu(context, on_module=opened.append, on_record=opened.append)
+    qtbot.addWidget(menu)
+    assert isinstance(context.linked_modules, tuple)
+    assert isinstance(context.linked_records, tuple)
+    assert len(menu.actions()) == 5
+    action = menu.linked_module_actions[("SOURCE001", "AnatQC", "alice")]
+    assert all(value in action.text() for value in ("SOURCE001", "Anatomical quality", "alice"))
+    action.trigger()
+    menu.record_actions[record.key].trigger()
+    assert opened == [source, record]
+
+
+def test_linked_sources_do_not_relax_local_record_identity_validation():
+    record = QcRecordMenuEntry("SOURCE001", "AnatQC", "Anatomical quality", "alice")
+    with pytest.raises(ValueError, match="easyqcid"):
+        QcRowContext("TARGET001", (), (record,))
+    with pytest.raises(ValueError, match="来源"):
+        QcRowContext("TARGET001", (), (), linked_modules=(QcModuleMenuEntry("A", "A", True),))
+    with pytest.raises(ValueError, match="重复"):
+        QcRowContext("TARGET001", (), (), linked_records=(record, record))

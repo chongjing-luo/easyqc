@@ -43,7 +43,7 @@ _COMMON_OPERATORS = {"==", "!=", "isna", "notna", "in", "not_in"}
 _OPERATORS_BY_KIND = {
     ColumnKind.TEXT: _COMMON_OPERATORS | {"contains", "startswith", "endswith"},
     ColumnKind.NUMBER: _COMMON_OPERATORS | {">", ">=", "<", "<=", "between"},
-    ColumnKind.BOOLEAN: {"==", "!=", "isna", "notna"},
+    ColumnKind.BOOLEAN: _COMMON_OPERATORS,
     ColumnKind.DATETIME: _COMMON_OPERATORS | {">", ">=", "<", "<=", "between"},
 }
 
@@ -432,6 +432,13 @@ class TableViewService:
         if column == "easyqcid":
             return ColumnKind.TEXT
         if ptypes.is_bool_dtype(series.dtype):
+            return ColumnKind.BOOLEAN
+        # CSV booleans with blanks have object dtype but still contain real
+        # Boolean scalars. Do not coerce literal text or genuinely mixed cells.
+        if (
+            ptypes.is_object_dtype(series.dtype)
+            and ptypes.infer_dtype(series, skipna=True) == "boolean"
+        ):
             return ColumnKind.BOOLEAN
         if ptypes.is_numeric_dtype(series.dtype):
             return ColumnKind.NUMBER

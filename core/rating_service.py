@@ -19,7 +19,7 @@ from core.rating_identity import (
 )
 from core.rating_write_lock import rating_write_lock
 from models.project import Project
-from models.qcmodule import QCModule
+from models.qcmodule import QCModule, Score
 from models.rating import Rating
 from utils.file_utils import FileUtils
 
@@ -44,6 +44,23 @@ def _fsync_directory(path: Path) -> None:
         raise
 
 
+def _validate_score_domains(payload: dict[str, Any]) -> None:
+    """Validate selected values against this persisted snapshot, not live config."""
+
+    scores = payload.get("scores", {})
+    if not isinstance(scores, dict):
+        raise ValueError("rating scores must be an object")
+    for key, raw_score in scores.items():
+        if not isinstance(raw_score, dict):
+            raise ValueError(f"score {key} must include its saved options")
+        score = Score.from_legacy_dict(str(key), raw_score)
+        if score.value is not None and str(score.value) not in score.allowed_values:
+            raise ValueError(
+                f"score {key} value {score.value!r} is outside its saved options: "
+                f"{score.allowed_values}"
+            )
+
+
 def _load_rating_file(path: Path) -> Rating:
     payload = FileUtils.safe_json_load(path)
     if not isinstance(payload, dict):
@@ -52,6 +69,7 @@ def _load_rating_file(path: Path) -> Rating:
         raise ValueError("rating JSON must use schema_version 3")
     if "easyqcid" not in payload:
         raise ValueError("schema-v3 rating JSON requires easyqcid")
+    _validate_score_domains(payload)
     return Rating.from_legacy_dict(payload)
 
 
@@ -514,6 +532,7 @@ class RatingService:
 
         payload = rating.to_legacy_dict(module_snapshot)
         payload["schema_version"] = 3
+        _validate_score_domains(payload)
         rating_root = target_path.parents[2]
         safety_issue = RatingService._path_safety_issue(
             target_path,

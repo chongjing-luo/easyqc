@@ -270,16 +270,16 @@ def test_qt_main_window_uses_seven_direct_navigation_pages(qtbot, tmp_path) -> N
     assert getattr(window, "qc_controller", None) is None
     assert window.config_workspace.configuration is services.configuration_service
     assert _primary_navigation_labels(window) == [
-        "跨项目设置",
-        "项目选择",
+        "项目管理",
         "质控名单导入",
         "质控前名单",
         "常量设置",
         "质控模块",
         "质控结果",
     ]
-    assert window.cross_project_settings_page_index == 0
-    assert window.project_page_index == 1
+    assert window.navigation.count() == 6
+    assert window.cross_project_settings_page_index == 6
+    assert window.project_page_index == 0
     assert window.navigation.item(window.project_page_index).text() == ""
     assert (
         window.navigation.itemWidget(
@@ -287,7 +287,7 @@ def test_qt_main_window_uses_seven_direct_navigation_pages(qtbot, tmp_path) -> N
         )
         is window.project_navigation_content
     )
-    assert window.project_navigation_label.text() == "项目选择"
+    assert window.project_navigation_label.text() == "项目管理"
     assert window.project_navigation_context.text() == "SAMPLE"
     assert window.project_navigation_context.isVisibleTo(window.navigation)
     assert window.findChild(QLabel, "activeProjectSummary") is None
@@ -306,7 +306,7 @@ def test_qt_main_window_uses_seven_direct_navigation_pages(qtbot, tmp_path) -> N
     line_height = window.navigation.fontMetrics().lineSpacing()
     assert (
         window.navigation.item(
-            window.cross_project_settings_page_index
+            window.qc_list_import_page_index
         ).sizeHint().height()
         >= line_height + 16
     )
@@ -320,18 +320,30 @@ def test_qt_main_window_navigation_switches_exact_page(qtbot, tmp_path) -> None:
     window, _services = _window(qtbot, tmp_path)
 
     assert window.direct_pages == (
-        window.cross_project_settings_page,
         window.project_page,
         window.qc_list_import_page,
         window.pre_qc_list_page,
         window.constants_page,
         window.modules_page,
         window.results_page,
+        window.cross_project_settings_page,
     )
-    for row, page in enumerate(window.direct_pages):
+    for row, page in enumerate(window.direct_pages[:-1]):
         window.navigation.setCurrentRow(row)
         assert window.workspace_stack.currentIndex() == row
         assert window.workspace_stack.currentWidget() is page
+
+    qtbot.mouseClick(window.settings_button, Qt.LeftButton)
+    assert window.navigation.currentRow() == -1
+    assert window.workspace_stack.currentIndex() == (
+        window.cross_project_settings_page_index
+    )
+    assert window.workspace_stack.currentWidget() is (
+        window.cross_project_settings_page
+    )
+
+    window.navigation.setCurrentRow(window.project_page_index)
+    assert window.workspace_stack.currentWidget() is window.project_page
 
 
 def test_runtime_language_switch_updates_seven_pages_and_preserves_context(
@@ -372,14 +384,16 @@ def test_runtime_language_switch_updates_seven_pages_and_preserves_context(
     window.navigation.setCurrentRow(window.results_page_index)
     selected_page = window.workspace_stack.currentWidget()
 
-    assert window.language_button.text() == "English"
-    qtbot.mouseClick(window.language_button, Qt.LeftButton)
+    qtbot.mouseClick(window.settings_button, Qt.LeftButton)
+    settings_page = window.cross_project_settings_page
+    assert window.workspace_stack.currentWidget() is settings_page
+    assert settings_page.language_zh_radio.isChecked()
+    settings_page.language_en_radio.click()
 
     assert isinstance(window.language, LanguageController)
     assert window.language.language == "en"
     assert _primary_navigation_labels(window) == [
-        "Cross-project settings",
-        "Project selection",
+        "Project management",
         "QC list import",
         "Pre-QC list",
         "Constants",
@@ -387,13 +401,13 @@ def test_runtime_language_switch_updates_seven_pages_and_preserves_context(
         "QC results",
     ]
     assert window.navigation.item(window.project_page_index).text() == ""
-    assert window.project_navigation_label.text() == "Project selection"
+    assert window.project_navigation_label.text() == "Project management"
     assert window.project_navigation_context.text() == "SAMPLE"
     assert window.navigation.accessibleName() == "EasyQC feature navigation"
-    assert window.language_button.text() == "中文"
+    assert window.settings_button.text() == "Settings"
     assert (
-        window.language_button.accessibleName()
-        == "Switch the interface to Chinese"
+        window.settings_button.accessibleName()
+        == "Open cross-project settings"
     )
     assert window.workspace_stack.accessibleName() == "Current EasyQC page"
     assert window.config_workspace.project_state_preview.text() == "Open now"
@@ -408,6 +422,8 @@ def test_runtime_language_switch_updates_seven_pages_and_preserves_context(
     ]
     assert not hasattr(window.config_workspace, "remove_tag_button")
     assert window.current_context is context
+    assert window.navigation.currentRow() == -1
+    window.navigation.setCurrentRow(window.results_page_index)
     assert window.workspace_stack.currentWidget() is selected_page
     assert window.navigation.currentRow() == window.results_page_index
     assert table.applied_state is applied_state
@@ -431,8 +447,9 @@ def test_runtime_language_switch_updates_seven_pages_and_preserves_context(
         == "Sort priority 1 · Descending"
     )
 
-    qtbot.mouseClick(window.language_button, Qt.LeftButton)
-    assert _primary_navigation_labels(window)[0] == "跨项目设置"
+    settings_page.language_zh_radio.click()
+    assert _primary_navigation_labels(window)[0] == "项目管理"
+    assert window.language.language == "zh_CN"
     assert table.applied_state is applied_state
     assert table.result is table_result
     assert table.row_window is table_window
@@ -468,8 +485,9 @@ def test_navigation_can_collapse_and_restore_current_workspace(
     assert window.navigation_panel.maximumWidth() <= 52
     assert window.navigation_toggle_button.isVisible()
     assert not window.navigation.isVisible()
-    assert not window.language_bar.isVisible()
-    assert not hasattr(window, "settings_button")
+    assert not window.settings_bar.isVisible()
+    assert hasattr(window, "settings_button")
+    assert not hasattr(window, "language_button")
     assert (
         window.navigation_header.y()
         + window.navigation_toggle_button.y()
@@ -484,8 +502,8 @@ def test_navigation_can_collapse_and_restore_current_workspace(
     assert not window.navigation_collapsed
     assert window.navigation_panel.minimumWidth() >= 202
     assert window.navigation.isVisible()
-    assert window.language_bar.isVisible()
-    assert not hasattr(window, "settings_button")
+    assert window.settings_bar.isVisible()
+    assert window.settings_button.isVisible()
     assert (
         window.navigation_header.y()
         + window.navigation_toggle_button.y()
@@ -495,10 +513,7 @@ def test_navigation_can_collapse_and_restore_current_workspace(
     assert window.navigation.currentRow() == window.results_page_index
 
 
-def test_cross_project_navigation_page_owns_installation_execution_setting(
-    qtbot,
-    tmp_path,
-) -> None:
+def test_cross_project_settings_page_opens_without_execution_tab(qtbot, tmp_path) -> None:
     settings = QSettings(
         str(tmp_path / "shell-setting.ini"),
         QSettings.IniFormat,
@@ -515,43 +530,23 @@ def test_cross_project_navigation_page_owns_installation_execution_setting(
     window.show()
     qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
 
-    assert window.services.code_executor.shell_enabled is False
-    assert not hasattr(window, "settings_button")
-    window.navigation.setCurrentRow(window.cross_project_settings_page_index)
+    qtbot.mouseClick(window.settings_button, Qt.LeftButton)
     assert window.workspace_stack.currentWidget() is (
         window.cross_project_settings_page
     )
     page = window.cross_project_settings_page
-    page.tabs.setCurrentWidget(page.execution_tab)
-    page.shell_radio.click()
-    qtbot.mouseClick(page.save_execution_button, Qt.LeftButton)
-
-    assert window.services.code_executor.shell_enabled is True
-    assert services.template_service.shell_enabled() is True
-    settings.setValue("viewer/use_shell", False)
-    settings.sync()
-
-    replacement_services = build_app_services(tmp_path / "other-projects.json")
-    replacement = QtMainWindow(
-        replacement_services,
-        source=pd.DataFrame(columns=["easyqcid"]),
-        language=language,
-        settings=QSettings(
-            str(tmp_path / "shell-setting.ini"),
-            QSettings.IniFormat,
-        ),
-    )
-    qtbot.addWidget(replacement)
-    assert replacement.services.code_executor.shell_enabled is True
 
     language.set_language("en")
-    assert window.navigation.item(
-        window.cross_project_settings_page_index
-    ).text() == "Cross-project settings"
-    assert page.tabs.tabText(2) == "Command execution"
+    assert window.project_navigation_label.text() == "Project management"
+    assert window.settings_button.text() == "Settings"
+    assert [page.tabs.tabText(index) for index in range(3)] == [
+        "Constant templates",
+        "QC module templates",
+        "Language",
+    ]
 
 
-def test_single_language_button_toggles_without_losing_page_or_draft(
+def test_settings_language_toggle_without_losing_page_or_draft(
     qtbot,
     tmp_path,
 ) -> None:
@@ -565,11 +560,14 @@ def test_single_language_button_toggles_without_losing_page_or_draft(
     window.config_workspace.subjects_tab._install_draft(draft)
 
     assert window.findChild(QComboBox, "languageSelector") is None
-    assert window.language_button.text() == "English"
-    qtbot.mouseClick(window.language_button, Qt.LeftButton)
+    qtbot.mouseClick(window.settings_button, Qt.LeftButton)
+    settings_page = window.cross_project_settings_page
+    assert settings_page.language_zh_radio.isChecked()
+    settings_page.language_en_radio.click()
 
     assert window.language.language == "en"
-    assert window.language_button.text() == "中文"
+    assert settings_page.language_en_radio.isChecked()
+    window.navigation.setCurrentRow(window.qc_list_import_page_index)
     assert window.workspace_stack.currentWidget() is selected_page
     pd.testing.assert_frame_equal(
         window.config_workspace.subjects_tab.draft,
@@ -580,9 +578,10 @@ def test_single_language_button_toggles_without_losing_page_or_draft(
         window.current_context.subjects,
     )
 
-    qtbot.mouseClick(window.language_button, Qt.LeftButton)
+    settings_page.language_zh_radio.click()
     assert window.language.language == "zh_CN"
-    assert window.language_button.text() == "English"
+    assert settings_page.language_zh_radio.isChecked()
+    window.navigation.setCurrentRow(window.qc_list_import_page_index)
     assert window.workspace_stack.currentWidget() is selected_page
     pd.testing.assert_frame_equal(
         window.config_workspace.subjects_tab.draft,
@@ -1222,18 +1221,35 @@ def test_all_seven_pages_use_approved_runtime_vocabulary_without_repeated_titles
 
     assert window.windowTitle() == "EasyQC"
     assert window.shell_status_label.text() == "已加载项目：SAMPLE"
-    for row, (navigation_label, page) in enumerate(
-        zip(window.NAVIGATION_LABELS, window.direct_pages, strict=True)
-    ):
-        window.navigation.setCurrentRow(row)
+
+    def _check_page_vocabulary(navigation_label: str, page) -> None:
         qtbot.waitUntil(page.isVisible)
         visible = _visible_page_texts(page)
         normalized = "\n".join(visible).casefold()
+        # The approved destination "跨项目设置" may appear in help text; it
+        # must not be mistaken for the obsolete page label "项目设置".
+        normalized = normalized.replace("跨项目设置", "")
         assert not any(term.casefold() in normalized for term in forbidden), (
             navigation_label,
             visible,
         )
         assert navigation_label not in visible
+
+    for row, (navigation_label, page) in enumerate(
+        zip(
+            window.NAVIGATION_LABELS,
+            window.direct_pages[: len(window.NAVIGATION_LABELS)],
+            strict=True,
+        )
+    ):
+        window.navigation.setCurrentRow(row)
+        _check_page_vocabulary(navigation_label, page)
+
+    window._open_cross_project_settings()
+    _check_page_vocabulary(
+        window.settings_button.text(),
+        window.cross_project_settings_page,
+    )
 
     module_header = window.config_workspace.module_list_header.layout()
     project_header = window.config_workspace.project_list_header.layout()

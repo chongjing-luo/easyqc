@@ -199,6 +199,10 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
             "interprets the complete command using the current operating system."
         ),
     },
+    "settings.open_action": {
+        "zh_CN": "打开跨项目设置",
+        "en": "Open cross-project settings",
+    },
     "settings.save": {"zh_CN": "保存", "en": "Save"},
     "settings.shell_detail": {
         "zh_CN": "通过系统 Shell 执行完整命令，支持管道、重定向、变量展开和命令连接。",
@@ -279,13 +283,9 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
         ),
     },
     "cross.discard": {"zh_CN": "放弃更改", "en": "Discard changes"},
-    "cross.execution_saved": {
-        "zh_CN": "执行方式已保存",
-        "en": "Execution mode saved",
-    },
-    "cross.execution_tab": {
-        "zh_CN": "命令执行",
-        "en": "Command execution",
+    "cross.execution_mode_label": {
+        "zh_CN": "命令执行方式",
+        "en": "Execution mode",
     },
     "cross.export_module": {
         "zh_CN": "导出模块",
@@ -300,6 +300,20 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
         "en": "JSON files (*.json)",
     },
     "cross.label": {"zh_CN": "显示标签", "en": "Display label"},
+    "cross.language_en": {"zh_CN": "English", "en": "English"},
+    "cross.language_group": {
+        "zh_CN": "界面语言",
+        "en": "Interface language",
+    },
+    "cross.language_intro": {
+        "zh_CN": "选择界面显示语言。切换立即生效并自动保存。",
+        "en": (
+            "Choose the interface language. Switching applies immediately "
+            "and is saved automatically."
+        ),
+    },
+    "cross.language_tab": {"zh_CN": "语言", "en": "Language"},
+    "cross.language_zh": {"zh_CN": "中文", "en": "中文"},
     "cross.module_editor": {
         "zh_CN": "模块编辑",
         "en": "Module editor",
@@ -362,10 +376,6 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
     "cross.save_changes": {
         "zh_CN": "保存更改",
         "en": "Save changes",
-    },
-    "cross.save_execution": {
-        "zh_CN": "保存执行方式",
-        "en": "Save execution mode",
     },
     "cross.save_module": {
         "zh_CN": "保存模块",
@@ -438,7 +448,7 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
     "nav.import": {"zh_CN": "质控名单导入", "en": "QC list import"},
     "nav.modules": {"zh_CN": "质控模块", "en": "QC modules"},
     "nav.pre_qc": {"zh_CN": "质控前名单", "en": "Pre-QC list"},
-    "nav.projects": {"zh_CN": "项目选择", "en": "Project selection"},
+    "nav.projects": {"zh_CN": "项目管理", "en": "Project management"},
     "nav.results": {"zh_CN": "质控结果", "en": "QC results"},
     "startup.accessible": {"zh_CN": "EasyQC 启动", "en": "EasyQC startup"},
     "startup.loading_project": {
@@ -474,6 +484,33 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
 # lets them participate in runtime switching while owners are migrated to stable
 # message keys. Longer phrases are applied before shorter terms.
 SOURCE_TRANSLATIONS: Mapping[str, str] = {
+    "复制": "Copy",
+    "命令输出": "Command output",
+    "打开质控页": "Open QC page",
+    "仅执行命令": "Execute command only",
+    "打开质控页并执行命令": "Open QC page and execute command",
+    "增加空行": "Add empty row",
+    "命令或项目任务正在启动，请稍候": "A command or project task is starting. Please wait.",
+    "结果关联": "Result associations",
+    "关联规则": "Association rules",
+    "添加规则": "Add rule",
+    "删除规则": "Delete rule",
+    "关联名称": "Association name",
+    "来源模块": "Source module",
+    "来源评分者": "Source rater",
+    "来源匹配列": "Source match column",
+    "目标匹配列": "Target match column",
+    "来源筛选…": "Source filter…",
+    "目标筛选…": "Target filter…",
+    "选择来源字段并填写新列名；关联只读，不会复制或修改评分。": "Select source fields and name the new columns. Associations are read-only and do not copy or modify ratings.",
+    "新增规则后配置关联；应用时保存全部规则。": "Add a rule to configure associations; Apply saves all rules.",
+    "启用": "Enabled",
+    "来源字段": "Source field",
+    "输出列名": "Output column name",
+    "新关联": "New association",
+    "关联规则名称、模块、评分者和匹配列不能为空": "Association name, module, rater and match columns are required",
+    "至少选择一个来源字段并填写输出列名": "Select at least one source field and provide its output column name",
+    "输出列名不能重复或覆盖现有列": "Output column names must be unique and cannot replace existing columns",
     "EasyQC 功能导航": "EasyQC feature navigation",
     "EasyQC 当前功能页": "Current EasyQC page",
     "EasyQC 表格预览": "EasyQC table preview",
@@ -487,8 +524,8 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "仅查看，不修改评分": "View only; ratings cannot be changed",
     "质控标签": "QC tag",
     "质控备注": "QC notes",
-    "尚未打开项目，请在“项目选择”中创建或导入项目。": (
-        "No project is open. Create or import one in Project selection."
+    "尚未打开项目，请在“项目管理”中创建或导入项目。": (
+        "No project is open. Create or import one in Project management."
     ),
     "只读质控结果；筛选、排序和列设置作用于完整结果。": (
         "Read-only QC results. Filters, sorting and column settings apply to "
@@ -638,6 +675,12 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "用导入值更新": "Update from imported values",
     "去除重复": "Remove duplicates",
     "用导入行替换": "Replace with imported rows",
+    "写入方式：{mode}；冲突处理：{policy}。": "Import mode: {mode}; conflict policy: {policy}.",
+    "同名列对齐，新列保留；新行缺少的字段留空。": "Align matching columns and keep new columns; missing fields in new rows are left blank.",
+    "重复编号：只更新导入表提供的列（含空值），未提供的列保留旧值。": "Duplicate IDs: update supplied columns (including blanks); keep existing values in omitted columns.",
+    "重复编号整行跳过，不补写新字段。": "Skip duplicate rows entirely, without filling their new fields.",
+    "现有评分记录不会被删除。是否继续？": "Existing rating records will not be deleted. Continue?",
+    "匹配 {matched} · 新增 {added} · 草稿问题 {issues} · 重复行 {duplicates} · {policy} · 新增列 {columns}": "Matched {matched} · new {added} · draft issues {issues} · duplicate rows {duplicates} · {policy} · new columns {columns}",
     "确认写入质控前名单": "Confirm Pre-QC list write",
     "名单删除状态": "List deletion status",
     "质控名单导入": "QC list import",
@@ -698,6 +741,21 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "另一项名单删除任务仍在运行": "Another list deletion is still running.",
     "名单删除失败": "List deletion failed",
     "正在删除名单…": "Deleting list data…",
+    "重命名列": "Rename column",
+    "原列名": "Current column name",
+    "新列名": "New column name",
+    "只修改列名，数据值和评分记录保持不变。": "Only the column name changes; values and rating records are preserved.",
+    "请输入不同的非空新列名": "Enter a different, non-empty column name.",
+    "新列名已存在": "The new column name already exists.",
+    "新列名与常量冲突": "The new column name conflicts with a constant.",
+    "正在重命名列…": "Renaming column…",
+    "导入草稿列已重命名；尚未写入": "Import-draft column renamed; not yet written to the master list.",
+    "列已重命名；评分记录已保留": "Column renamed; rating records preserved.",
+    "列重命名失败": "Column rename failed",
+    "名单已变化，请重新打开重命名列": "The list has changed. Reopen Rename column.",
+    "导入草稿已变化，请重新打开重命名列": "The import draft has changed. Reopen Rename column.",
+    "所选模块已不存在，请重新选择": "The selected module no longer exists. Select it again.",
+    "未知占位符保持原样；多行脚本、分号和重定向需将本模块设为 Shell 执行。": "Unknown placeholders are preserved. For multi-line scripts, command separators and redirection, set this module to Shell execution.",
     "名单删除正在完成，请稍候": (
         "List deletion is finishing. Please wait."
     ),
@@ -800,10 +858,14 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "选择 CSV、Excel、TXT 或 LIST 文件": "Select a CSV, Excel, TXT or LIST file",
     "导入质控模块": "Import QC module",
     "导出质控模块": "Export QC module",
+    "删除质控模块": "Delete QC module",
+    "命令执行方式": "Execution mode",
+    "直接执行（shell=False）": "Direct execution (shell=False)",
+    "Shell 执行（shell=True）": "Shell execution (shell=True)",
     "新建项目": "New project",
     "导入项目": "Import project",
     "打开项目": "Open project",
-    "项目选择": "Project selection",
+    "项目管理": "Project management",
     "项目列表": "Projects",
     "项目信息": "Project details",
     "项目名称": "Project name",
@@ -1322,6 +1384,11 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "搜索精确 easyqcid": "Search exact easyqcid",
     "选择导入文件夹": "Select import folder",
     "选择导入文件": "Select import file",
+    "所有文件 (*)": "All files (*)",
+    "项目加载错误": "Project loading error",
+    "项目加载失败；请返回项目管理页重新加载。": (
+        "Project loading failed. Return to project management and reload the project."
+    ),
     "名单文件 (*.csv *.xlsx *.xls *.txt *.list)": (
         "List files (*.csv *.xlsx *.xls *.txt *.list)"
     ),
@@ -1414,6 +1481,15 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
 
 
 _SOURCE_PATTERNS = (
+    (
+        re.compile(r"^关联规则已保存，但界面刷新失败：(?P<value>.*)$", re.DOTALL),
+        "Association rules were saved, but refreshing the view failed: {value}",
+    ),
+    (
+        re.compile(r"^项目加载失败；请返回项目管理页重新加载。\n(?P<detail>[\s\S]+)$"),
+        "Project loading failed. Return to project management and reload "
+        "the project.\n{detail}",
+    ),
     (
         re.compile(r"^质控总名单：(?P<module>.*)$"),
         "Master QC list — {module}",
@@ -1819,8 +1895,12 @@ _SOURCE_PATTERNS = (
         "Filter condition {value} error",
     ),
     (
-        re.compile(r"^项目选择，当前项目 (?P<value>.*)$"),
-        "Project selection, current project {value}",
+        re.compile(r"^项目管理，当前项目 (?P<value>.*)$"),
+        "Project management, current project {value}",
+    ),
+    (
+        re.compile(r"^删除模块 (?P<value>.*)？该操作不可撤销。$"),
+        "Delete module {value}? This cannot be undone.",
     ),
     (
         re.compile(r"^项目目录不存在: (?P<value>.*)$"),

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSettings, Qt
 
-from core.code_executor import CodeExecutor
 from core.template_service import TemplateService
 from gui_qt.cross_project_settings_page import QtCrossProjectSettingsPage
 from gui_qt.i18n import LanguageController
@@ -16,26 +15,25 @@ def _page(qtbot, tmp_path):
     )
     language = LanguageController(settings=settings, language="zh_CN")
     templates = TemplateService(tmp_path / "install")
-    executor = CodeExecutor()
-    page = QtCrossProjectSettingsPage(templates, executor, language)
+    page = QtCrossProjectSettingsPage(templates, language)
     qtbot.addWidget(page)
     page.resize(980, 720)
     page.show()
-    return page, templates, executor, language
+    return page, templates, language
 
 
-def test_cross_project_page_constant_crud_execution_and_language(
+def test_cross_project_page_constant_crud_and_language(
     qtbot,
     tmp_path,
     monkeypatch,
 ) -> None:
-    page, templates, executor, language = _page(qtbot, tmp_path)
+    page, templates, language = _page(qtbot, tmp_path)
 
     assert page.tabs.count() == 3
     assert [page.tabs.tabText(index) for index in range(3)] == [
         "常量模板",
         "质控模块模板",
-        "命令执行",
+        "语言",
     ]
     page.constant_name.setText("DATA_ROOT")
     page.constant_value.setText("/data/images")
@@ -60,39 +58,66 @@ def test_cross_project_page_constant_crud_execution_and_language(
     assert "DATA_ROOT" in page.constant_error_label.text()
     assert templates.constants() == {"DATA_ROOT": "/edited"}
 
-    page.tabs.setCurrentWidget(page.execution_tab)
-    assert page.direct_radio.isChecked()
-    page.shell_radio.click()
-    qtbot.mouseClick(page.save_execution_button, Qt.LeftButton)
-    assert templates.shell_enabled() is True
-    assert executor.shell_enabled is True
-    assert page.execution_status_label.isVisible()
-
-    page.direct_radio.click()
     monkeypatch.setattr(
         templates,
-        "set_shell_enabled",
-        lambda _enabled: (_ for _ in ()).throw(OSError("settings write failed")),
+        "set_constant",
+        lambda *_args, **_kwargs: (
+            _ for _ in ()
+        ).throw(OSError("settings write failed")),
     )
-    qtbot.mouseClick(page.save_execution_button, Qt.LeftButton)
-    assert executor.shell_enabled is True
-    assert "settings write failed" in page.execution_error_label.text()
+    page.constant_name.setText("FAILING")
+    page.constant_value.setText("/nope")
+    qtbot.mouseClick(page.save_constant_button, Qt.LeftButton)
+    assert "settings write failed" in page.constant_error_label.text()
 
     language.set_language("en")
     assert [page.tabs.tabText(index) for index in range(3)] == [
         "Constant templates",
         "QC module templates",
-        "Command execution",
+        "Language",
     ]
     assert page.save_constant_button.text() == "Add template"
-    assert page.save_execution_button.text() == "Save execution mode"
+
+
+def test_cross_project_page_language_tab_switches_and_persists(
+    qtbot,
+    tmp_path,
+) -> None:
+    page, _templates, language = _page(qtbot, tmp_path)
+    page.tabs.setCurrentWidget(page.language_tab)
+
+    assert page.language_zh_radio.isChecked()
+    assert not page.language_en_radio.isChecked()
+    assert page.language_group.title() == "界面语言"
+    assert page.language_zh_radio.text() == "中文"
+    assert page.language_en_radio.text() == "English"
+
+    page.language_en_radio.click()
+    assert language.language == "en"
+    assert page.language_en_radio.isChecked()
+    assert not page.language_zh_radio.isChecked()
+    assert page.language_group.title() == "Interface language"
+    assert page.tabs.tabText(2) == "Language"
+
+    restored = LanguageController(
+        settings=QSettings(
+            str(tmp_path / "language.ini"),
+            QSettings.IniFormat,
+        )
+    )
+    assert restored.language == "en"
+
+    page.language_zh_radio.click()
+    assert language.language == "zh_CN"
+    assert page.language_zh_radio.isChecked()
+    assert page.language_group.title() == "界面语言"
 
 
 def test_constant_delete_action_requires_a_visible_selection(
     qtbot,
     tmp_path,
 ) -> None:
-    page, templates, _executor, _language = _page(qtbot, tmp_path)
+    page, templates, _language = _page(qtbot, tmp_path)
 
     assert page.constants_table.rowCount() == 0
     assert page.delete_constant_button.isEnabled() is False
@@ -118,11 +143,12 @@ def test_cross_project_page_module_editor_preserves_hidden_payload(
     qtbot,
     tmp_path,
 ) -> None:
-    page, templates, _executor, _language = _page(qtbot, tmp_path)
+    page, templates, _language = _page(qtbot, tmp_path)
     module = QCModule(
         name="AnatQC",
         label="Anatomical template",
         rater="rater_a",
+        interper="shell",
         scores={
             "1": Score("1", "Quality", "Poor,Good", "Poor,Good"),
             "2": Score("2", "Artifact", "None,Present", "None,Present"),
@@ -160,12 +186,15 @@ def test_cross_project_page_module_editor_preserves_hidden_payload(
     ]
     assert not page.module_editor.move_score_up_button.isEnabled()
     assert page.module_editor.move_score_down_button.isEnabled()
+    assert page.module_editor.shell_radio.isChecked()
+    assert not page.module_editor.direct_radio.isChecked()
 
     page.module_editor.score_table.setCurrentCell(1, 1)
     qtbot.mouseClick(page.module_editor.move_score_up_button, Qt.LeftButton)
     assert page.module_editor.score_table.currentRow() == 0
     assert page.module_editor.score_table.currentColumn() == 1
     candidate = page.module_editor.candidate()
+    assert candidate.interper == "shell"
     assert list(candidate.scores) == ["1", "2"]
     assert [score.label for score in candidate.scores.values()] == [
         "Artifact",
@@ -183,8 +212,12 @@ def test_cross_project_page_module_editor_preserves_hidden_payload(
     page.module_editor.clear()
     assert page.module_editor.score_table.rowCount() == 1
     assert page.module_editor.score_table.height() < two_rows_height
+    assert page.module_editor.direct_radio.isChecked()
     page.module_editor.load_module(module)
     page.module_editor.module_label.setText("Edited label")
+    page.module_editor.direct_radio.click()
+    assert page.module_editor.candidate().interper == "direct"
+    page.module_editor.shell_radio.click()
     page.module_editor.tag_editor.set_tags(("One", "One", "Two"))
     qtbot.mouseClick(page.module_editor.save_button, Qt.LeftButton)
 
@@ -199,6 +232,7 @@ def test_cross_project_page_module_editor_preserves_hidden_payload(
     assert saved.module.button == {"help": "SOP"}
     assert saved.module.code == "freeview {image}"
     assert saved.module.control is True
+    assert saved.module.interper == "shell"
     assert page.module_error_label.text() == ""
 
     broken = templates.module_repository.root / "broken.json"
@@ -218,7 +252,7 @@ def test_cross_project_score_move_actions_retranslate_and_refresh_state(
     qtbot,
     tmp_path,
 ) -> None:
-    page, _templates, _executor, language = _page(qtbot, tmp_path)
+    page, _templates, language = _page(qtbot, tmp_path)
     editor = page.module_editor
 
     assert editor.move_score_up_button.text() == "上移评分项"

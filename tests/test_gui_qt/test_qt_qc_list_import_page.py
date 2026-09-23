@@ -350,7 +350,7 @@ def test_import_preview_context_actions_edit_correct_draft_rows(
         configuration.current_project.table_dir / "easyqc_all.csv"
     ).read_bytes()
 
-    assert page.preview_table.selectionMode() == QAbstractItemView.SingleSelection
+    assert page.preview_table.selectionMode() == QAbstractItemView.ExtendedSelection
     assert page.preview_table.contextMenuPolicy() == Qt.CustomContextMenu
 
     page.preview_search.setText("ROW_D")
@@ -379,15 +379,13 @@ def test_import_preview_context_actions_edit_correct_draft_rows(
 
     menu = page.create_preview_context_menu(after_position=None)
     assert [action.text() for action in menu.actions()] == [
-        "增加空行",
-        "按条件删除行…",
+        "复制",
     ]
     language = get_or_create_language_controller()
     language.set_language("en")
     english_menu = page.create_preview_context_menu(after_position=None)
     assert [action.text() for action in english_menu.actions()] == [
-        "Add blank row",
-        "Delete rows by condition…",
+        "Copy",
     ]
     language.set_language("zh_CN")
     pd.testing.assert_frame_equal(configuration.subjects(), current)
@@ -522,6 +520,11 @@ def test_failed_apply_preserves_disk_active_list_and_draft(
     table_path = configuration.current_project.table_dir / "easyqc_all.csv"
     before_bytes = table_path.read_bytes()
 
+    def fail_save(*_args, **_kwargs):
+        raise OSError("synthetic append save failure")
+
+    monkeypatch.setattr(configuration.table_service, "save_table", fail_save)
+
     qtbot.mouseClick(page.apply_button, Qt.LeftButton)
     _wait(page, qtbot)
 
@@ -529,6 +532,54 @@ def test_failed_apply_preserves_disk_active_list_and_draft(
     pd.testing.assert_frame_equal(page.draft, draft)
     assert table_path.read_bytes() == before_bytes
     assert page.error_text
+
+
+@pytest.mark.parametrize("policy", ["deduplicate", "replace"])
+def test_append_different_columns_through_gui(qtbot, tmp_path, monkeypatch, policy):
+    _accept_questions(monkeypatch)
+    page, configuration, _current = _page(qtbot, tmp_path)
+    page._install_draft(pd.DataFrame({"easyqcid": ["SUB002", "SUB003"], "run": ["01", "02"]}))
+    page.write_mode_combo.setCurrentIndex(page.write_mode_combo.findData("append"))
+    page.conflict_policy_combo.setCurrentIndex(page.conflict_policy_combo.findData(policy))
+    assert "字段不一致" not in page.stats_label.text()
+    assert "新增列 1" in page.stats_label.text()
+    confirmation = page._import_confirmation_text("append", policy)
+    assert "同名列对齐" in confirmation
+    if policy == "replace":
+        assert "未提供的列保留旧值" in confirmation
+    qtbot.mouseClick(page.apply_button, Qt.LeftButton)
+    _wait(page, qtbot)
+    assert not page.error_text
+    result = configuration.subjects()
+    assert result.easyqcid.tolist() == ["SUB001", "SUB002", "SUB003"]
+    assert result.site.iloc[:2].tolist() == ["A", "B"]
+    assert pd.isna(result.loc[2, "site"])
+    assert result.loc[2, "run"] == "02"
+    if policy == "deduplicate":
+        assert pd.isna(result.loc[1, "run"])
+    else:
+        assert result.loc[1, "run"] == "01"
+
+
+def test_append_union_confirmation_and_stats_are_bilingual(qtbot, tmp_path):
+    page, _configuration, _current = _page(qtbot, tmp_path)
+    page._install_draft(pd.DataFrame({"easyqcid": ["SUB002"], "run": ["01"]}))
+    page.write_mode_combo.setCurrentIndex(page.write_mode_combo.findData("append"))
+    page.conflict_policy_combo.setCurrentIndex(page.conflict_policy_combo.findData("replace"))
+    language = get_or_create_language_controller()
+    try:
+        language.set_language("en")
+        page._update_stats()
+        assert "new columns 1" in page.stats_label.text()
+        confirmation = page._import_confirmation_text("append", "replace")
+        assert "omitted columns" in confirmation and "including blanks" in confirmation
+        assert "同名列" not in confirmation and "替换" not in confirmation
+        language.set_language("zh_CN")
+        page._update_stats()
+        assert "新增列 1" in page.stats_label.text()
+        assert "未提供的列保留旧值" in page._import_confirmation_text("append", "replace")
+    finally:
+        language.set_language("zh_CN")
 
 
 def test_preview_load_is_background_responsive_and_visible_language_is_neutral(
@@ -597,6 +648,7 @@ def test_import_preview_actions_share_one_horizontal_layout(qtbot, tmp_path) -> 
         page.sort_button,
         page.columns_button,
         page.derive_button,
+        page.rename_column_button,
         page.delete_rows_button,
         page.delete_column_button,
     )
@@ -612,7 +664,7 @@ def test_import_preview_actions_share_one_horizontal_layout(qtbot, tmp_path) -> 
     assert action_layout is not None
     assert isinstance(action_layout, QHBoxLayout)
     positions = [action_layout.indexOf(button) for button in action_buttons]
-    assert positions == list(range(positions[0], positions[0] + 6))
+    assert positions == list(range(positions[0], positions[0] + len(action_buttons)))
     assert all(button.isVisible() for button in action_buttons)
     assert all(
         button.width() >= button.fontMetrics().horizontalAdvance(button.text())

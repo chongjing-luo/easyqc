@@ -1,10 +1,12 @@
 from dataclasses import replace
+from io import StringIO
 
 import pandas as pd
 import pytest
 
 from core.table_view_service import QcIdentityError, TableViewError, TableViewService
 from models.table_view_state import (
+    ColumnKind,
     ColumnViewState,
     FilterCondition,
     FilterExpression,
@@ -89,6 +91,82 @@ def test_type_aware_filters_and_missing_operators() -> None:
     result = service.apply_state(state)
 
     assert _result_frame(service, result)["easyqcid"].tolist() == ["SUB002"]
+
+
+@pytest.mark.parametrize(
+    ("operator", "value", "expected"),
+    [
+        ("==", True, ["A"]),
+        ("==", "false", ["B"]),
+        ("!=", True, ["B"]),
+        ("!=", False, ["A"]),
+        ("in", ("true",), ["A"]),
+        ("in", (True, False), ["A", "B"]),
+        ("not_in", ("false",), ["A"]),
+        ("isna", None, ["C"]),
+        ("notna", None, ["A", "B"]),
+    ],
+)
+def test_nullable_csv_boolean_filter_preserves_rows_and_source(
+    operator, value, expected,
+) -> None:
+    source = pd.read_csv(StringIO("easyqcid,flag\nA,True\nB,False\nC,\n"))
+    original = source.copy(deep=True)
+    assert source["flag"].dtype == object
+    service = TableViewService(source)
+    result = service.apply_state(service.default_state().with_conditions(
+        (FilterCondition("flag", operator, value),)
+    ))
+
+    assert _result_frame(service, result)["easyqcid"].tolist() == expected
+    assert service.profiles[1].kind == ColumnKind.BOOLEAN
+    assert service.profiles[1].nullable
+    pd.testing.assert_frame_equal(source, original)
+
+
+@pytest.mark.parametrize("dtype", [bool, "boolean", object])
+def test_boolean_filter_supports_native_nullable_and_object_scalars(dtype) -> None:
+    values = [True, False] if dtype is bool else [True, False, pd.NA]
+    source = pd.DataFrame({
+        "easyqcid": [f"S{i}" for i in range(len(values))],
+        "flag": pd.Series(values, dtype=dtype),
+    })
+    service = TableViewService(source)
+    result = service.apply_state(service.default_state().with_conditions(
+        (FilterCondition("flag", "==", "true"),)
+    ))
+
+    assert service.profiles[1].kind == ColumnKind.BOOLEAN
+    assert _result_frame(service, result)["easyqcid"].tolist() == ["S0"]
+
+
+@pytest.mark.parametrize(
+    "values",
+    [["True", "False", None], [True, "False", None], [True, 1, None],
+     [None, pd.NA, float("nan")], []],
+)
+def test_object_text_mixed_and_empty_columns_are_not_misclassified_as_boolean(
+    values,
+) -> None:
+    source = pd.DataFrame({
+        "easyqcid": [f"S{i}" for i in range(len(values))],
+        "flag": pd.Series(values, dtype=object),
+    })
+
+    assert TableViewService(source).profiles[1].kind == ColumnKind.TEXT
+
+
+def test_literal_true_text_still_supports_text_filtering() -> None:
+    source = pd.DataFrame({
+        "easyqcid": ["A", "B", "C"],
+        "flag": ["True", "False", None],
+    })
+    service = TableViewService(source)
+    result = service.apply_state(service.default_state().with_conditions(
+        (FilterCondition("flag", "contains", "ru"),)
+    ))
+
+    assert _result_frame(service, result)["easyqcid"].tolist() == ["A"]
 
 
 def test_between_contains_membership_and_missing_are_supported() -> None:

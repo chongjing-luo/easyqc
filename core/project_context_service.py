@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import re
 from types import MappingProxyType
@@ -14,6 +14,7 @@ import pandas as pd
 from pandas.api import types as ptypes
 
 from core.code_executor import CodeExecutor
+from core.command_output import ViewerExecutionContext
 from core.configuration_service import ConfigurationError, ConfigurationService
 from core.event_bus import EventBus
 from core.module_filter import (
@@ -39,6 +40,8 @@ from models.qc_row_context import (
     QcRowContext,
 )
 from models.rating import Rating
+from models.result_association import AssociationSource, ResultAssociationRule
+from core.result_association import parse_association_rules, project_associations
 
 
 class ProjectContextError(RuntimeError):
@@ -60,6 +63,9 @@ class ProjectContextSnapshot:
     rating_positions_by_easyqcid: Mapping[str, tuple[int, ...]]
     table_view_service: TableViewService
     long_results_table_view_service: TableViewService
+    association_rules: tuple[ResultAssociationRule, ...] = ()
+    association_sources: Mapping[str, tuple[AssociationSource, ...]] = field(default_factory=dict)
+    view_revision: int = 0
 
     @property
     def has_project(self) -> bool:
@@ -79,6 +85,8 @@ class PreparedProjectContext:
     rating_positions_by_easyqcid: Mapping[str, tuple[int, ...]]
     table_view_service: TableViewService
     long_results_table_view_service: TableViewService
+    association_rules: tuple[ResultAssociationRule, ...] = ()
+    association_sources: Mapping[str, tuple[AssociationSource, ...]] = field(default_factory=dict)
 
 
 class ProjectContextService:
@@ -106,9 +114,11 @@ class ProjectContextService:
         self.configuration_service = configuration_service
         self.rating_service = rating_service
         self.code_executor = code_executor
+        self._command_executor = None
         self.event_bus = event_bus
         self._identity: tuple[str, Path] | None = None
         self._context_revision = 0
+        self._view_revision = 0
 
     @staticmethod
     def _canonical_path(path: Path) -> Path:
@@ -174,11 +184,13 @@ class ProjectContextService:
             if self._identity is not None:
                 self._identity = None
                 self._context_revision += 1
+            self._view_revision += 1
             return ProjectContextSnapshot(
                 project_names=prepared.project_names,
                 project_name="",
                 project_path=None,
                 context_revision=self._context_revision,
+                view_revision=self._view_revision,
                 subjects=prepared.subjects.copy(deep=True),
                 constants={},
                 modules=(),
@@ -199,11 +211,13 @@ class ProjectContextService:
         if identity != self._identity:
             self._identity = identity
             self._context_revision += 1
+        self._view_revision += 1
         return ProjectContextSnapshot(
             project_names=prepared.project_names,
             project_name=project.name,
             project_path=project_path,
             context_revision=self._context_revision,
+            view_revision=self._view_revision,
             subjects=prepared.subjects.copy(deep=True),
             constants=deepcopy(prepared.constants),
             modules=tuple(deepcopy(prepared.modules)),
@@ -213,6 +227,8 @@ class ProjectContextService:
             long_results_table_view_service=(
                 prepared.long_results_table_view_service
             ),
+            association_rules=prepared.association_rules,
+            association_sources=prepared.association_sources,
         )
 
     def _prepare_context(self, prepared: PreparedProjectLoad) -> PreparedProjectContext:
@@ -243,6 +259,17 @@ class ProjectContextService:
             ),
             subjects,
         )
+        rules = parse_association_rules(settings.get("result_associations", []))
+        association_sources = MappingProxyType({})
+        if rules:
+            projection = project_associations(subjects, ratings, rules)
+            values_by_identity = projection.columns.set_index("easyqcid")
+            for column in values_by_identity.columns:
+                if column in table_source.columns or column in long_results.columns:
+                    raise ConfigurationError(f"关联列与现有列重名: {column}")
+                table_source[column] = table_source["easyqcid"].map(values_by_identity[column])
+                long_results[column] = long_results["easyqcid"].map(values_by_identity[column])
+            association_sources = MappingProxyType(dict(projection.sources_by_easyqcid))
         return PreparedProjectContext(
             project_load=prepared,
             project_names=tuple(self.configuration_service.project_service.list_all()),
@@ -253,6 +280,8 @@ class ProjectContextService:
             rating_positions_by_easyqcid=self._index_rating_positions(ratings),
             table_view_service=TableViewService(table_source),
             long_results_table_view_service=TableViewService(long_results),
+            association_rules=rules,
+            association_sources=association_sources,
         )
 
     @classmethod
@@ -288,7 +317,9 @@ class ProjectContextService:
         collisions = sorted(set(map(str, result.columns)) & set(constants))
         if collisions:
             raise ConfigurationError(f"Subject column conflicts with constant: {collisions}")
-        result["easyqcid"] = list(identities)
+        # An empty Python list infers float64, which cannot join the textual
+        # identity column of an empty results table during first project load.
+        result["easyqcid"] = pd.Series(identities, index=result.index, dtype=object)
         return result
 
     @staticmethod
@@ -396,6 +427,7 @@ class ProjectContextService:
         )
         if (
             snapshot.context_revision != self._context_revision
+            or snapshot.view_revision != self._view_revision
             or snapshot_identity != self._identity
             or current_identity != self._identity
         ):
@@ -484,11 +516,42 @@ class ProjectContextService:
                 entry.rater.casefold(),
             )
         )
+        linked_modules = []
+        linked_records = []
+        local_record_keys = {record.key for record in record_entries}
+        seen = set()
+        for source in snapshot.association_sources.get(identity, ()):
+            key = (source.easyqcid, source.module_name, source.rater)
+            if key in seen:
+                continue
+            seen.add(key)
+            source_module = next((m for m in snapshot.modules if m.name == source.module_name), None)
+            if source_module is not None and not (
+                source.easyqcid == identity and source.rater == source_module.rater
+            ):
+                source_row = snapshot.subjects.loc[snapshot.subjects["easyqcid"].eq(source.easyqcid)]
+                enabled = source.easyqcid in resolve_module_filter_identities(
+                    source_row, normalize_module_filter(source_module.to_legacy_dict()),
+                )
+                linked_modules.append(QcModuleMenuEntry(
+                    module_name=source.module_name, label=str(source_module.label or source.module_name),
+                    enabled=enabled, disabled_reason="" if enabled else "该条目不在此模块的独立质控名单中",
+                    read_only=True, easyqcid=source.easyqcid, rater=source.rater,
+                ))
+            for rating in self._ratings_for_identity(snapshot, source.easyqcid):
+                if (rating.module_name == source.module_name and rating.rater == source.rater
+                        and key not in local_record_keys):
+                    linked_records.append(QcRecordMenuEntry(
+                        easyqcid=source.easyqcid, module_name=source.module_name,
+                        module_label=str((rating.module_payload or {}).get("label") or source.module_name),
+                        rater=source.rater, recorded_at=rating.time,
+                    ))
         try:
             return QcRowContext(
                 easyqcid=identity,
                 modules=tuple(module_entries),
                 records=tuple(record_entries),
+                linked_modules=tuple(linked_modules), linked_records=tuple(linked_records),
             )
         except (TypeError, ValueError) as exc:
             raise ProjectContextError(f"Invalid QC row context: {exc}") from exc
@@ -609,6 +672,8 @@ class ProjectContextService:
         initial_easyqcid: str,
         navigation_ids: tuple[str, ...] | None = None,
         rater_override: str | None = None,
+        code_executor: CodeExecutor | None = None,
+        initial_read_only: bool = False,
     ) -> QcWorkflowService:
         """Create one workflow from a validated snapshot and ordered identity queue."""
 
@@ -684,7 +749,7 @@ class ProjectContextService:
             rating_dir=rating_dir,
             constants=snapshot.constants,
             rating_service=self.rating_service,
-            code_executor=self.code_executor,
+            code_executor=code_executor if code_executor is not None else self.code_executor,
             initial_easyqcid=initial,
             event_bus=self.event_bus,
             event_context={
@@ -693,7 +758,53 @@ class ProjectContextService:
                 "project_path": str(snapshot.project_path),
             },
             queue_summaries=queue_summaries,
+            initial_read_only=initial_read_only,
         )
+
+    @property
+    def command_executor(self):
+        """Own command-only processes independently from the current QC session."""
+        if self._command_executor is None:
+            self._command_executor = CodeExecutor(
+                shell_enabled=self.code_executor.shell_enabled,
+                timeout=self.code_executor.timeout, system=self.code_executor.system,
+            )
+        return self._command_executor
+
+    def launch_row_command(self, snapshot, easyqcid, module_name, *, rater_override=None):
+        """Execute one applicable source row; never save a rating or close QC."""
+        context = self.qc_row_context(snapshot, easyqcid)
+        entry = next((m for m in context.modules if m.module_name == module_name), None)
+        if entry is None or not entry.enabled:
+            raise ProjectContextError("该条目不在此模块的独立质控名单中")
+        executor = self.command_executor
+        if isinstance(executor, CodeExecutor):
+            executor.set_shell_enabled(self.code_executor.shell_enabled)
+        workflow = self.create_qc_workflow(
+            snapshot, module_name=module_name, initial_easyqcid=easyqcid,
+            navigation_ids=(easyqcid,), rater_override=rater_override, code_executor=executor,
+        )
+        # Only the long-lived executor owns these processes. No ephemeral
+        # window is created and workflow.close() must not terminate them here.
+        plan = workflow.viewer_plan()
+        # This independent executor may own earlier, uncontrolled commands.
+        # A failed new launch must not call the QC session's broad cleanup.
+        return executor.start_commands(
+            plan.commands, control=plan.control, shell=plan.shell,
+            output_contexts={
+                key: ViewerExecutionContext(
+                    module_name=module_name,
+                    rater=workflow.current_module.rater or "",
+                    easyqcid=easyqcid, command_index=key,
+                )
+                for key in plan.commands
+            },
+        )
+
+    def close_row_commands(self) -> None:
+        if self._command_executor is not None:
+            self._command_executor.close()
+            self._command_executor = None
 
     def resolve_module_queue(
         self,

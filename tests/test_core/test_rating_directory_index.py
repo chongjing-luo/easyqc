@@ -20,7 +20,12 @@ def _payload(module_name: str, rater: str, easyqcid: str) -> dict[str, object]:
         "label": "Synthetic QC",
         "rater": rater,
         "easyqcid": easyqcid,
-        "scores": {"1": {"label": "Quality", "value": "Good"}},
+        "scores": {
+            "1": {
+                "label": "Quality", "num": "Bad,Good",
+                "num_": "Bad,Good", "value": "Good",
+            }
+        },
         "tags": {"1": {"label": "Artifact", "value": False}},
         "notes": "synthetic",
         "time": "2026-07-28 12:00:00",

@@ -25,7 +25,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.code_executor import CodeExecutor
 from core.module_repository import ModuleRecord
 from core.template_service import TemplateService
 from gui_qt.i18n import LanguageController, protect_user_text
@@ -47,7 +46,6 @@ class QtCrossProjectSettingsPage(QWidget):
     def __init__(
         self,
         templates: TemplateService,
-        executor: CodeExecutor,
         language: LanguageController,
         parent: QWidget | None = None,
     ) -> None:
@@ -56,20 +54,14 @@ class QtCrossProjectSettingsPage(QWidget):
             raise TypeError(
                 "QtCrossProjectSettingsPage requires TemplateService"
             )
-        if not isinstance(executor, CodeExecutor):
-            raise TypeError(
-                "QtCrossProjectSettingsPage requires CodeExecutor"
-            )
         if not isinstance(language, LanguageController):
             raise TypeError(
                 "QtCrossProjectSettingsPage requires LanguageController"
             )
         self.templates = templates
-        self.executor = executor
         self.language = language
         self._editing_constant_name: str | None = None
         self._editing_module_id: str | None = None
-        self._execution_saved = False
         self.setObjectName("crossProjectSettingsPage")
         self._build_ui()
         self.language.languageChanged.connect(self.retranslate_ui)
@@ -85,10 +77,10 @@ class QtCrossProjectSettingsPage(QWidget):
         layout.addWidget(self.tabs)
         self._build_constants_tab()
         self._build_modules_tab()
-        self._build_execution_tab()
+        self._build_language_tab()
         self.tabs.addTab(self.constants_tab, "")
         self.tabs.addTab(self.modules_tab, "")
-        self.tabs.addTab(self.execution_tab, "")
+        self.tabs.addTab(self.language_tab, "")
 
     def _new_tab_layout(self, tab: QWidget) -> QVBoxLayout:
         layout = QVBoxLayout(tab)
@@ -250,59 +242,32 @@ class QtCrossProjectSettingsPage(QWidget):
         self.module_list.currentRowChanged.connect(self._module_row_changed)
         self.module_editor.saveRequested.connect(self._save_module_template)
 
-    def _build_execution_tab(self) -> None:
-        self.execution_tab = QWidget(self.tabs)
-        self.execution_tab.setObjectName("commandExecutionTab")
-        layout = self._new_tab_layout(self.execution_tab)
+    def _build_language_tab(self) -> None:
+        self.language_tab = QWidget(self.tabs)
+        self.language_tab.setObjectName("languageSettingsTab")
+        layout = self._new_tab_layout(self.language_tab)
 
-        self.execution_intro = QLabel(self.execution_tab)
-        self.execution_intro.setProperty("role", "secondary")
-        self.execution_intro.setWordWrap(True)
-        layout.addWidget(self.execution_intro)
+        self.language_intro = QLabel(self.language_tab)
+        self.language_intro.setProperty("role", "secondary")
+        self.language_intro.setWordWrap(True)
+        layout.addWidget(self.language_intro)
 
-        self.execution_group = QGroupBox(self.execution_tab)
-        group = QVBoxLayout(self.execution_group)
+        self.language_group = QGroupBox(self.language_tab)
+        group = QVBoxLayout(self.language_group)
         group.setSpacing(CONTROL_SPACING)
-        self.direct_radio = QRadioButton(self.execution_group)
-        self.direct_detail = QLabel(self.execution_group)
-        self.direct_detail.setProperty("role", "secondary")
-        self.direct_detail.setWordWrap(True)
-        self.shell_radio = QRadioButton(self.execution_group)
-        self.shell_detail = QLabel(self.execution_group)
-        self.shell_detail.setProperty("role", "secondary")
-        self.shell_detail.setWordWrap(True)
-        group.addWidget(self.direct_radio)
-        group.addWidget(self.direct_detail)
-        group.addSpacing(CONTROL_SPACING)
-        group.addWidget(self.shell_radio)
-        group.addWidget(self.shell_detail)
-        layout.addWidget(self.execution_group)
-
-        self.execution_gate = QLabel(self.execution_tab)
-        self.execution_gate.setProperty("role", "secondary")
-        self.execution_gate.setWordWrap(True)
-        layout.addWidget(self.execution_gate)
+        self.language_zh_radio = QRadioButton(self.language_group)
+        self.language_en_radio = QRadioButton(self.language_group)
+        group.addWidget(self.language_zh_radio)
+        group.addWidget(self.language_en_radio)
+        layout.addWidget(self.language_group)
         layout.addStretch(1)
 
-        execution_footer = QHBoxLayout()
-        self.execution_error_label = QLabel(self.execution_tab)
-        self.execution_error_label.setProperty("role", "error")
-        self.execution_error_label.setWordWrap(True)
-        self.execution_status_label = QLabel(self.execution_tab)
-        self.execution_status_label.setProperty("role", "secondary")
-        self.save_execution_button = QPushButton(self.execution_tab)
-        set_button_role(self.save_execution_button, "primary")
-        execution_footer.addWidget(self.execution_error_label)
-        execution_footer.addStretch(1)
-        execution_footer.addWidget(self.execution_status_label)
-        execution_footer.addWidget(self.save_execution_button)
-        layout.addLayout(execution_footer)
-        self.save_execution_button.clicked.connect(self._save_execution_mode)
+        self.language_zh_radio.toggled.connect(self._apply_language_selection)
+        self.language_en_radio.toggled.connect(self._apply_language_selection)
 
     def refresh(self) -> None:
         self.refresh_constants()
         self.refresh_modules()
-        self.refresh_execution()
 
     @Slot()
     def refresh_constants(self) -> None:
@@ -352,7 +317,7 @@ class QtCrossProjectSettingsPage(QWidget):
             return
         self._editing_constant_name = name_item.text()
         self.constant_name.setText(name_item.text())
-        self.constant_name.setReadOnly(True)
+        self.constant_name.setReadOnly(False)
         self.constant_value.setText(value_item.text())
         self._set_constant_error("")
         self.retranslate_ui()
@@ -583,41 +548,18 @@ class QtCrossProjectSettingsPage(QWidget):
         self.export_module_button.setEnabled(selected)
         self.delete_module_button.setEnabled(selected)
 
-    def refresh_execution(self) -> None:
-        try:
-            enabled = self.templates.shell_enabled()
-        except Exception as exc:
-            self._set_execution_error(str(exc))
-            return
-        self.shell_radio.setChecked(enabled)
-        self.direct_radio.setChecked(not enabled)
-        self.executor.set_shell_enabled(enabled)
-        self._set_execution_error("")
-
     @Slot()
-    def _save_execution_mode(self) -> None:
-        enabled = self.shell_radio.isChecked()
-        try:
-            self.templates.set_shell_enabled(enabled)
-        except Exception as exc:
-            self._set_execution_error(str(exc))
-            return
-        self.executor.set_shell_enabled(enabled)
-        self._execution_saved = True
-        self._set_execution_error("")
-        self.retranslate_ui()
-
-    def _set_execution_error(self, message: str) -> None:
-        text = str(message).strip()
-        self.execution_error_label.setText(text)
-        self.execution_error_label.setVisible(bool(text))
+    def _apply_language_selection(self) -> None:
+        target = (
+            "zh_CN" if self.language_zh_radio.isChecked() else "en"
+        )
+        self.language.set_language(target)
 
     @Slot()
     def retranslate_ui(self) -> None:
         tr = self.language.tr
         self.tabs.setTabText(0, tr("cross.constants_tab"))
         self.tabs.setTabText(1, tr("cross.modules_tab"))
-        self.tabs.setTabText(2, tr("cross.execution_tab"))
         self.constant_name.setPlaceholderText(tr("cross.constant_name"))
         self.constant_value.setPlaceholderText(tr("cross.constant_value"))
         self.cancel_constant_button.setText(tr("cross.cancel"))
@@ -643,18 +585,13 @@ class QtCrossProjectSettingsPage(QWidget):
         self.delete_module_button.setText(tr("cross.delete_module"))
         self.module_empty_label.setText(tr("cross.no_modules"))
         self.module_editor.retranslate_ui()
-        self.execution_intro.setText(tr("settings.viewer_intro"))
-        self.execution_group.setTitle(tr("settings.viewer_group"))
-        self.direct_radio.setText(tr("settings.direct_title"))
-        self.direct_detail.setText(tr("settings.direct_detail"))
-        self.shell_radio.setText(tr("settings.shell_title"))
-        self.shell_detail.setText(tr("settings.shell_detail"))
-        self.execution_gate.setText(tr("settings.no_gate"))
-        self.save_execution_button.setText(tr("cross.save_execution"))
-        self.execution_status_label.setText(
-            tr("cross.execution_saved") if self._execution_saved else ""
-        )
-        self.execution_status_label.setVisible(self._execution_saved)
+        self.tabs.setTabText(2, tr("cross.language_tab"))
+        self.language_intro.setText(tr("cross.language_intro"))
+        self.language_group.setTitle(tr("cross.language_group"))
+        self.language_zh_radio.setText(tr("cross.language_zh"))
+        self.language_en_radio.setText(tr("cross.language_en"))
+        self.language_zh_radio.setChecked(self.language.language == "zh_CN")
+        self.language_en_radio.setChecked(self.language.language == "en")
         self.setAccessibleName(tr("cross.page_accessible"))
 
 

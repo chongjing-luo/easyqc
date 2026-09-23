@@ -229,7 +229,7 @@ def test_rating_save_writes_schema_version(tmp_path) -> None:
     fields the input carried are preserved unchanged (snapshot semantics)."""
     project = Project("SAMPLE", tmp_path / "easyqc_SAMPLE")
     service = RatingService(project)
-    rating = _synthetic_rating("example", "r1", "SUB001", "Good", "1", True)
+    rating = _synthetic_rating("example", "r1", "SUB001", "5", "1", True)
 
     saved_path = service.save_rating(rating)
 
@@ -239,7 +239,7 @@ def test_rating_save_writes_schema_version(tmp_path) -> None:
     assert payload["name"] == "example"
     assert payload["rater"] == "r1"
     assert payload["easyqcid"] == "SUB001"
-    assert payload["scores"]["1"]["value"] == "Good"
+    assert payload["scores"]["1"]["value"] == "5"
 
 
 def test_rating_save_never_preserves_an_undefined_future_schema_version(
@@ -253,7 +253,7 @@ def test_rating_save_never_preserves_an_undefined_future_schema_version(
         "example",
         "r1",
         "SUB001",
-        "Good",
+        "5",
         "1",
         True,
     )

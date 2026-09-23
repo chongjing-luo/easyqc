@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QRadioButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -125,6 +126,16 @@ class QtModuleTemplateEditor(QWidget):
         self.module_control = QCheckBox(self.viewer_group)
         viewer_layout.addWidget(self.module_code)
         viewer_layout.addWidget(self.module_control)
+        execution_row = QHBoxLayout()
+        self.execution_mode_label = QLabel(self.viewer_group)
+        self.direct_radio = QRadioButton(self.viewer_group)
+        self.shell_radio = QRadioButton(self.viewer_group)
+        self.direct_radio.setChecked(True)
+        execution_row.addWidget(self.execution_mode_label)
+        execution_row.addWidget(self.direct_radio)
+        execution_row.addWidget(self.shell_radio)
+        execution_row.addStretch(1)
+        viewer_layout.addLayout(execution_row)
         layout.addWidget(self.viewer_group)
 
         self.error_label = QLabel(self)
@@ -214,6 +225,8 @@ class QtModuleTemplateEditor(QWidget):
         self.module_rater.setText(module.rater or "")
         self.module_code.setPlainText(module.code or "")
         self.module_control.setChecked(bool(module.control))
+        self.shell_radio.setChecked(module.interper == "shell")
+        self.direct_radio.setChecked(module.interper != "shell")
         self.score_table.setRowCount(0)
         for score in module.scores.values():
             self._append_row(
@@ -244,6 +257,7 @@ class QtModuleTemplateEditor(QWidget):
         module.rater = self.module_rater.text().strip() or None
         module.code = self.module_code.toPlainText().strip() or None
         module.control = self.module_control.isChecked()
+        module.interper = "shell" if self.shell_radio.isChecked() else "direct"
         module.scores = {}
         for row in range(self.score_table.rowCount()):
             label_item = self.score_table.item(row, 0)
@@ -317,6 +331,9 @@ class QtModuleTemplateEditor(QWidget):
         self.viewer_group.setTitle(tr("cross.viewer"))
         self.module_code.setPlaceholderText(tr("cross.viewer_placeholder"))
         self.module_control.setText(tr("cross.viewer_control"))
+        self.execution_mode_label.setText(tr("cross.execution_mode_label"))
+        self.direct_radio.setText(tr("settings.direct_title"))
+        self.shell_radio.setText(tr("settings.shell_title"))
         self.discard_button.setText(tr("cross.discard"))
         self.save_button.setText(tr("cross.save_module"))
         self.setAccessibleName(tr("cross.module_editor_accessible"))

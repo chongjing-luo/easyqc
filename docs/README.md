@@ -11,7 +11,7 @@ EasyQC 是一个离线、可配置的人工视觉质量控制（manual visual qu
 | 第一次使用 | [项目概览](guide/01-project-overview.md) → [安装与项目管理](guide/04-installation-and-project-management.md) → [原生安装包](guide/12-native-installers.md) → [名单与表格](guide/05-qc-list-and-table-workspace.md) → [模块与查看器](guide/07-constants-modules-and-viewers.md) → [评分与结果](guide/08-qc-rating-review-and-results.md) |
 | 配置复杂工作流 | [核心逻辑与灵活性](guide/02-core-logic-and-flexibility.md) → [新增列与 EasyQC Formula](guide/06-derived-columns-and-easyqc-formula.md) → [模块与查看器](guide/07-constants-modules-and-viewers.md) |
 | 维护或审计代码 | [架构与数据流](guide/03-architecture-and-data-flow.md) → [可靠性、性能与平台](guide/09-reliability-performance-and-platforms.md) → [架构决策](architecture-decisions.md) |
-| 准备论文 | [项目概览](guide/01-project-overview.md) → [核心逻辑与灵活性](guide/02-core-logic-and-flexibility.md) → [论文 Agent 事实表](guide/11-paper-agent-fact-sheet.md) |
+| 准备论文 | [项目概览](guide/01-project-overview.md) → [核心逻辑与灵活性](guide/02-core-logic-and-flexibility.md) → [论文 Agent 事实表](guide/11-paper-agent-fact-sheet.md) → [方法与实现证据](guide/13-methods-implementation-evidence.md) |
 | 遇到错误 | [参考与故障排查](guide/10-reference-and-troubleshooting.md) |
 
 ## 十分钟理解 EasyQC
@@ -30,7 +30,7 @@ EasyQC 的最小模型由五类对象组成：
 ├── 当前评分快照 Rating snapshots
 │   └── 每个 (module_name, rater, easyqcid) 最多一个当前 JSON
 └── 可重建结果 Derived results
-    └── 评分 JSON + 质控总名单 → 宽格式结果表
+    └── 评分 JSON + 当前质控总名单 → 长表/宽表结果
 ```
 
 最重要的理解是：一行不必代表一个“受试者”。它可以代表一次扫描、一个访视、一个处理产物、一幅图像、一批实验输出，或任何需要人工检查的单位。`easyqcid` 标识的是质控条目，而不是强制的数据学实体类型。
@@ -59,7 +59,7 @@ EasyQC 的最小模型由五类对象组成：
 | 质控前名单 | 查看和整理总名单；筛选/排序只是视图，删除和新增列是显式数据变更 |
 | 常量设置 | 管理项目内、对所有行共享的变量 |
 | 质控模块 | 管理检查任务、独立队列、质控员、评分结构和查看器命令 |
-| 质控结果 | 从当前评分事实得到宽表视图，并刷新、筛选和导出 |
+| 质控结果 | 从当前评分事实与总名单得到长表/宽表视图，并切换、刷新、筛选和导出 |
 
 左侧导航可收起。底部语言按钮只显示目标语言：中文界面显示 `English`，英文界面显示“中文”；切换不会重建当前业务状态。
 
@@ -79,6 +79,7 @@ EasyQC 的最小模型由五类对象组成：
 | [10 参考与故障排查](guide/10-reference-and-troubleshooting.md) | 标识符、文件格式、常见错误、日志、备份和恢复 |
 | [11 论文 Agent 事实表](guide/11-paper-agent-fact-sheet.md) | 可安全引用的贡献、方法事实、证据、限制和术语 |
 | [12 原生安装包](guide/12-native-installers.md) | `.deb`、Windows Setup、macOS DMG 的下载、验证、安装、卸载和构建边界 |
+| [13 方法与实现证据](guide/13-methods-implementation-evidence.md) | 2026-09-15 方法核对、源码/测试入口、快照与长宽表边界 |
 | [架构决策](architecture-decisions.md) | 已接受的长期工程取舍 |
 
 ## 事实状态怎么读

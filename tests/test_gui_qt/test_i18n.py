@@ -50,7 +50,7 @@ def test_language_controller_defaults_to_chinese_and_exposes_two_languages(tmp_p
 
     assert controller.language == DEFAULT_LANGUAGE == "zh_CN"
     assert controller.supported_languages == SUPPORTED_LANGUAGES == ("zh_CN", "en")
-    assert controller.tr("nav.projects") == "项目选择"
+    assert controller.tr("nav.projects") == "项目管理"
 
 
 def test_language_change_is_immediate_signalled_once_and_persisted(tmp_path, qtbot):
@@ -63,7 +63,7 @@ def test_language_change_is_immediate_signalled_once_and_persisted(tmp_path, qtb
     controller.set_language("en")
 
     assert controller.language == "en"
-    assert controller.tr("nav.projects") == "Project selection"
+    assert controller.tr("nav.projects") == "Project management"
     assert changed == ["en"]
     settings.sync()
     assert LanguageController(settings=_settings(tmp_path)).language == "en"
@@ -191,7 +191,7 @@ def test_registered_widget_tree_switches_without_reconstruction(qtbot, tmp_path)
     root.setObjectName("localizedRoot")
     qtbot.addWidget(root)
     layout = QVBoxLayout(root)
-    label = QLabel("项目选择", root)
+    label = QLabel("项目管理", root)
     label.setAccessibleName("项目状态")
     button = QPushButton("打开项目", root)
     layout.addWidget(label)
@@ -203,7 +203,7 @@ def test_registered_widget_tree_switches_without_reconstruction(qtbot, tmp_path)
     controller.set_language("en")
 
     assert id(label) == identity
-    assert label.text() == "Project selection"
+    assert label.text() == "Project management"
     assert label.accessibleName() == "Project status"
     assert button.text() == "Open project"
 

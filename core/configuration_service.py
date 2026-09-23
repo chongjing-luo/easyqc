@@ -289,11 +289,7 @@ class ConfigurationService:
         suffix = source.suffix.casefold()
         try:
             if suffix == ".csv":
-                frame = pd.read_csv(
-                    source,
-                    encoding="utf-8",
-                    converters={"easyqcid": lambda value: value},
-                )
+                frame = self.table_service.read_csv(source)
             elif suffix in {".xlsx", ".xls"}:
                 frame = pd.read_excel(
                     source,
@@ -440,6 +436,7 @@ class ConfigurationService:
         ):
             raise TypeError("expected_revision must be a revision string or None")
         validated = self.validate_subjects(frame)
+        self._validate_association_list_candidate(validated)
         self.table_service.save_table(
             self._require_project(),
             TABLE_ALL,
@@ -535,6 +532,33 @@ class ConfigurationService:
         )
         return len(normalized)
 
+    def rename_subject_column(
+        self, old_name: str, new_name: str, *, notify: bool = True,
+    ) -> int:
+        """Rename an ordinary master column; never rewrite modules or ratings.
+
+        Preserve values/types/order. Invalid/conflicting names fail before the
+        existing revision-checked atomic table write. Return one on success.
+        """
+
+        if not isinstance(old_name, str) or not isinstance(new_name, str):
+            raise ConfigurationError("列名必须是文本")
+        new_name = new_name.strip()
+        if not new_name or old_name == new_name:
+            raise ConfigurationError("请输入不同的非空新列名")
+        if old_name == "easyqcid":
+            raise ConfigurationError("质控前名单不能重命名 easyqcid")
+        snapshot = self._subjects_snapshot()
+        assert snapshot.dataframe is not None
+        frame = snapshot.dataframe
+        if old_name not in frame.columns:
+            raise ConfigurationError(f"质控前名单列不存在或已变化: {old_name}")
+        if new_name in frame.columns or new_name in self.constants():
+            raise ConfigurationError(f"列名与已有列或常量冲突: {new_name}")
+        candidate = TableTransformEngine().rename_columns(frame, {old_name: new_name})
+        self.replace_subjects(candidate, notify=notify, expected_revision=snapshot.revision)
+        return 1
+
     def derive_subject_column(
         self,
         request: DerivedColumnFormula,
@@ -557,6 +581,7 @@ class ConfigurationService:
                 request,
             )
             frame = self.validate_subjects(frame)
+            self._validate_association_list_candidate(frame)
         except (ArithmeticError, TypeError, ValueError) as exc:
             raise ConfigurationError(str(exc)) from exc
         self.table_service.save_table(
@@ -576,11 +601,7 @@ class ConfigurationService:
         mode: str = "replace",
         notify: bool = True,
     ) -> None:
-        frame = pd.read_csv(
-            path,
-            encoding="utf-8",
-            converters={"easyqcid": lambda value: value},
-        )
+        frame = self.table_service.read_csv(path)
         if mode == "replace":
             self.replace_subjects(frame, notify=notify)
         else:
@@ -706,18 +727,24 @@ class ConfigurationService:
         *,
         conflict_policy: str,
     ) -> pd.DataFrame:
-        """Append schema-compatible rows using one duplicate-identity policy."""
+        """Append a column union; replacements touch only supplied columns.
 
-        if set(current.columns) != set(incoming.columns):
-            raise ConfigurationError("追加行要求导入名单与现有名单包含相同字段")
-        ordered = incoming.loc[:, current.columns]
+        Inputs are validated lists. Return a detached candidate, without I/O;
+        omitted fields retain their values, while explicit nulls replace them.
+        """
+
+        columns = [*current.columns, *(c for c in incoming.columns if c not in current.columns)]
+        # Object alignment avoids integer-to-float coercion from absent columns,
+        # and supports replacing numeric cells with explicit text or nulls.
+        aligned = current.reindex(columns=columns, fill_value=pd.NA).astype(object)
+        ordered = incoming.reindex(columns=columns, fill_value=pd.NA).astype(object)
         current_ids = current["easyqcid"].tolist()
         current_id_set = set(current_ids)
         new_rows = ordered.loc[~ordered["easyqcid"].isin(current_id_set)]
         if conflict_policy == "deduplicate":
-            base = current
+            base = aligned
         else:
-            base = current.set_index("easyqcid", drop=False)
+            base = aligned.set_index("easyqcid", drop=False)
             replacements = ordered.set_index("easyqcid", drop=False)
             matching = [
                 identity
@@ -725,9 +752,9 @@ class ConfigurationService:
                 if identity in replacements.index
             ]
             if matching:
-                base.loc[matching, current.columns] = replacements.loc[
+                base.loc[matching, incoming.columns] = replacements.loc[
                     matching,
-                    current.columns,
+                    incoming.columns,
                 ].to_numpy()
             base = base.reset_index(drop=True)
         return pd.concat([base, new_rows], ignore_index=True)
@@ -815,12 +842,10 @@ class ConfigurationService:
             )
             return
         if mode == "rows":
-            if set(current.columns) != set(incoming.columns):
-                raise ConfigurationError("Row merge requires the same columns")
-            candidate = pd.concat(
-                [current, incoming.loc[:, current.columns]],
-                ignore_index=True,
-            )
+            duplicates = set(current["easyqcid"]) & set(incoming["easyqcid"])
+            if duplicates:
+                raise ConfigurationError(f"质控名单包含重复 easyqcid: {sorted(duplicates)}")
+            candidate = self._append_subject_import(current, incoming, conflict_policy="deduplicate")
         elif mode == "columns":
             overlap = sorted((set(current.columns) & set(incoming.columns)) - {"easyqcid"})
             if overlap:
@@ -838,6 +863,78 @@ class ConfigurationService:
         if self.current_project is None:
             return {}
         return deepcopy(dict(self.project_service.settings.get("constants", {})))
+
+    def result_associations(self):
+        """Read detached rules; ordinary lists and rating files stay authoritative."""
+        from core.result_association import parse_association_rules
+
+        return parse_association_rules(self.project_service.settings.get("result_associations", []))
+
+    def _validate_association_list_candidate(self, frame: pd.DataFrame) -> None:
+        """Protect rule dependencies before a list write, without reading ratings."""
+        from models.table_view_state import filter_expression_from_json_object
+
+        columns = set(frame.columns)
+        for rule in self.result_associations():
+            required = {rule.source_key, rule.target_key}
+            for payload in (rule.source_filter, rule.target_filter):
+                expression = filter_expression_from_json_object(payload)
+                required.update(condition.column for group in expression.groups
+                                for condition in group.conditions if condition.enabled)
+            missing = required - columns
+            collisions = {name for _, name in rule.fields} & columns
+            if missing or collisions:
+                raise ConfigurationError(
+                    f"请先修改结果关联 {rule.name!r}；缺少关联列 {sorted(missing)}，重名列 {sorted(collisions)}"
+                )
+
+    def save_result_associations(self, payload, *, expected_state=None, notify=True) -> None:
+        """Validate one complete rule set before an optimistic atomic settings write.
+
+        Input is rule JSON or typed rules. Output is a persisted rule set; no
+        ordinary columns or rating files are changed. Invalid/stale candidates
+        raise and preserve previous settings.
+        """
+        from core.rating_service import RatingService
+        from core.result_association import parse_association_rules, project_associations
+
+        self._require_project()
+        expected = expected_state or self.capture_settings_state()
+        candidate = deepcopy(expected.settings)
+        serialized = [item.to_dict() if hasattr(item, "to_dict") else item for item in payload]
+        rules = parse_association_rules(serialized)
+        project = self.current_project
+        if project.name != expected.project_name or project.path != expected.project_path:
+            raise ConfigurationError("Project context changed before association save")
+        subjects = self.subjects()
+        state = RatingService(project).load_state(subjects)
+        modules = {
+            item["name"]: QCModule.from_legacy_dict(item)
+            for item in candidate["qcmodule"].values()
+        }
+        for rule in rules:
+            module = modules.get(rule.source_module)
+            historical = [r for r in state.ratings if r.module_name == rule.source_module]
+            if module is None and not historical:
+                raise ConfigurationError(f"Unknown association module: {rule.source_module}")
+            fields = {"notes"}
+            if module is not None:
+                fields.update(f"score{key}" for key in module.scores)
+                fields.update(f"tag{key}" for key in module.tags)
+            for rating in historical:
+                fields.update(f"score{key}" for key in rating.scores)
+                fields.update(f"tag{key}" for key in rating.tags)
+            if any(name not in fields for name, _ in rule.fields):
+                raise ConfigurationError(f"Unknown association field in {rule.name}")
+        projection = project_associations(subjects, state.ratings, rules)
+        reserved = set(state.qctable.columns) | {"module_name", "rater", "notes", "time"}
+        collision = (set(projection.columns.columns) - {"easyqcid"}) & reserved
+        if collision:
+            raise ConfigurationError(f"关联列与现有结果列重名: {sorted(collision)}")
+        candidate["result_associations"] = [rule.to_dict() for rule in rules]
+        self.project_service.commit_settings(
+            candidate, expected_state=expected, change_event="settings_saved", notify=notify,
+        )
 
     def _settings_candidate(self) -> dict[str, Any]:
         self._require_project()
@@ -991,6 +1088,13 @@ class ConfigurationService:
         position = len(payloads) if index is None else max(0, min(len(payloads), int(index)))
         payloads.insert(position, self._normalized_module_payload(module))
         self._commit_module_payloads(payloads)
+
+    def create_module(self, module: QCModule) -> None:
+        """Commit a complete new module once; failed validation/writes add nothing."""
+
+        payload = self._normalized_module_payload(module)
+        payloads = [item.to_legacy_dict() for item in self.modules()]
+        self._commit_module_payloads([*payloads, payload])
 
     def save_module(
         self,

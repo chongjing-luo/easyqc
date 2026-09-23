@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSizePolicy,
     QSplitter,
@@ -79,8 +80,8 @@ from gui_qt.template_copy_dialogs import (
     ConstantTemplateCopyDialog,
     ModuleTemplateCopyDialog,
 )
-from gui_qt.theme import set_button_role
-from models.qcmodule import Score, Tag
+from gui_qt.theme import CONTROL_SPACING, set_button_role
+from models.qcmodule import QCModule, Score, Tag
 from models.table_view_state import FilterExpression, TableViewState
 
 
@@ -157,6 +158,8 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_template_dialog: ModuleTemplateCopyDialog | None = None
         self._loading = False
         self._selected_module_name: str | None = None
+        self._editing_constant_name: str | None = None
+        self._constant_project_path: str | None = None
         self._module_form_baseline: tuple | None = None
         self.module_start_buttons: dict[str, QPushButton] = {}
         self._module_filter_subjects = pd.DataFrame(columns=["easyqcid"])
@@ -706,6 +709,13 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_viewer_title.setObjectName("moduleViewerTitle")
         self.module_viewer_title.setProperty("role", "sectionTitle")
         viewer_layout.addWidget(self.module_viewer_title)
+        self.module_command_hint = QLabel(
+            "未知占位符保持原样；多行脚本、分号和重定向需将本模块设为 Shell 执行。",
+            self.module_viewer_section,
+        )
+        self.module_command_hint.setWordWrap(True)
+        self.module_command_hint.setProperty("role", "secondary")
+        viewer_layout.addWidget(self.module_command_hint)
         self.module_code = QPlainTextEdit(self.module_viewer_section)
         self.module_code.setObjectName("moduleViewerCommand")
         self.module_code.setPlaceholderText(
@@ -727,16 +737,36 @@ class QtProjectConfigWorkspace(QWidget):
             self.module_viewer_section,
         )
         viewer_layout.addWidget(self.module_control)
+        execution_row = QHBoxLayout()
+        self.module_execution_label = QLabel(
+            "命令执行方式",
+            self.module_viewer_section,
+        )
+        self.module_execution_label.setProperty("role", "secondary")
+        execution_row.addWidget(self.module_execution_label)
+        self.module_direct_radio = QRadioButton(
+            "直接执行（shell=False）",
+            self.module_viewer_section,
+        )
+        self.module_shell_radio = QRadioButton(
+            "Shell 执行（shell=True）",
+            self.module_viewer_section,
+        )
+        self.module_direct_radio.setChecked(True)
+        execution_row.addWidget(self.module_direct_radio)
+        execution_row.addWidget(self.module_shell_radio)
+        execution_row.addStretch(1)
+        viewer_layout.addLayout(execution_row)
         editor.addWidget(self.module_viewer_section)
 
-        self.module_actions_toolbar = QToolBar("模块编辑操作", editor_widget)
+        self.module_actions_toolbar = QToolBar("模块编辑操作", self.modules_tab)
         self.module_actions_toolbar.setObjectName("configModuleActions")
         self.module_actions_toolbar.setAccessibleName("质控模块编辑操作")
         self.module_actions_toolbar.setMovable(False)
         self.module_actions_toolbar.setFloatable(False)
         self.module_actions_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self.module_actions_toolbar.setSizePolicy(
-            QSizePolicy.Minimum,
+            QSizePolicy.Preferred,
             QSizePolicy.Fixed,
         )
         self.delete_module_action, self.delete_module_button = self._add_toolbar_action(
@@ -772,10 +802,21 @@ class QtProjectConfigWorkspace(QWidget):
         self.save_module_button.setObjectName("primaryAction")
         set_button_role(self.save_module_button, "primary")
         set_button_role(self.delete_module_button, "danger")
-        editor.addWidget(self.module_actions_toolbar)
         self.module_editor_scroll.setWidget(editor_widget)
+        editor_pane = QWidget(self.modules_tab)
+        editor_pane.setObjectName("configModuleEditorPane")
+        editor_pane_layout = QVBoxLayout(editor_pane)
+        editor_pane_layout.setContentsMargins(0, 0, 0, 6)
+        editor_pane_layout.setSpacing(CONTROL_SPACING)
+        editor_pane_layout.addWidget(self.module_editor_scroll, 1)
+        module_actions_row = QWidget(editor_pane)
+        module_actions_row.setObjectName("configModuleActionsRow")
+        module_actions_layout = QHBoxLayout(module_actions_row)
+        module_actions_layout.setContentsMargins(12, 0, 12, 0)
+        module_actions_layout.addWidget(self.module_actions_toolbar)
+        editor_pane_layout.addWidget(module_actions_row)
         self.module_splitter.addWidget(left_panel)
-        self.module_splitter.addWidget(self.module_editor_scroll)
+        self.module_splitter.addWidget(editor_pane)
         self.module_splitter.setCollapsible(0, False)
         self.module_splitter.setCollapsible(1, False)
         self.module_splitter.setStretchFactor(0, 2)
@@ -995,6 +1036,11 @@ class QtProjectConfigWorkspace(QWidget):
         self.subjects_tab.refresh_current(frame)
 
     def _refresh_constants(self, constants: dict | None = None) -> None:
+        project = self.configuration.current_project
+        project_path = str(project.path) if project is not None else None
+        if project_path != self._constant_project_path:
+            self._reset_constant_form()
+            self._constant_project_path = project_path
         items = list(
             (self.configuration.constants() if constants is None else constants).items()
         )
@@ -1122,6 +1168,7 @@ class QtProjectConfigWorkspace(QWidget):
             self.tag_editor.tags(),
             self.module_code.toPlainText().strip(),
             self.module_control.isChecked(),
+            self.module_shell_radio.isChecked(),
         )
 
     def _module_filter_write_allowed(self) -> bool:
@@ -1731,8 +1778,9 @@ class QtProjectConfigWorkspace(QWidget):
         value_item = self.constants_table.item(row, 1)
         if name_item is None or value_item is None:
             return
+        self._editing_constant_name = name_item.text()
         self.constant_name.setText(name_item.text())
-        self.constant_name.setReadOnly(True)
+        self.constant_name.setReadOnly(False)
         self.constant_value.setText(value_item.text())
         self.save_constant_button.setText("保存")
         self.cancel_constant_button.show()
@@ -1740,6 +1788,7 @@ class QtProjectConfigWorkspace(QWidget):
         self.constant_value.selectAll()
 
     def _reset_constant_form(self) -> None:
+        self._editing_constant_name = None
         self.constant_name.setReadOnly(False)
         self.constant_name.clear()
         self.constant_value.clear()
@@ -1753,10 +1802,15 @@ class QtProjectConfigWorkspace(QWidget):
 
     def _save_constant(self) -> None:
         try:
-            self.configuration.set_constant(
-                self.constant_name.text(),
-                self.constant_value.text(),
-            )
+            if self._editing_constant_name is None:
+                self.configuration.add_constant(
+                    self.constant_name.text(), self.constant_value.text(),
+                )
+            else:
+                self.configuration.update_constant(
+                    self._editing_constant_name,
+                    self.constant_name.text(), self.constant_value.text(),
+                )
         except Exception as exc:
             self._set_constant_error(str(exc))
             return
@@ -1776,7 +1830,7 @@ class QtProjectConfigWorkspace(QWidget):
         except Exception as exc:
             self._set_constant_error(str(exc))
             return
-        if self.constant_name.text() == name:
+        if self._editing_constant_name == name:
             self._reset_constant_form()
         self._set_constant_error("")
         self._refresh_constants()
@@ -1850,6 +1904,8 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_rater.setToolTip(module.rater or "")
         self.module_code.setPlainText(module.code or "")
         self.module_control.setChecked(module.control)
+        self.module_shell_radio.setChecked(module.interper == "shell")
+        self.module_direct_radio.setChecked(module.interper != "shell")
         self.score_table.setRowCount(len(module.scores))
         for row, score in enumerate(module.scores.values()):
             label_item = QTableWidgetItem(score.label or "")
@@ -1879,6 +1935,7 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_rater.setToolTip("")
         self.module_code.clear()
         self.module_control.setChecked(False)
+        self.module_direct_radio.setChecked(True)
         self.score_table.setRowCount(1)
         self.score_table.setItem(0, 0, QTableWidgetItem("质量"))
         self.score_table.setItem(0, 1, QTableWidgetItem("差,一般,好"))
@@ -1995,27 +2052,31 @@ class QtProjectConfigWorkspace(QWidget):
                 label=tag_label.strip(),
             )
         if self._selected_module_name is None:
-            if self.add_module(name, label):
-                module = next(item for item in self.configuration.modules() if item.name == name)
-            else:
-                return
+            module = QCModule(name=name, label=label)
         else:
             module = next(
-                item for item in self.configuration.modules() if item.name == self._selected_module_name
+                (item for item in self.configuration.modules() if item.name == self._selected_module_name),
+                None,
             )
+            if module is None:
+                self._set_error("所选模块已不存在，请重新选择")
+                return
         module = deepcopy(module)
         module.name = name
         module.label = label
         module.rater = self.module_rater.text().strip() or None
         module.code = self.module_code.toPlainText().strip() or None
         module.control = self.module_control.isChecked()
+        module.interper = (
+            "shell" if self.module_shell_radio.isChecked() else "direct"
+        )
         module.scores = scores
         module.tags = tags
         try:
-            self.configuration.save_module(
-                module,
-                original_name=self._selected_module_name or name,
-            )
+            if self._selected_module_name is None:
+                self.configuration.create_module(module)
+            else:
+                self.configuration.save_module(module, original_name=self._selected_module_name)
         except Exception as exc:
             self._set_error(str(exc))
             return
@@ -2026,8 +2087,16 @@ class QtProjectConfigWorkspace(QWidget):
     def _delete_selected_module(self) -> None:
         if not self._selected_module_name:
             return
+        name = self._selected_module_name
+        answer = QMessageBox.question(
+            self,
+            translate_ui_text("删除质控模块"),
+            translate_ui_text(f"删除模块 {name}？该操作不可撤销。"),
+        )
+        if answer != QMessageBox.Yes:
+            return
         try:
-            self.configuration.remove_module(self._selected_module_name)
+            self.configuration.remove_module(name)
         except Exception as exc:
             self._set_error(str(exc))
             return

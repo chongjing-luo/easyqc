@@ -126,10 +126,9 @@ class CodeExecutor:
             raise TypeError("shell_enabled must be a Boolean")
         self.shell_enabled = enabled
 
-    # P3-B: placeholders are ${name} and {name} (the two explicit forms in real
-    # settings). Bare $name is ALSO substituted for backward compat, but it is
-    # NOT subject to unresolved-rejection (because $TMP / $(mktemp) / $HOME are
-    # shell constructs, not template vars — F-VIEW-4 MRIcroGL compatibility).
+    # Expand known EasyQC variables in one pass. Unknown names in all three
+    # supported forms remain literal, allowing the selected command interpreter
+    # to handle Shell-local/environment variables without a separate escape.
     _BRACE_PLACEHOLDER = re.compile(r"\$\{(\w+)\}|\{(\w+)\}")
     _BARE_DOLLAR = re.compile(r"\$(\w+)")
     _PLACEHOLDER = re.compile(
@@ -139,8 +138,13 @@ class CodeExecutor:
     )
 
     def parse_template(self, template: str, variables: Mapping[str, Any]) -> str:
+        """Replace known names once, preserving unknown tokens exactly.
+
+        This is template expansion, not Shell evaluation: only the user's
+        selected execution mode determines whether the remaining text expands.
+        Values inserted here are never scanned for more EasyQC placeholders.
+        """
         var_lookup = dict(variables)
-        unresolved: set[str] = set()
 
         def _substitute(match: re.Match) -> str:
             name = (
@@ -150,19 +154,9 @@ class CodeExecutor:
             )
             if name in var_lookup:
                 return str(var_lookup[name])
-            if match.group("bare") is None:
-                unresolved.add(name)
             return match.group(0)
 
-        result = self._PLACEHOLDER.sub(_substitute, template)
-
-        # Fail loud on author-intended placeholders that have no variable.
-        # Bare $word (shell vars like $TMP) is NOT checked — F-VIEW-4.
-        if unresolved:
-            raise CodeExecutorError(
-                f"模板含未解析的占位符(变量不存在): {sorted(unresolved)}"
-            )
-        return result
+        return self._PLACEHOLDER.sub(_substitute, template)
 
     def render_command_plan(
         self,
@@ -484,9 +478,10 @@ class CodeExecutor:
         command: str | Sequence[str],
         cwd: str | os.PathLike[str] | None = None,
         output_context: ViewerExecutionContext | None = None,
+        shell: bool | None = None,
     ) -> subprocess.Popen:
         self._require_open()
-        shell_enabled = self.shell_enabled
+        shell_enabled = self.shell_enabled if shell is None else bool(shell)
         args = self._command_for_subprocess(
             command,
             shell_enabled=shell_enabled,
@@ -573,6 +568,7 @@ class CodeExecutor:
         control: bool = False,
         cwd: str | os.PathLike[str] | None = None,
         output_contexts: Mapping[Any, ViewerExecutionContext] | None = None,
+        shell: bool | None = None,
     ) -> list[subprocess.Popen]:
         self._require_open()
         if output_contexts is not None:
@@ -612,6 +608,7 @@ class CodeExecutor:
                     command,
                     cwd=cwd,
                     output_context=context,
+                    shell=shell,
                 )
             )
         return processes
@@ -732,14 +729,12 @@ class CodeExecutor:
 
 
 def validate_template_columns(code: str, available_columns: set[str]) -> list[str]:
-    """P3-B / F-IMP-6: return placeholder names referenced in ``code`` that are
-    NOT in ``available_columns`` (sorted, unique). Detects a module code that
-    references a removed/renamed subject column BEFORE viewer launch fails.
+    """Report referenced identifier names absent from the available mapping.
 
     ``available_columns`` should be the union of easyqc_all columns and constants
-    keys — i.e. everything generate_code would inject as template variables.
-    Shell constructs ($TMP, $(mktemp)) are ignored (only ${var}/{var}/$var with
-    identifier names are considered placeholders).
+    keys. The sorted, unique report is advisory, not a launch validation gate:
+    a name in ${var}/{var}/$var may intentionally belong to the Shell rather
+    than EasyQC. Shell command substitutions such as $(mktemp) are not names.
     """
     referenced: set[str] = set()
     for match in CodeExecutor._BRACE_PLACEHOLDER.finditer(code):

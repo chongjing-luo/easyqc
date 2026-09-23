@@ -80,7 +80,9 @@ SPEC_FILE = "easyqc.spec"
 PYINSTALLER_MIN_VERSION = (5, 0)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DIST_DIR = SCRIPT_DIR / "dist"
+# dist 位于 easyqc 仓库之外，便于安装包独立发布；
+# CI 等需要仓库内布局的环境可用 EASYQC_DIST_DIR 覆盖。
+DIST_DIR = Path(os.environ.get("EASYQC_DIST_DIR") or (SCRIPT_DIR.parent / "dist"))
 BUILD_DIR = SCRIPT_DIR / "build"
 
 # ---------------------------------------------------------------------------

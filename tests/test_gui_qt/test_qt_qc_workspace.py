@@ -41,8 +41,9 @@ class _FakeExecutor:
         control=False,
         cwd=None,
         output_contexts=None,
+        shell=None,
     ):
-        self.started.append((dict(commands), control, output_contexts))
+        self.started.append((dict(commands), control, output_contexts, shell))
         return [object()]
 
     def command_output_since(self, after_sequence):
@@ -152,7 +153,7 @@ def test_compact_qc_controller_is_top_level_with_exact_table_and_action_order(
         for column in range(workspace.queue_model.columnCount())
     ] == ["序号", "easyqcid", "评分", "标签"]
     assert workspace.queue_table.editTriggers() == QAbstractItemView.NoEditTriggers
-    assert workspace.queue_table.selectionBehavior() == QAbstractItemView.SelectRows
+    assert workspace.queue_table.selectionBehavior() == QAbstractItemView.SelectItems
     assert workspace.queue_table.verticalScrollBarPolicy() == Qt.ScrollBarAlwaysOn
     assert [control.text() for control in workspace.action_controls] == [
         "只读",

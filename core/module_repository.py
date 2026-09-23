@@ -170,8 +170,14 @@ class ModuleRepository:
 
         records: list[ModuleRecord] = []
         errors: list[ModuleFileError] = []
-        for path in sorted(self.root.glob("*.json"), key=lambda item: item.name):
+        # Replacing a catalog owns the entire directory. Never omit an entry
+        # from validation that a later directory replacement would discard.
+        for path in sorted(self.root.iterdir(), key=lambda item: item.name):
             try:
+                if path.suffix != ".json" or path.is_symlink() or not path.is_file():
+                    raise ModuleRepositoryError(
+                        "module catalog entry must be a regular lowercase .json file"
+                    )
                 record = self._read_path(path)
             except (OSError, ValueError, TypeError) as exc:
                 errors.append(

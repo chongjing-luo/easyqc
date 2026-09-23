@@ -121,6 +121,34 @@ def test_start_command_uses_current_shell_setting(monkeypatch) -> None:
     assert observed[1][1]["shell"] is True
 
 
+def test_start_commands_shell_argument_overrides_executor_flag(monkeypatch) -> None:
+    observed = []
+
+    class FakeProcess:
+        pid = 4731
+
+        @staticmethod
+        def wait(timeout):
+            raise subprocess.TimeoutExpired("viewer", timeout)
+
+    def fake_popen(command, **options):
+        observed.append((command, options))
+        return FakeProcess()
+
+    monkeypatch.setattr("core.code_executor.subprocess.Popen", fake_popen)
+    executor = CodeExecutor(shell_enabled=False, system="Linux")
+    command = "viewer image.nii.gz | postprocess"
+
+    executor.start_commands({0: command}, shell=True)
+    executor.set_shell_enabled(True)
+    executor.start_commands({0: command}, shell=False)
+
+    assert observed[0][0] == command
+    assert observed[0][1]["shell"] is True
+    assert observed[1][0] == ["viewer", "image.nii.gz", "|", "postprocess"]
+    assert observed[1][1]["shell"] is False
+
+
 def test_start_command_uses_safe_posix_session_option(monkeypatch) -> None:
     observed = []
 
@@ -297,23 +325,22 @@ def test_run_command_raises_timeout() -> None:
         executor.run_command([sys.executable, "-c", "import time; time.sleep(1)"])
 
 
-# ---- P3-B: parse_template hardening (single-pass + reject unresolved) ----
+# ---- Template expansion: single pass, unknown names pass through ----
 
-def test_parse_template_rejects_unresolved_dollar_brace_placeholder() -> None:
-    """P3-B: a ${var} whose name is not in variables must raise, not silently
-    leak the placeholder into the viewer command (which then breaks launch)."""
+def test_parse_template_preserves_unknown_dollar_brace_placeholder() -> None:
+    """Unknown names may be Shell-local variables, not EasyQC variables."""
     executor = CodeExecutor()
-    with pytest.raises(CodeExecutorError) as exc:
-        executor.parse_template("open ${missing_col}", {"present": "x"})
-    assert "missing_col" in str(exc.value)
+    assert executor.parse_template("open ${missing_col}", {"present": "x"}) == (
+        "open ${missing_col}"
+    )
 
 
-def test_parse_template_rejects_unresolved_brace_placeholder() -> None:
-    """P3-B: same for {var} form."""
+def test_parse_template_preserves_unknown_brace_placeholder() -> None:
+    """The compatibility {name} form follows the same pass-through rule."""
     executor = CodeExecutor()
-    with pytest.raises(CodeExecutorError) as exc:
-        executor.parse_template("open {missing_col}", {"present": "x"})
-    assert "missing_col" in str(exc.value)
+    assert executor.parse_template("open {missing_col}", {"present": "x"}) == (
+        "open {missing_col}"
+    )
 
 
 def test_parse_template_single_pass_no_re_substitution_on_values() -> None:
@@ -348,11 +375,7 @@ def test_parse_template_passes_through_mricrogl_shell_variables() -> None:
 
 
 def test_parse_template_preserves_literal_braces_not_matching_variables() -> None:
-    """P3-B defense: a literal {x} where x is NOT a variable name should pass
-    through, not raise (e.g. a future f-string in a viewer script). Only
-    unresolved placeholders that LOOK like intended vars are reported — but to
-    stay safe and simple, unknown {name} is reported. This test pins that a
-    KNOWN variable's value with braces survives, and MRIcroGL $-shell passes."""
+    """A known variable's value containing literal braces survives unchanged."""
     executor = CodeExecutor()
     result = executor.parse_template("{a}", {"a": '{"k": 1}'})
     assert result == '{"k": 1}'
@@ -704,8 +727,8 @@ def test_start_commands_preserves_order_control_and_per_command_context(
         lambda: calls.append(("close", None)),
     )
 
-    def fake_start(command, cwd=None, output_context=None):
-        calls.append((command, output_context))
+    def fake_start(command, cwd=None, output_context=None, shell=None):
+        calls.append((command, output_context, shell))
         return command
 
     monkeypatch.setattr(executor, "start_command", fake_start)
@@ -718,13 +741,14 @@ def test_start_commands_preserves_order_control_and_per_command_context(
         control=True,
         cwd="/data",
         output_contexts=contexts,
+        shell=False,
     )
 
     assert result == ["viewer first", "viewer second"]
     assert calls == [
         ("close", None),
-        ("viewer first", contexts["first"]),
-        ("viewer second", contexts["second"]),
+        ("viewer first", contexts["first"], False),
+        ("viewer second", contexts["second"], False),
     ]
 
 

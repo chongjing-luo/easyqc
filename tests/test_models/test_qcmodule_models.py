@@ -50,7 +50,8 @@ def test_qcmodule_accepts_missing_optional_legacy_fields() -> None:
 
     assert module.name == "example"
     assert module.scores == {}
-    assert module.to_legacy_dict()["interper"] == "shell"
+    assert module.interper == "direct"
+    assert module.to_legacy_dict()["interper"] == "direct"
 
 
 # The 16-key legacy schema was verified against real easyqc_CCNPPEKI settings

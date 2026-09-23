@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -44,6 +45,10 @@ from gui_qt.i18n import (
     translate_ui_text,
 )
 from gui_qt.qc_row_context_menu import QcRowContextMenu
+from gui_qt.table_clipboard import (
+    copy_selected_cells, create_copy_menu, install_table_copy_shortcut,
+    prepare_cell_context_selection, selected_cell_count,
+)
 from gui_qt.theme import CONTROL_HEIGHT, set_button_role
 from models.qc_row_context import QcModuleMenuEntry, QcRecordMenuEntry, QcRowContext
 
@@ -211,7 +216,9 @@ class QtQcWorkspace(QWidget):
             Callable[[str, QcModuleMenuEntry], None] | None
         ) = None
         self.on_open_qc_record: Callable[[QcRecordMenuEntry], None] | None = None
-        self.active_row_context_menu: QcRowContextMenu | None = None
+        self.on_execute_qc_module: Callable[[str, QcModuleMenuEntry], None] | None = None
+        self.on_open_execute_qc_module: Callable[[str, QcModuleMenuEntry], None] | None = None
+        self.active_row_context_menu: QMenu | None = None
         self.setObjectName("qtQcWorkspace")
         self.setAccessibleName("EasyQC 质控控制器")
         self._build_ui()
@@ -241,8 +248,10 @@ class QtQcWorkspace(QWidget):
         self.queue_table.setAccessibleName("质控名单")
         self.queue_table.setModel(self.queue_model)
         self.queue_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.queue_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.queue_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.queue_table.setSelectionBehavior(QAbstractItemView.SelectItems)
+        self.queue_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self._copy_views = (self.queue_table,)
+        self._copy_shortcut = install_table_copy_shortcut(self.queue_table, self._copy_views)
         self.queue_table.setAlternatingRowColors(True)
         self.queue_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self.queue_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -609,7 +618,6 @@ class QtQcWorkspace(QWidget):
             else:
                 current = self.queue_model.index(current_row, 1)
                 self.queue_table.setCurrentIndex(current)
-                self.queue_table.selectRow(current_row)
                 self.queue_table.scrollTo(current)
         finally:
             self._loading = False
@@ -719,15 +727,22 @@ class QtQcWorkspace(QWidget):
         provider: Callable[[str], QcRowContext] | None,
         on_module: Callable[[str, QcModuleMenuEntry], None] | None,
         on_record: Callable[[QcRecordMenuEntry], None] | None,
+        *,
+        on_execute: Callable[[str, QcModuleMenuEntry], None] | None = None,
+        on_open_execute: Callable[[str, QcModuleMenuEntry], None] | None = None,
     ) -> None:
         supplied = (provider, on_module, on_record)
         if any(item is not None for item in supplied) and not all(
             callable(item) for item in supplied
         ):
             raise TypeError("QC row context actions must be all callable or all None")
+        if any(callback is not None and not callable(callback) for callback in (on_execute, on_open_execute)):
+            raise TypeError("QC execution callbacks must be callable or None")
         self.row_context_provider = provider
         self.on_open_qc_module = on_module
         self.on_open_qc_record = on_record
+        self.on_execute_qc_module = on_execute
+        self.on_open_execute_qc_module = on_open_execute
         if self.active_row_context_menu is not None:
             self.active_row_context_menu.close()
             self.active_row_context_menu.deleteLater()
@@ -737,8 +752,11 @@ class QtQcWorkspace(QWidget):
         index = self.queue_table.indexAt(point)
         if not index.isValid():
             return
-        self.queue_table.setCurrentIndex(index)
-        self.queue_table.selectRow(index.row())
+        prepare_cell_context_selection(self.queue_table, index)
+        if selected_cell_count(self._copy_views) > 1 or self.row_context_provider is None:
+            menu = create_copy_menu(self._copy_views, self.queue_table, language=self.language)
+            self._show_queue_context_menu(menu, point)
+            return
         identity = self.queue_model.identity_at(index.row())
         try:
             if (
@@ -755,11 +773,20 @@ class QtQcWorkspace(QWidget):
                 context,
                 on_module=lambda entry: module_callback(identity, entry),
                 on_record=record_callback,
+                on_copy=lambda: copy_selected_cells(self._copy_views),
+                on_execute=(lambda entry, callback=self.on_execute_qc_module: callback(identity, entry))
+                if self.on_execute_qc_module is not None else None,
+                on_open_execute=(lambda entry, callback=self.on_open_execute_qc_module: callback(identity, entry))
+                if self.on_open_execute_qc_module is not None else None,
                 parent=self.queue_table,
+                language=self.language,
             )
         except (ArithmeticError, RuntimeError, TypeError, ValueError) as exc:
             self._set_error(str(exc).strip() or type(exc).__name__)
             return
+        self._show_queue_context_menu(menu, point)
+
+    def _show_queue_context_menu(self, menu: QMenu, point: QPoint) -> None:
         if self.active_row_context_menu is not None:
             self.active_row_context_menu.close()
             self.active_row_context_menu.deleteLater()
@@ -768,6 +795,9 @@ class QtQcWorkspace(QWidget):
         menu.popup(self.queue_table.viewport().mapToGlobal(point))
 
     def _open_identity(self, identity: str) -> None:
+        if self._filter_busy:
+            self._set_error("质控名单筛选事务正在完成，请稍候")
+            return
         try:
             self.workflow.navigate_to(identity)
             self.workflow.launch_viewer()

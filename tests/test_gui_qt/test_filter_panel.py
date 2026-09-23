@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from io import StringIO
+
 import pandas as pd
+import pytest
 from PySide6.QtWidgets import QComboBox, QLineEdit
 
 from core.table_view_service import TableViewService
@@ -49,3 +52,30 @@ def test_filter_panel_round_trips_multiple_draft_conditions(qtbot):
 
     assert panel.conditions() == conditions
     assert len(panel.condition_rows) == 2
+
+
+@pytest.mark.parametrize(
+    ("operator", "value", "expected"),
+    [("==", True, ["A"]), ("==", False, ["B"]),
+     ("in", ("true",), ["A"]), ("not_in", ("false",), ["A"]),
+     ("isna", None, ["C"])],
+)
+def test_filter_panel_applies_nullable_csv_boolean_choices(
+    qtbot, operator, value, expected,
+):
+    source = pd.read_csv(StringIO("easyqcid,flag\nA,True\nB,False\nC,\n"))
+    original = source.copy(deep=True)
+    service = TableViewService(source)
+    panel = FilterPanel(service.profiles)
+    qtbot.addWidget(panel)
+    row = panel.condition_rows[0]
+    row.set_column("flag")
+    row.set_operator(operator)
+    row.set_value(value)
+
+    state = service.default_state().with_conditions(panel.conditions())
+    result = service.apply_state(state)
+    actual = service.get_window(result, 0, max(1, result.matched_total)).dataframe
+
+    assert actual["easyqcid"].tolist() == expected
+    pd.testing.assert_frame_equal(source, original)

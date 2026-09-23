@@ -105,7 +105,8 @@ PreparedProjectContext
 ├── detached QCModule tuple
 ├── validated Rating tuple
 ├── rating positions by easyqcid
-└── TableViewService over projected table
+├── TableViewService over wide results
+└── TableViewService over long results
 ```
 
 候选完整成功后才激活项目。损坏的新项目不会留下“current 指向新项目、settings 仍来自旧项目”的半切换状态。
@@ -220,6 +221,8 @@ sequenceDiagram
 
 读取聚合时，`RatingService` 不跟随符号链接，并验证目录深度、目录/文件名/正文身份、schema 版本、重复三元组和大小写冲突。任何错误都保留路径并阻断正式聚合。
 
+`ProjectContextService._prepare_context()` 同时准备两个结果服务：宽表对当前总名单左连接，保留未评分条目；长表先从评分展平表选择身份、分数、标签、备注和时间，再通过 `RatingService.attach_master_columns_to_long()` 与当前总名单内连接。因此用户长表只保留当前名单中的已保存评分，并附加名单字段。结果页切换这两个已准备的服务，分别保留视图状态；CSV 导出使用当前模式的完整筛选结果。
+
 ## 11. 事件与刷新
 
 `EventBus` 是进程内、类型化、按订阅顺序分发的总线。主要事件包括：
@@ -243,12 +246,12 @@ sequenceDiagram
 
 | 数据 | 权威位置 | 是否可重建 | 主要写入者 |
 |---|---|---|---|
-| 项目登记 | 安装根 `projects.json` | 否 | `ProjectService` |
+| 项目登记 | 应用状态根的 `projects.json` | 否 | `ProjectService` |
 | 项目设置 | `settings_<project>.json` | 部分模块映射可从模块文件同步 | `ProjectService` |
 | 项目模块 | `modules/<uuid>.json` | settings 中有一致映射，但目录为严格读取来源 | `ModuleRepository` / `ProjectService` |
 | 总名单 | `Table/easyqc_all.csv` | 否，除非有外部原始来源 | `TableService` |
 | 当前评分 | `RatingFiles/.../*.json` | 否 | `RatingService` |
-| 结果宽表 | 运行时投影；可导出 CSV | 是 | `RatingService` + `TableExportService` |
+| 结果长表/宽表 | 运行时投影；可分别导出 CSV | 是 | `RatingService` + `ProjectContextService` + `TableExportService` |
 | 表格视图状态 | 内存 | 是 | `TableViewService` |
 | Formula 文本 | 不保存 | 不需要 | 仅对话框草稿 |
 | 日志 | 平台用户日志目录或 `EASYQC_LOG_DIR` | 否 | `utils.logger` |
@@ -257,7 +260,7 @@ sequenceDiagram
 
 - Core 发现合同错误时抛出具体异常；GUI 显示错误，不使用空结果替代失败。
 - 本地文件锁防止同一项目并发写入，但不是网络文件系统上的分布式一致性协议。
-- `projects.json` 与安装模板跟随当前源码/安装根；同一机器上的两个独立检出不会自动共享它们。
+- `projects.json` 与模板使用同一应用状态根：源码默认在检出目录，冻结包默认在按版本隔离的用户数据目录，`EASYQC_DATA_ROOT` 可显式覆盖。两个源码检出默认不会共享它们。
 - settings 和 rating 只读 schema v3；没有运行时双格式兼容层。
 - flat layout 简单稳定，但不能当作普通 PyPI 包导入。
 - `SessionState` 保留部分历史命名和内存缓冲角色；当前 Qt 主路径的权威装配是 `ProjectContextService`。

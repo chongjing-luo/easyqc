@@ -118,6 +118,74 @@ Linux 构建还使用哈希固定的 Ubuntu `libxcb-cursor0` 输入。Windows ru
 提供 Inno Setup 6；macOS runner 必须提供系统 `hdiutil`。缺少工具时工作流直接
 失败，不降级成 ZIP 或把其他平台产物改名。
 
+### 5.1 本机 Ubuntu 打包目录
+
+打包代码和依赖锁文件保留在 `easyqc/` Git 仓库中，大的构建环境放在它旁边的
+工作区 `build/`，不再依赖 `Tmp/` 中的运行环境：
+
+```text
+ProjectEASYQC/
+  easyqc/
+    build.py                    # 既有构建实现
+    build_linux.sh              # 本机 Linux x86_64 便捷入口
+    packaging/locks/            # 版本化、带哈希的依赖锁文件
+    dist/                      # 构建成品，位置不变
+  build/linux-x86_64/
+    venv/                      # Python 构建虚拟环境
+    uv-cache/                  # 依赖下载/解包缓存
+    deps/                      # 官方 libxcb-cursor0 deb 输入
+    mplconfig/                 # 构建环境配置缓存
+```
+
+在这台机器上重新生成 Linux 可执行程序目录：
+
+```bash
+cd /home/ubuntu/homes/LuoChongjing/ProjectEASYQC/easyqc
+bash build_linux.sh --version 1.0.0
+```
+
+无需激活环境。入口从自身位置定位源码和旁边的 `build/`，检查环境和 deb 后
+调用原有 `build.py`；不自动安装依赖，不默认传入 `--clean` 或 `--skip-smoke`。
+输出仍为 `easyqc/dist/EasyQC-v1.0.0-linux-x86_64/`，不是 `.deb` 安装包。
+构建仍使用原有的短期工作目录 `easyqc/build/`，它与保存环境的工作区
+`ProjectEASYQC/build/` 是两个不同目录。
+
+**注意：同版本构建会替换同名输出目录，必要时先备份旧产物。**
+`--clean` 还会清空整个 `easyqc/dist/`，日常重建不要随意添加。
+这个便捷入口用于本机常规构建；严格发布的 `--release-input` 路线仍直接调用
+`build.py`，不能混用该入口自动提供的 `--linux-cursor-deb` 参数。
+
+环境与缓存不纳入 `easyqc/` Git 仓库。2026-09-16 本机迁移后，两者连同
+deb/配置缓存的磁盘占用合计约 384 MiB（验证运行后、同文件系统硬链接去重的 `du` 结果）；
+后续缓存增长会改变这个数值。该虚拟环境仍使用本机已有的 CPython 3.10.17
+基础解释器，不是可复制到其他电脑直接使用的独立 Python 安装。
+
+### 5.2 在新的 Linux x86_64 工作区准备环境
+
+先准备 `uv` 和 **CPython 3.10.17**。从 `easyqc/` 目录运行以下步骤；将示例
+解释器路径替换为实际路径。仅在目标虚拟环境尚不存在时创建，不直接覆盖已有
+环境。所有新环境和依赖缓存均位于旁边的 `build/`：
+
+```bash
+mkdir -p ../build/linux-x86_64/deps ../build/linux-x86_64/mplconfig
+uv --cache-dir ../build/linux-x86_64/uv-cache venv \
+  --python /absolute/path/to/python3.10 --no-python-downloads --relocatable \
+  ../build/linux-x86_64/venv
+uv --cache-dir ../build/linux-x86_64/uv-cache pip sync \
+  --python ../build/linux-x86_64/venv/bin/python --require-hashes \
+  packaging/locks/python-3.10.17/linux-x86_64/build.txt
+curl --fail --location \
+  https://archive.ubuntu.com/ubuntu/pool/universe/x/xcb-util-cursor/libxcb-cursor0_0.1.1-4ubuntu1_amd64.deb \
+  --output ../build/linux-x86_64/deps/libxcb-cursor0_0.1.1-4ubuntu1_amd64.deb
+sha256sum ../build/linux-x86_64/deps/libxcb-cursor0_0.1.1-4ubuntu1_amd64.deb
+```
+
+deb 的预期 SHA-256 为
+`c9b5d1ad4af57397b1bd77e0a92750e34419def134c0282a0836ae9efc07cf64`；
+`build.py` 构建前还会强制校验。这里不将 deb 安装进系统，也不使用 `sudo`。
+先用 `bash build_linux.sh --help` 检查入口，再执行实际构建命令。
+其他机器仍需满足前文的系统动态库和原生验证要求。
+
 ## 6. 验证层级
 
 1. 单元/合同测试：版本、路径、Debian 布局、Inno 文本、DMG 命令和清单。

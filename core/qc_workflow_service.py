@@ -45,6 +45,7 @@ class ViewerPlan:
     rendered_template: str
     commands: dict[int, str]
     control: bool
+    shell: bool = False
 
 
 class QcWorkflowService:
@@ -351,6 +352,8 @@ class QcWorkflowService:
     ) -> list[str]:
         issues: list[str] = []
         saved_scores = rating_payload.get("scores", {}) or {}
+        if saved_scores.keys() != module.scores.keys():
+            issues.append("score keys")
         for key, score in module.scores.items():
             saved = saved_scores.get(key)
             if not isinstance(saved, dict):
@@ -363,9 +366,11 @@ class QcWorkflowService:
                 for value in (saved_raw if isinstance(saved_raw, list) else str(saved_raw).split(","))
                 if str(value).strip()
             )
-            if current_values != saved_values:
+            if current_values != saved_values or saved.get("label") != score.label:
                 issues.append(f"score {key} schema")
         saved_tags = rating_payload.get("tags", {}) or {}
+        if saved_tags.keys() != module.tags.keys():
+            issues.append("tag keys")
         for key, tag in module.tags.items():
             saved = saved_tags.get(key)
             if not isinstance(saved, dict) or saved.get("label") != tag.label:
@@ -440,6 +445,7 @@ class QcWorkflowService:
             rendered_template=rendered,
             commands=dict(commands),
             control=bool(self._working_module.control),
+            shell=self._working_module.interper == "shell",
         )
 
     def launch_viewer(self) -> list[Any]:
@@ -464,6 +470,7 @@ class QcWorkflowService:
                     plan.commands,
                     control=plan.control,
                     output_contexts=output_contexts,
+                    shell=plan.shell,
                 )
             )
         except Exception:

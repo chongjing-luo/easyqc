@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHeaderView,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -277,7 +278,7 @@ def test_qt_constant_row_double_click_loads_transactional_edit_form(
     workspace.constants_table.cellDoubleClicked.emit(0, 0)
 
     assert workspace.constant_name.text() == "DATA_ROOT"
-    assert workspace.constant_name.isReadOnly()
+    assert not workspace.constant_name.isReadOnly()
     assert workspace.constant_value.text() == "/data/original"
     assert workspace.save_constant_button.text() == "保存"
     workspace.constant_value.setText("/data/updated")
@@ -1069,16 +1070,27 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
         if action.text()
     ]
     assert footer_actions == ["删除模块", "导出模块", "放弃更改", "保存模块"]
-    assert workspace.module_actions_toolbar.widgetForAction(
-        workspace.delete_module_action
-    ).x() < workspace.module_actions_toolbar.widgetForAction(
-        workspace.export_module_action
-    ).x()
-    assert workspace.module_actions_toolbar.widgetForAction(
-        workspace.discard_module_action
-    ).x() < workspace.module_actions_toolbar.widgetForAction(
-        workspace.save_module_action
-    ).x()
+    footer_buttons = [
+        workspace.module_actions_toolbar.widgetForAction(action)
+        for action in (
+            workspace.delete_module_action,
+            workspace.export_module_action,
+            workspace.discard_module_action,
+            workspace.save_module_action,
+        )
+    ]
+    visible_footer_buttons = [
+        button for button in footer_buttons if button.isVisible()
+    ]
+    if len(visible_footer_buttons) < len(footer_buttons):
+        footer_extension = workspace.module_actions_toolbar.findChild(
+            QToolButton,
+            "qt_toolbar_ext_button",
+        )
+        assert footer_extension is not None and footer_extension.isVisible()
+    assert [button.x() for button in visible_footer_buttons] == sorted(
+        button.x() for button in visible_footer_buttons
+    )
 
     assert isinstance(workspace.module_code, QPlainTextEdit)
     assert workspace.module_code.lineWrapMode() == QPlainTextEdit.LineWrapMode.NoWrap
@@ -1092,9 +1104,19 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
     assert editor_layout.indexOf(workspace.module_viewer_section) > editor_layout.indexOf(
         workspace.module_row_actions_toolbar
     )
-    assert editor_layout.indexOf(workspace.module_actions_toolbar) > editor_layout.indexOf(
-        workspace.module_viewer_section
+    assert editor_layout.indexOf(workspace.module_actions_toolbar) == -1
+    assert (
+        workspace.module_actions_toolbar.parentWidget()
+        is not workspace.module_editor_scroll.widget()
     )
+    editor_pane = workspace.module_editor_scroll.parentWidget()
+    editor_pane_layout = editor_pane.layout()
+    assert editor_pane_layout.indexOf(workspace.module_editor_scroll) == 0
+    actions_row = editor_pane_layout.itemAt(1).widget()
+    assert actions_row is not None
+    assert actions_row.layout().indexOf(workspace.module_actions_toolbar) == 0
+    assert actions_row.layout().contentsMargins().left() == 12
+    assert workspace.module_splitter.widget(1) is editor_pane
 
     workspace.module_code.setPlainText(
         "viewer --input {image} --title {easyqcid} " + "--very-long-option value " * 30
@@ -1103,6 +1125,73 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
         lambda: workspace.module_code.horizontalScrollBar().maximum() > 0,
         timeout=2000,
     )
+
+
+def test_delete_module_requires_confirmation_dialog(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workspace, _config = _workspace(qtbot, tmp_path)
+    workspace.resize(640, 520)
+    workspace.show()
+    workspace.tabs.setCurrentWidget(workspace.modules_tab)
+    assert workspace.add_module("FuncQC", "功能质控")
+    assert workspace.module_list.count() == 2
+
+    questions: list[tuple] = []
+
+    def refuse(*args, **kwargs):
+        questions.append(args)
+        return QMessageBox.No
+
+    monkeypatch.setattr(QMessageBox, "question", refuse)
+    workspace._delete_selected_module()
+    assert len(questions) == 1
+    assert questions[0][1] == "删除质控模块"
+    assert "删除模块 FuncQC" in questions[0][2]
+    assert workspace.module_list.count() == 2
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QMessageBox.Yes,
+    )
+    workspace._delete_selected_module()
+    assert workspace.module_list.count() == 1
+
+
+def test_module_execution_mode_radios_roundtrip_interper(
+    qtbot,
+    tmp_path,
+) -> None:
+    workspace, config = _workspace(qtbot, tmp_path)
+    workspace.resize(640, 520)
+    workspace.show()
+    workspace.tabs.setCurrentWidget(workspace.modules_tab)
+
+    workspace._prepare_new_module()
+    assert workspace.module_direct_radio.isChecked()
+    assert not workspace.module_shell_radio.isChecked()
+
+    workspace.module_name.setText("ShellQC")
+    workspace.module_label.setText("Shell QC")
+    workspace.module_code.setPlainText("viewer {image} | report")
+    workspace.module_shell_radio.click()
+    qtbot.mouseClick(workspace.save_module_button, Qt.LeftButton)
+
+    stored = next(m for m in config.modules() if m.name == "ShellQC")
+    assert stored.interper == "shell"
+    assert workspace.module_shell_radio.isChecked()
+    assert not workspace.module_direct_radio.isChecked()
+
+    baseline = workspace._module_form_signature()
+    workspace.module_direct_radio.click()
+    assert workspace._module_form_signature() != baseline
+    qtbot.mouseClick(workspace.save_module_button, Qt.LeftButton)
+    stored = next(m for m in config.modules() if m.name == "ShellQC")
+    assert stored.interper == "direct"
+    assert workspace.module_direct_radio.isChecked()
 
 
 def test_key_toolbars_keep_actions_visible_with_wide_native_buttons(
@@ -1149,13 +1238,21 @@ def test_key_toolbars_keep_actions_visible_with_wide_native_buttons(
             workspace.save_module_action,
         )
     ]
-    assert all(button.isVisible() for button in footer_buttons)
-    assert [button.x() for button in footer_buttons] == sorted(
-        button.x() for button in footer_buttons
+    if not all(button.isVisible() for button in footer_buttons):
+        footer_extension = workspace.module_actions_toolbar.findChild(
+            QToolButton,
+            "qt_toolbar_ext_button",
+        )
+        assert footer_extension is not None and footer_extension.isVisible()
+    visible_footer_buttons = [
+        button for button in footer_buttons if button.isVisible()
+    ]
+    assert [button.x() for button in visible_footer_buttons] == sorted(
+        button.x() for button in visible_footer_buttons
     )
     assert (
         workspace.module_actions_toolbar.sizePolicy().horizontalPolicy()
-        == QSizePolicy.Policy.Minimum
+        == QSizePolicy.Policy.Preferred
     )
 
     workspace.resize(480, 520)

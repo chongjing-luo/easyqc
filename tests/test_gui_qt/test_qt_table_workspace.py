@@ -1441,12 +1441,12 @@ def test_paging_exact_find_and_selection_restore_use_full_result(qtbot):
     assert workspace.find_identity_exact("SUB005")
     assert workspace.page_offset == 4
     assert workspace.selected_source_position == 4
-    assert workspace.table_view.selectionModel().selectedRows()
+    assert workspace.table_view.selectionModel().selectedIndexes()
 
     assert workspace.apply_sort_rules((SortRule("age", False),))
     assert workspace.selected_source_position == 4
     assert workspace.table_model.row_reference(0).easyqcid == "SUB005"
-    assert workspace.table_view.selectionModel().selectedRows()[0].row() == 0
+    assert workspace.table_view.selectionModel().selectedIndexes()[0].row() == 0
     assert "5 / 5" in workspace.count_label.text()
 
 
@@ -1462,7 +1462,7 @@ def test_filtered_out_selection_never_moves_to_another_subject(qtbot):
 
     assert workspace.selected_source_position == 1
     assert workspace.selection_outside_view
-    assert workspace.table_view.selectionModel().selectedRows() == []
+    assert workspace.table_view.selectionModel().selectedIndexes() == []
     assert not workspace.open_selected_qc()
 
 
@@ -1757,7 +1757,7 @@ def test_optional_list_deletion_actions_use_filter_and_multi_column_dialogs(
 
     monkeypatch.setattr(QMessageBox, "question", accept)
 
-    assert workspace.table_view.selectionMode() == QAbstractItemView.SingleSelection
+    assert workspace.table_view.selectionMode() == QAbstractItemView.ExtendedSelection
     assert workspace.delete_rows_action.text() == "删除行"
     assert workspace.delete_columns_action.text() == "删除列"
     workspace.table_view.clearSelection()

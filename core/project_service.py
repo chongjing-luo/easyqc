@@ -68,27 +68,79 @@ class ProjectService:
     def create(self, name: str, path: Path) -> Project:
         if not validate_project_name(name):
             raise ValueError(f"项目名不合法: {name}")
-        if name in self.registry.projects:
-            raise ValueError(f"项目已存在: {name}")
 
         project_path = Path(path)
         if project_path.name != f"easyqc_{name}":
             project_path = project_path / f"easyqc_{name}"
-        if project_path.exists():
-            if not project_path.is_dir():
-                raise ValueError(f"项目目标不是目录: {project_path}")
-            if next(project_path.iterdir(), None) is not None:
-                raise ValueError(f"项目目标目录非空: {project_path}")
-        project_path.mkdir(parents=True, exist_ok=True)
-        (project_path / "Table").mkdir(exist_ok=True)
-        (project_path / "RatingFiles").mkdir(exist_ok=True)
-
         project = Project(name=name, path=project_path)
-        self.registry.projects[name] = project
-        self.registry.last_project = name
-        self.current = project
-        self._settings = self.new_settings()
-        self.save()
+        with self._state_lock:
+            if name in self.registry.projects:
+                raise ValueError(f"项目已存在: {name}")
+            target_existed = project_path.exists()
+            if target_existed:
+                if not project_path.is_dir():
+                    raise ValueError(f"项目目标不是目录: {project_path}")
+                if next(project_path.iterdir(), None) is not None:
+                    raise ValueError(f"项目目标目录非空: {project_path}")
+
+            previous_current = self.current
+            previous_settings = self._settings
+            previous_projects = dict(self.registry.projects)
+            previous_last = self.registry.last_project
+            previous_registry_bytes = (
+                self.registry_path.read_bytes() if self.registry_path.exists() else None
+            )
+            registry_attempted = False
+            created_files: list[Path] = []
+            created_dirs: list[Path] = []
+            repository = self._module_repository(project)
+            try:
+                if not target_existed:
+                    project_path.mkdir(parents=True)
+                    created_dirs.append(project_path)
+                for directory in (project.table_dir, project.rating_dir):
+                    directory.mkdir()
+                    created_dirs.append(directory)
+                self.current = project
+                self._settings = self.new_settings()
+                with repository.project_write_lock() as lock_path:
+                    if lock_path is not None:
+                        created_files.append(lock_path)
+                    records = self._save_project_locked(repository)
+                    created_files.append(project.settings_path)
+                    created_files.extend(
+                        repository.root / f"{record.module_id}.json"
+                        for record in records
+                    )
+                # Do not register a project until its complete contents exist.
+                self.registry.projects[name] = project
+                self.registry.last_project = name
+                registry_attempted = True
+                self._save_registry()
+            except Exception:
+                self.current = previous_current
+                self._settings = previous_settings
+                self.registry.projects.clear()
+                self.registry.projects.update(previous_projects)
+                self.registry.last_project = previous_last
+                try:
+                    if registry_attempted:
+                        self._restore_registry_bytes(previous_registry_bytes)
+                    # Never recursively delete a project directory. Unknown
+                    # entries must survive and make incomplete rollback visible.
+                    for created_file in reversed(created_files):
+                        created_file.unlink(missing_ok=True)
+                    if repository.root.exists():
+                        repository.root.rmdir()
+                    for directory in reversed(created_dirs):
+                        directory.rmdir()
+                except OSError as rollback_exc:
+                    raise RuntimeError(
+                        f"Project creation rollback incomplete: {project_path}: "
+                        f"{rollback_exc}"
+                    ) from rollback_exc
+                raise
+        self.publish_change("settings_saved")
         self._notify("project_changed")
         return project
 
@@ -179,15 +231,38 @@ class ProjectService:
             )
 
     def remove(self, name: str) -> None:
-        if name not in self.registry.projects:
-            raise KeyError(name)
-        del self.registry.projects[name]
-        if self.registry.last_project == name:
-            self.registry.last_project = next(iter(self.registry.projects), None)
-        if self.current and self.current.name == name:
-            self.current = None
-            self._settings = {}
-        self._save_registry()
+        with self._state_lock:
+            if name not in self.registry.projects:
+                raise KeyError(name)
+            previous_current = self.current
+            previous_settings = self._settings
+            previous_projects = dict(self.registry.projects)
+            previous_last = self.registry.last_project
+            previous_registry_bytes = (
+                self.registry_path.read_bytes() if self.registry_path.exists() else None
+            )
+            del self.registry.projects[name]
+            if self.registry.last_project == name:
+                self.registry.last_project = next(iter(self.registry.projects), None)
+            if self.current and self.current.name == name:
+                self.current = None
+                self._settings = {}
+            try:
+                self._save_registry()
+            except Exception:
+                self.current = previous_current
+                self._settings = previous_settings
+                self.registry.projects.clear()
+                self.registry.projects.update(previous_projects)
+                self.registry.last_project = previous_last
+                try:
+                    self._restore_registry_bytes(previous_registry_bytes)
+                except OSError as rollback_exc:
+                    raise RuntimeError(
+                        f"Project removal rollback incomplete: {self.registry_path}: "
+                        f"{rollback_exc}"
+                    ) from rollback_exc
+                raise
         self._notify("project_changed")
 
     def list_all(self) -> list[str]:
@@ -578,7 +653,9 @@ class ProjectService:
         if saved and notify:
             self.publish_change("settings_saved")
 
-    def _save_project_locked(self, repository: ModuleRepository) -> None:
+    def _save_project_locked(
+        self, repository: ModuleRepository,
+    ) -> tuple[ModuleRecord, ...]:
         """Publish modules and settings while owning the project write lock."""
 
         current = self.current
@@ -616,13 +693,18 @@ class ProjectService:
                         _trusted_rating_owners=prior_records,
                     )
                 else:
-                    repository._remove_catalog_unlocked()
+                    # Only these UUID files were published by this attempt.
+                    # A foreign sibling must survive a failed settings write.
+                    for record in published:
+                        (repository.root / f"{record.module_id}.json").unlink()
+                    repository.root.rmdir()
             except Exception as rollback_exc:
                 raise RuntimeError(
                     "项目设置写入失败，且模块目录回滚失败: "
                     f"{rollback_exc}"
                 ) from rollback_exc
             raise
+        return published
 
     def publish_change(self, event: str, data: dict[str, Any] | None = None) -> None:
         """Publish a validated service change on the caller's thread."""
@@ -723,6 +805,17 @@ class ProjectService:
     def _save_registry(self) -> None:
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
         FileUtils.safe_json_save(self.registry_path, self.registry.to_legacy_dict())
+
+    def _restore_registry_bytes(self, previous: bytes | None) -> None:
+        """Undo a failed lifecycle write even if it already replaced the file."""
+
+        actual = self.registry_path.read_bytes() if self.registry_path.exists() else None
+        if actual == previous:
+            return
+        if previous is None:
+            self.registry_path.unlink()
+        else:
+            FileUtils.atomic_write(self.registry_path, previous.decode("utf-8"))
 
     def _notify(self, event: str, data: dict[str, Any] | None = None) -> None:
         """Emit one typed project event on the caller's thread."""

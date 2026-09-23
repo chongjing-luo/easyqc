@@ -27,8 +27,13 @@ from core.qc_workflow_service import (
 from core.rating_service import RatingService
 
 
-def _module(*, rater: str | None = "rater1", watch_mode: bool = False) -> dict:
-    return {
+def _module(
+    *,
+    rater: str | None = "rater1",
+    watch_mode: bool = False,
+    interper: str = "shell",
+) -> dict:
+    module = {
         "name": "AnatQC",
         "label": "Anatomical image quality",
         "rater": rater,
@@ -44,7 +49,7 @@ def _module(*, rater: str | None = "rater1", watch_mode: bool = False) -> dict:
             }
         },
         "code": "MULTICMD freeview {image};|itksnap {image}",
-        "interper": "shell",
+        "interper": interper,
         "control": True,
         "select_filter": None,
         "showing": True,
@@ -53,6 +58,7 @@ def _module(*, rater: str | None = "rater1", watch_mode: bool = False) -> dict:
         "notes": None,
         "button": {"help": "Open SOP"},
     }
+    return module
 
 
 def _subjects() -> pd.DataFrame:
@@ -90,6 +96,7 @@ class _FakeExecutor:
         control=False,
         cwd=None,
         output_contexts=None,
+        shell=None,
     ):
         self.started.append(
             (
@@ -97,6 +104,7 @@ class _FakeExecutor:
                 control,
                 cwd,
                 None if output_contexts is None else dict(output_contexts),
+                shell,
             )
         )
         return [object() for _ in commands]
@@ -191,6 +199,30 @@ def test_viewer_plan_launch_navigation_and_close_use_code_executor(tmp_path) -> 
     assert executor.close_calls == 2
 
 
+def test_viewer_plan_shell_mode_follows_module_interper(tmp_path) -> None:
+    shell_executor = _FakeExecutor()
+    shell_workflow = _workflow(
+        tmp_path,
+        module=_module(interper="shell"),
+        executor=shell_executor,
+    )
+    direct_executor = _FakeExecutor()
+    direct_workflow = _workflow(
+        tmp_path,
+        module=_module(interper="direct"),
+        executor=direct_executor,
+    )
+
+    assert shell_workflow.viewer_plan().shell is True
+    assert direct_workflow.viewer_plan().shell is False
+
+    shell_workflow.launch_viewer()
+    direct_workflow.launch_viewer()
+
+    assert shell_executor.started[0][4] is True
+    assert direct_executor.started[0][4] is False
+
+
 def test_viewer_context_keeps_an_explicit_empty_rater(tmp_path) -> None:
     executor = _FakeExecutor()
     workflow = _workflow(tmp_path, module=_module(rater=None), executor=executor)
@@ -214,7 +246,7 @@ def test_viewer_context_uses_sparse_integer_plan_keys_as_command_indices(
 
     workflow.launch_viewer()
 
-    commands, _control, _cwd, contexts = executor.started[0]
+    commands, _control, _cwd, contexts, _shell = executor.started[0]
     assert tuple(commands) == (3, 7)
     assert tuple(contexts) == (3, 7)
     assert contexts == {
@@ -289,6 +321,7 @@ def test_real_subprocess_output_crosses_workflow_with_qc_context_and_log(
     module = _module()
     module["code"] = subprocess.list2cmdline([sys.executable, "-c", script])
     module["control"] = False
+    module["interper"] = "direct"
     journal = CommandOutputJournal(log_root=tmp_path / "viewer-logs")
     executor = CodeExecutor(command_output_journal=journal)
     workflow = _workflow(tmp_path, module=module, executor=executor)
@@ -487,6 +520,65 @@ def test_schema_drift_forces_read_only_but_keeps_saved_rating_visible(tmp_path) 
         workflow.set_score("1", "Good")
     with pytest.raises(QcReadOnlyError):
         workflow.save()
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["removed_score", "removed_tag", "renamed_score", "added_score", "added_tag", "renamed_tag"],
+)
+def test_schema_drift_blocks_overwrite_and_preserves_original_bytes(tmp_path, change) -> None:
+    """EQC-D001: schema comparison must protect both sides of the snapshot."""
+    saved = _module()
+    saved.update({"schema_version": 3, "easyqcid": "SUB001"})
+    saved["scores"]["1"]["value"] = "Good"
+    current = _module()
+    if change == "removed_score":
+        saved["scores"]["2"] = {**saved["scores"]["1"], "label": "Old dimension"}
+    elif change == "removed_tag":
+        saved["tags"]["2"] = {"label": "Old artifact", "value": True}
+    elif change == "renamed_score":
+        current["scores"]["1"]["label"] = "Different dimension"
+    elif change == "added_score":
+        current["scores"]["2"] = {**current["scores"]["1"], "label": "New dimension"}
+    elif change == "added_tag":
+        current["tags"]["2"] = {"label": "New artifact", "value": False}
+    elif change == "renamed_tag":
+        current["tags"]["1"]["label"] = "Different artifact"
+    path = tmp_path / "RatingFiles" / "AnatQC" / "rater1" / "AnatQC-rater1-SUB001.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(saved), encoding="utf-8")
+    original = path.read_bytes()
+
+    workflow = _workflow(tmp_path, module=current)
+
+    assert workflow.watch_mode
+    assert "schema" in workflow.read_only_reason.lower()
+    with pytest.raises(QcReadOnlyError):
+        workflow.set_score("1", "Poor")
+    with pytest.raises(QcReadOnlyError):
+        workflow.save_and_move(1)
+    assert workflow.current_easyqcid == "SUB001"
+    assert path.read_bytes() == original
+    assert workflow.navigate_to("SUB002")
+    assert not workflow.watch_mode
+
+
+def test_viewer_change_with_identical_rating_schema_remains_editable(tmp_path) -> None:
+    saved = _module()
+    saved.update({"schema_version": 3, "easyqcid": "SUB001"})
+    saved["scores"]["1"]["value"] = "Good"
+    path = tmp_path / "RatingFiles" / "AnatQC" / "rater1" / "AnatQC-rater1-SUB001.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(saved), encoding="utf-8")
+    current = _module()
+    current["code"] = "viewer {image} --new-layout"
+
+    workflow = _workflow(tmp_path, module=current)
+
+    assert not workflow.watch_mode
+    workflow.set_score("1", "Fair")
+    assert workflow.save() == path
+    assert json.loads(path.read_text(encoding="utf-8"))["scores"]["1"]["value"] == "Fair"
 
 
 def test_schema_drift_reason_clears_after_successful_case_navigation(tmp_path) -> None:
