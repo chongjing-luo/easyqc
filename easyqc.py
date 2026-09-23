@@ -10,7 +10,7 @@ import argparse
 import sys
 from pathlib import Path
 
-EASYQC_VERSION = "1.0.0"
+EASYQC_VERSION = "1.1.0"
 
 # Managed-runtime smoke requires exact stdout and must not initialize logging
 # or any GUI module.  Keep this direct-script fast path before those imports.
