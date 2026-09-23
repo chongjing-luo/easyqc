@@ -76,7 +76,7 @@ def test_version_returns_without_importing_or_constructing_a_gui(
     monkeypatch.setitem(sys.modules, "gui_qt.application", None)
 
     assert entrypoint.main(["--version"]) == 0
-    assert capsys.readouterr().out == "1.0.0\n"
+    assert capsys.readouterr().out == "1.1.0\n"
 
 
 def test_missing_qt_dependency_reports_the_original_import_error(
@@ -104,5 +104,5 @@ def test_direct_version_process_has_exact_machine_output() -> None:
     )
 
     assert process.returncode == 0
-    assert process.stdout == "1.0.0\n"
+    assert process.stdout == "1.1.0\n"
     assert process.stderr == ""
