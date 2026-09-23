@@ -468,16 +468,16 @@ def run_pyinstaller(
         _abort("非 Linux 构建拒绝 Linux cursor 输入")
 
     info("PyInstaller 打包中（可能需要几分钟）...")
+    # 显式传入 work/dist 路径:DIST_DIR 已外置到仓库之外,
+    # PyInstaller 默认的 ./build ./dist(CWD 相对)不再与之一致。
     cmd = [
         str(python_executable), "-m", "PyInstaller",
         "--noconfirm",
         "--clean",
         "--log-level=WARN",
+        "--workpath", str(Path(work_path) if work_path is not None else BUILD_DIR),
+        "--distpath", str(Path(dist_path) if dist_path is not None else DIST_DIR),
     ]
-    if work_path is not None:
-        cmd.extend(["--workpath", str(Path(work_path))])
-    if dist_path is not None:
-        cmd.extend(["--distpath", str(Path(dist_path))])
     cmd.append(str(spec))
     try:
         result = subprocess.run(
