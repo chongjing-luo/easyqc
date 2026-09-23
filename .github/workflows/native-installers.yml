@@ -105,6 +105,8 @@ jobs:
         run: |
           uv pip sync --require-hashes "${{ matrix.lock }}"
           uv pip check
+          # 契约测试工具不在构建锁内;sync 会移除锁外包,故在 sync 之后安装。
+          uv pip install "pytest==9.0.3"
 
       - name: Run packaging contract tests
         shell: bash
