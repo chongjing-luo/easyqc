@@ -1139,6 +1139,7 @@ def test_close_current_processes_finalizes_before_forgetting_every_exit_path(
     )
     monkeypatch.setattr("core.code_executor.os.getpgid", lambda _pid: process.pid, raising=False)
     monkeypatch.setattr("core.code_executor.os.killpg", lambda *_args: None, raising=False)
+    monkeypatch.setattr("core.code_executor.signal.SIGKILL", 9, raising=False)
     executor = CodeExecutor(
         system="Linux",
         command_output_journal=journal,
