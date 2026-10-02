@@ -142,7 +142,13 @@ class _SyntheticUvAdapter:
         python_executable = request.version_root / _python_relative_path(
             request.manifest.target.os
         )
-        if request.manifest.target.os == "macos":
+        if request.manifest.target.os == "windows":
+            venv.EnvBuilder(with_pip=False, symlinks=False).create(environment)
+        else:
+        # POSIX: a copied or venv-materialized interpreter cannot relocate the
+        # standard library of uv-managed standalone CPython (build prefix is
+        # absent), failing with "No module named 'encodings'" on CI; the
+        # wrapper execs the real interpreter and stays inside version root.
             python_executable.parent.mkdir(parents=True)
             native_python = shlex.quote(str(Path(sys.executable).resolve()))
             FileUtils.atomic_write(
@@ -150,8 +156,6 @@ class _SyntheticUvAdapter:
                 f'#!/bin/sh\nexec {native_python} "$@"\n',
             )
             python_executable.chmod(0o755)
-        else:
-            venv.EnvBuilder(with_pip=False, symlinks=False).create(environment)
         app_root = request.version_root / "app"
         app_root.mkdir()
         entrypoint = app_root / request.manifest.easyqc.entrypoint

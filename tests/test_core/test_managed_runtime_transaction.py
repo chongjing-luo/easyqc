@@ -143,7 +143,14 @@ class FakeUvAdapter:
     def materialize(self, request: MaterializationRequest) -> MaterializationResult:
         self.calls.append(request)
         environment = request.version_root / "env"
-        if request.manifest.target.os == "macos":
+        if request.manifest.target.os == "windows":
+            venv.EnvBuilder(with_pip=False, symlinks=False).create(environment)
+            python = environment / "Scripts" / "python.exe"
+        else:
+        # POSIX: a copied or venv-materialized interpreter cannot relocate the
+        # standard library of uv-managed standalone CPython (build prefix is
+        # absent), failing with "No module named 'encodings'" on CI; the
+        # wrapper execs the real interpreter and stays inside version root.
             python = environment / "bin" / "python"
             python.parent.mkdir(parents=True)
             native_python = shlex.quote(str(Path(sys.executable).resolve()))
@@ -152,13 +159,6 @@ class FakeUvAdapter:
                 encoding="utf-8",
             )
             python.chmod(0o755)
-        else:
-            venv.EnvBuilder(with_pip=False, symlinks=False).create(environment)
-            python = (
-                environment / "Scripts" / "python.exe"
-                if request.manifest.target.os == "windows"
-                else environment / "bin" / "python"
-            )
         app = request.version_root / "app"
         app.mkdir()
         entrypoint = app / request.manifest.easyqc.entrypoint
