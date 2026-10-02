@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 from time import perf_counter
+
+import pytest
 
 import numpy as np
 import pandas as pd
@@ -10,6 +13,10 @@ from models.derived_formula import DerivedColumnFormula
 from scripts.benchmark_table_query import _peak_rss
 
 
+@pytest.mark.skipif(
+    os.environ.get("GITHUB_ACTIONS") == "true",
+    reason="hosted CI runners are not the supported workstation envelope",
+)
 def test_100k_by_300_formula_stays_within_normal_envelope() -> None:
     """Guard representative formula work at EasyQC's supported normal scale."""
 

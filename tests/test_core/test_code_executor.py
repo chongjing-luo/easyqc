@@ -186,10 +186,11 @@ def test_process_cleanup_failure_is_logged_and_remains_tracked(
     process = BrokenProcess()
     executor = CodeExecutor(system="Linux")
     executor.current_processes = [process]
-    monkeypatch.setattr("core.code_executor.os.getpgid", lambda _pid: process.pid)
+    monkeypatch.setattr("core.code_executor.os.getpgid", lambda _pid: process.pid, raising=False)
     monkeypatch.setattr(
         "core.code_executor.os.killpg",
         lambda *_args: (_ for _ in ()).throw(PermissionError("denied")),
+        raising=False,
     )
     monkeypatch.setattr(
         "core.code_executor.log_error",
@@ -1059,10 +1060,11 @@ def test_process_lookup_race_finalizes_only_with_observable_returncode(
         "core.code_executor.subprocess.Popen",
         lambda *_args, **_kwargs: process,
     )
-    monkeypatch.setattr("core.code_executor.os.getpgid", lambda _pid: process.pid)
+    monkeypatch.setattr("core.code_executor.os.getpgid", lambda _pid: process.pid, raising=False)
     monkeypatch.setattr(
         "core.code_executor.os.killpg",
         lambda *_args: (_ for _ in ()).throw(ProcessLookupError("gone")),
+        raising=False,
     )
     monkeypatch.setattr(
         "core.code_executor.log_error",
@@ -1135,8 +1137,8 @@ def test_close_current_processes_finalizes_before_forgetting_every_exit_path(
         "core.code_executor.subprocess.Popen",
         lambda *_args, **_kwargs: process,
     )
-    monkeypatch.setattr("core.code_executor.os.getpgid", lambda _pid: process.pid)
-    monkeypatch.setattr("core.code_executor.os.killpg", lambda *_args: None)
+    monkeypatch.setattr("core.code_executor.os.getpgid", lambda _pid: process.pid, raising=False)
+    monkeypatch.setattr("core.code_executor.os.killpg", lambda *_args: None, raising=False)
     executor = CodeExecutor(
         system="Linux",
         command_output_journal=journal,
@@ -1305,10 +1307,11 @@ def test_executor_close_keeps_journal_open_when_process_cleanup_is_incomplete(
         command_output_journal=journal,
     )
     executor.current_processes = [process]
-    monkeypatch.setattr("core.code_executor.os.getpgid", lambda _pid: process.pid)
+    monkeypatch.setattr("core.code_executor.os.getpgid", lambda _pid: process.pid, raising=False)
     monkeypatch.setattr(
         "core.code_executor.os.killpg",
         lambda *_args: (_ for _ in ()).throw(PermissionError("denied")),
+        raising=False,
     )
 
     with pytest.raises(CodeExecutorError, match="6402"):

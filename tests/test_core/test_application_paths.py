@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -79,6 +80,11 @@ def test_application_state_root_rejects_ambiguous_identity_or_override(
     environment: dict[str, str],
     message: str,
 ) -> None:
+    if message == "canonical" and sys.platform == "win32":
+        # The POSIX spelling is not an absolute Windows path, so the
+        # absolute-path guard fires before canonicalization can reject it.
+        message = "absolute"
+
     with pytest.raises(ApplicationPathError, match=message):
         resolve_application_state_root(
             source_root=tmp_path,
