@@ -133,6 +133,35 @@ def test_linux_builder_rejects_a_nonempty_release_directory(tmp_path: Path) -> N
     assert list(output.iterdir()) == [marker]
 
 
+@pytest.mark.skipif(shutil.which("dpkg-deb") is None, reason="dpkg-deb unavailable")
+def test_linux_builder_strips_inherited_setgid_from_staged_directories(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "setgid release"
+    output.mkdir()
+    output.chmod(output.stat().st_mode | stat.S_ISGID)
+    request = BuildRequest(
+        version="1.2.3",
+        target="linux-x86_64",
+        app_path=_fake_linux_app(tmp_path),
+        output_dir=output,
+        source_revision="a" * 40,
+    )
+
+    package = build_linux_deb(request)
+
+    assert package.name == "EasyQC-1.2.3-linux-x86_64.deb"
+    assert package.is_file()
+    contents = subprocess.run(
+        ["dpkg-deb", "--contents", str(package)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert contents.count("drwxr-xr-x") >= 4
+    assert "rws" not in contents and "r-s" not in contents
+
+
 def test_inno_renderer_is_per_user_and_escapes_paths(tmp_path: Path) -> None:
     app = tmp_path / 'EasyQC "application"'
     app.mkdir()

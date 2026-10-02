@@ -54,6 +54,7 @@ from core.module_filter import (
     ModuleFilterCompatibilityError,
     normalize_module_filter,
 )
+from core.module_repository import ModuleRecord
 from core.table_view_service import TableViewService
 from core.project_template_service import ProjectTemplateService
 from core.template_service import TemplateService
@@ -418,6 +419,27 @@ class QtProjectConfigWorkspace(QWidget):
             set_button_role(button, "secondary")
         return action, button
 
+    def _sync_module_toolbar_minimum(self) -> None:
+        """Keep module toolbar button text readable in narrow windows.
+
+        A QToolButton's minimum size hint is far below its text, so a
+        narrowing pane used to compress every button and push the
+        rightmost 保存模块 against the edge until it was unclickable.
+        Pinning each button to text width plus the theme's QSS padding
+        (5px 11px + 1px border per side) stops text clipping; buttons
+        that still do not fit overflow into the toolbar's extension menu,
+        and the window keeps shrinking freely. Re-run after language
+        switches because translated widths differ.
+        """
+
+        for toolbar in (self.module_actions_toolbar, self.module_commit_toolbar):
+            for button in toolbar.findChildren(QToolButton):
+                text = button.text()
+                if text:
+                    button.setMinimumWidth(
+                        button.fontMetrics().horizontalAdvance(text) + 24
+                    )
+
     def _build_constants_tab(self) -> None:
         layout = QVBoxLayout(self.constants_tab)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -472,9 +494,6 @@ class QtProjectConfigWorkspace(QWidget):
         self.constants_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.constants_table.setEditTriggers(QTableWidget.NoEditTriggers)
         layout.addWidget(self.constants_table, 1)
-        self.delete_constant_button = QPushButton("删除选中常量", self.constants_tab)
-        set_button_role(self.delete_constant_button, "danger")
-        layout.addWidget(self.delete_constant_button, 0, Qt.AlignRight)
         self.constant_error_label = QLabel("", self.constants_tab)
         self.constant_error_label.setObjectName("constantError")
         self.constant_error_label.setProperty("role", "error")
@@ -483,7 +502,6 @@ class QtProjectConfigWorkspace(QWidget):
         self.constant_error_label.hide()
         layout.addWidget(self.constant_error_label)
         self.save_constant_button.clicked.connect(self._save_constant)
-        self.delete_constant_button.clicked.connect(self._delete_selected_constant)
         self.cancel_constant_button.clicked.connect(self._reset_constant_form)
         self.refresh_constants_button.clicked.connect(lambda: self._refresh_constants())
         self.constant_from_template_button.clicked.connect(
@@ -759,15 +777,22 @@ class QtProjectConfigWorkspace(QWidget):
         viewer_layout.addLayout(execution_row)
         editor.addWidget(self.module_viewer_section)
 
-        self.module_actions_toolbar = QToolBar("模块编辑操作", self.modules_tab)
-        self.module_actions_toolbar.setObjectName("configModuleActions")
-        self.module_actions_toolbar.setAccessibleName("质控模块编辑操作")
-        self.module_actions_toolbar.setMovable(False)
-        self.module_actions_toolbar.setFloatable(False)
-        self.module_actions_toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        self.module_actions_toolbar.setSizePolicy(
-            QSizePolicy.Preferred,
-            QSizePolicy.Fixed,
+        def _new_module_toolbar(title: str, object_name: str) -> QToolBar:
+            toolbar = QToolBar(title, self.modules_tab)
+            toolbar.setObjectName(object_name)
+            toolbar.setAccessibleName(title)
+            toolbar.setMovable(False)
+            toolbar.setFloatable(False)
+            toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            toolbar.setSizePolicy(
+                QSizePolicy.Preferred,
+                QSizePolicy.Fixed,
+            )
+            return toolbar
+
+        self.module_actions_toolbar = _new_module_toolbar(
+            "模块编辑操作",
+            "configModuleActions",
         )
         self.delete_module_action, self.delete_module_button = self._add_toolbar_action(
             self.module_actions_toolbar,
@@ -781,24 +806,33 @@ class QtProjectConfigWorkspace(QWidget):
             QKeySequence("Ctrl+E"),
             self._choose_module_export,
         )
-        self.module_footer_spacer = QWidget(self.module_actions_toolbar)
-        self.module_footer_spacer.setSizePolicy(
-            QSizePolicy.Expanding,
-            QSizePolicy.Preferred,
-        )
-        self.module_actions_toolbar.addWidget(self.module_footer_spacer)
-        self.discard_module_action, self.discard_module_button = self._add_toolbar_action(
+        (
+            self.save_module_template_action,
+            self.save_module_template_button,
+        ) = self._add_toolbar_action(
             self.module_actions_toolbar,
+            "存为模板",
+            QKeySequence(),
+            self._save_module_as_template,
+        )
+        self.save_module_template_action.setEnabled(self.templates is not None)
+        self.module_commit_toolbar = _new_module_toolbar(
+            "模块保存操作",
+            "configModuleCommitActions",
+        )
+        self.discard_module_action, self.discard_module_button = self._add_toolbar_action(
+            self.module_commit_toolbar,
             "放弃更改",
             QKeySequence(),
             self._discard_module_form,
         )
         self.save_module_action, self.save_module_button = self._add_toolbar_action(
-            self.module_actions_toolbar,
+            self.module_commit_toolbar,
             "保存模块",
             QKeySequence("Ctrl+S"),
             self._save_module_form,
         )
+        self._sync_module_toolbar_minimum()
         self.save_module_button.setObjectName("primaryAction")
         set_button_role(self.save_module_button, "primary")
         set_button_role(self.delete_module_button, "danger")
@@ -814,7 +848,15 @@ class QtProjectConfigWorkspace(QWidget):
         module_actions_layout = QHBoxLayout(module_actions_row)
         module_actions_layout.setContentsMargins(12, 0, 12, 0)
         module_actions_layout.addWidget(self.module_actions_toolbar)
+        module_actions_layout.addStretch(1)
         editor_pane_layout.addWidget(module_actions_row)
+        module_commit_row = QWidget(editor_pane)
+        module_commit_row.setObjectName("configModuleCommitRow")
+        module_commit_layout = QHBoxLayout(module_commit_row)
+        module_commit_layout.setContentsMargins(12, 0, 12, 0)
+        module_commit_layout.addStretch(1)
+        module_commit_layout.addWidget(self.module_commit_toolbar)
+        editor_pane_layout.addWidget(module_commit_row)
         self.module_splitter.addWidget(left_panel)
         self.module_splitter.addWidget(editor_pane)
         self.module_splitter.setCollapsible(0, False)
@@ -965,6 +1007,7 @@ class QtProjectConfigWorkspace(QWidget):
             button.setAccessibleName(text)
             button.setToolTip(text)
         self.tag_editor.retranslate_ui()
+        self._sync_module_toolbar_minimum()
         sync_score_table_height(self.score_table)
         self._update_score_move_actions()
         self._preview_project_item(self.project_list.currentItem())
@@ -1057,12 +1100,20 @@ class QtProjectConfigWorkspace(QWidget):
             action_layout.setContentsMargins(0, 0, 0, 0)
             action_layout.setSpacing(4)
             edit_button = QPushButton("编辑", actions)
+            template_button = QPushButton("存为模板", actions)
+            template_button.setEnabled(self.templates is not None)
             delete_button = QPushButton("删除", actions)
             set_button_role(edit_button, "quiet")
+            set_button_role(template_button, "quiet")
             set_button_role(delete_button, "danger")
             edit_button.clicked.connect(
                 lambda _checked=False, constant_name=str(name): self._edit_constant_name(
                     constant_name
+                )
+            )
+            template_button.clicked.connect(
+                lambda _checked=False, constant_name=str(name): (
+                    self._save_constant_as_template(constant_name)
                 )
             )
             delete_button.clicked.connect(
@@ -1072,6 +1123,7 @@ class QtProjectConfigWorkspace(QWidget):
             )
             action_layout.addStretch(1)
             action_layout.addWidget(edit_button)
+            action_layout.addWidget(template_button)
             action_layout.addWidget(delete_button)
             self.constants_table.setCellWidget(row, 2, actions)
         self._filter_constants(self.constant_search.text())
@@ -1818,13 +1870,14 @@ class QtProjectConfigWorkspace(QWidget):
         self._set_constant_error("")
         self._refresh_constants()
 
-    def _delete_selected_constant(self) -> None:
-        row = self.constants_table.currentRow()
-        if row < 0 or self.constants_table.item(row, 0) is None:
-            return
-        self._delete_constant(self.constants_table.item(row, 0).text())
-
     def _delete_constant(self, name: str) -> None:
+        answer = QMessageBox.question(
+            self,
+            translate_ui_text("删除常量"),
+            translate_ui_text(f"删除常量 {name}？该操作不可撤销。"),
+        )
+        if answer != QMessageBox.Yes:
+            return
         try:
             self.configuration.delete_constant(name)
         except Exception as exc:
@@ -1834,6 +1887,45 @@ class QtProjectConfigWorkspace(QWidget):
             self._reset_constant_form()
         self._set_constant_error("")
         self._refresh_constants()
+
+    def _save_constant_as_template(self, name: str) -> None:
+        if self.templates is None:
+            self._set_constant_error(
+                translate_ui_text("模板服务不可用，无法保存常量模板")
+            )
+            return
+        constants = self.configuration.constants()
+        if name not in constants:
+            self._set_constant_error(f"所选常量已不存在：{name}")
+            return
+        existing = name in self.templates.constants()
+        if existing:
+            answer = QMessageBox.question(
+                self,
+                translate_ui_text("覆盖常量模板"),
+                translate_ui_text(
+                    f"模板库中已存在同名常量模板 {name}。用当前值覆盖它？"
+                ),
+            )
+        else:
+            answer = QMessageBox.question(
+                self,
+                translate_ui_text("保存常量模板"),
+                translate_ui_text(f"将常量 {name} 保存为安装模板？"),
+            )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            self.templates.set_constant(
+                name,
+                constants[name],
+                old_name=name if existing else None,
+            )
+        except Exception as exc:
+            self._set_constant_error(str(exc))
+            return
+        self._set_constant_error("")
+        self.status_label.setText(translate_ui_text("常量模板已保存"))
 
     @Slot()
     def _open_constant_template_dialog(self) -> None:
@@ -2031,7 +2123,7 @@ class QtProjectConfigWorkspace(QWidget):
         if self._selected_module_name:
             self.move_module(self._selected_module_name, delta)
 
-    def _save_module_form(self) -> None:
+    def _collect_module_from_form(self) -> QCModule | None:
         name = self.module_name.text().strip()
         label = self.module_label.text().strip() or name
         scores = {}
@@ -2060,7 +2152,7 @@ class QtProjectConfigWorkspace(QWidget):
             )
             if module is None:
                 self._set_error("所选模块已不存在，请重新选择")
-                return
+                return None
         module = deepcopy(module)
         module.name = name
         module.label = label
@@ -2072,6 +2164,12 @@ class QtProjectConfigWorkspace(QWidget):
         )
         module.scores = scores
         module.tags = tags
+        return module
+
+    def _save_module_form(self) -> None:
+        module = self._collect_module_from_form()
+        if module is None:
+            return
         try:
             if self._selected_module_name is None:
                 self.configuration.create_module(module)
@@ -2080,9 +2178,9 @@ class QtProjectConfigWorkspace(QWidget):
         except Exception as exc:
             self._set_error(str(exc))
             return
-        self._selected_module_name = name
+        self._selected_module_name = module.name
         self._set_error("")
-        self._refresh_modules(name)
+        self._refresh_modules(module.name)
 
     def _delete_selected_module(self) -> None:
         if not self._selected_module_name:
@@ -2158,6 +2256,60 @@ class QtProjectConfigWorkspace(QWidget):
                 lambda: configuration.export_module(module_name, path),
             )
 
+    def _save_module_as_template(self) -> None:
+        if self.templates is None:
+            self._set_error(translate_ui_text("模板服务不可用，无法保存模块模板"))
+            return
+        module = self._collect_module_from_form()
+        if module is None:
+            return
+        existing = next(
+            (
+                record
+                for record in self.templates.modules().records
+                if record.module.name == module.name
+            ),
+            None,
+        )
+        if existing is not None:
+            answer = QMessageBox.question(
+                self,
+                translate_ui_text("覆盖模块模板"),
+                translate_ui_text(
+                    f"模板库中已存在同名模板 {module.name}。用当前模块内容覆盖它？"
+                ),
+            )
+        else:
+            answer = QMessageBox.question(
+                self,
+                translate_ui_text("保存模块模板"),
+                translate_ui_text(f"将当前模块 {module.name} 保存为安装模板？"),
+            )
+        if answer != QMessageBox.Yes:
+            return
+        templates = self.templates
+
+        def save_template():
+            if existing is not None:
+                record = ModuleRecord.create(
+                    module,
+                    scope="template",
+                    display_order=existing.display_order,
+                    module_id=existing.module_id,
+                )
+                return templates.save_module(record)
+            snapshot = templates.modules()
+            display_order = (
+                max(
+                    (record.display_order for record in snapshot.records),
+                    default=0,
+                )
+                + 10
+            )
+            return templates.add_module(module, display_order=display_order)
+
+        self._submit_io("save_module_template", save_template)
+
     def _submit_io(self, operation: str, function: Callable[[], object]) -> bool:
         if self.io_task_controller.busy:
             self._set_error("另一项配置任务仍在运行")
@@ -2171,6 +2323,7 @@ class QtProjectConfigWorkspace(QWidget):
             "import_project": "正在导入项目…",
             "import_module": "正在导入质控模块…",
             "export_module": "正在导出质控模块…",
+            "save_module_template": "正在保存模块模板…",
         }
         if operation not in labels:
             raise ValueError(f"Unsupported background operation: {operation}")
@@ -2199,7 +2352,7 @@ class QtProjectConfigWorkspace(QWidget):
                     raise TypeError("模块导入任务返回了无效模块列表")
                 self.configuration.publish_modules_changed()
                 self._refresh_modules(modules=result)
-            elif operation != "export_module":
+            elif operation not in {"export_module", "save_module_template"}:
                 raise ValueError(f"Unsupported background operation: {operation}")
         except Exception as exc:
             self._pending_io = None
@@ -2212,6 +2365,7 @@ class QtProjectConfigWorkspace(QWidget):
             "import_project": "项目导入完成",
             "import_module": "质控模块导入完成",
             "export_module": "导出完成",
+            "save_module_template": "模块模板已保存",
         }
         self._pending_io = None
         self._set_error("")

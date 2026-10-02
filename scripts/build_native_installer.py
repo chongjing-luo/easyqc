@@ -281,6 +281,11 @@ def build_linux_deb(request: BuildRequest) -> Path:
             " EasyQC manages QC lists, modules, external viewers, ratings and exports.\n"
         )
         _write_text(stage / "DEBIAN" / "control", control)
+        # Group-shared workspaces put the setgid bit on every new directory;
+        # dpkg-deb requires the control directory to be exactly 0755 and a
+        # shipped package must not carry setgid directories.
+        for staged_root, _dirs, _files in os.walk(stage):
+            os.chmod(staged_root, 0o755)
         _run(
             [
                 dpkg_deb,

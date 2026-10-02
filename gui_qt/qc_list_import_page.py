@@ -497,7 +497,7 @@ class QtQcListImportPage(QWidget):
         if mode == "folder":
             self.source_path_edit.setPlaceholderText("选择包含名单目录的文件夹")
         elif mode == "file":
-            self.source_path_edit.setPlaceholderText("选择 CSV、Excel、TXT 或 LIST 文件")
+            self.source_path_edit.setPlaceholderText("选择 CSV、TSV、Excel、TXT 或 LIST 文件")
 
     def _browse_source(self) -> None:
         if self._source_mode == "folder":
@@ -512,7 +512,7 @@ class QtQcListImportPage(QWidget):
                 "",
                 ";;".join((
                     translate_ui_text("所有文件 (*)"),
-                    translate_ui_text("名单文件 (*.csv *.xlsx *.xls *.txt *.list)"),
+                    translate_ui_text("名单文件 (*.csv *.tsv *.xlsx *.xls *.txt *.list)"),
                 )),
             )
         if selected:

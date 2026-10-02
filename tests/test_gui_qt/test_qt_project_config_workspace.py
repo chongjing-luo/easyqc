@@ -5,7 +5,7 @@ from threading import Event, get_ident
 
 import pandas as pd
 from shiboken6 import isValid
-from PySide6.QtCore import QSettings, QSize, Qt, QTimer
+from PySide6.QtCore import QPoint, QSettings, QSize, Qt, QTimer
 from PySide6.QtGui import QDesktopServices, QFontDatabase
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -332,7 +332,8 @@ def test_constants_table_stretches_values_and_right_aligns_compact_actions(
     actions = table.cellWidget(row, 2)
     action_layout = actions.layout()
     edit_button = action_layout.itemAt(1).widget()
-    delete_button = action_layout.itemAt(2).widget()
+    template_button = action_layout.itemAt(2).widget()
+    delete_button = action_layout.itemAt(3).widget()
 
     assert header.sectionResizeMode(0) == QHeaderView.ResizeMode.ResizeToContents
     assert header.sectionResizeMode(1) == QHeaderView.ResizeMode.Stretch
@@ -340,15 +341,17 @@ def test_constants_table_stretches_values_and_right_aligns_compact_actions(
     assert not header.stretchLastSection()
     assert action_layout.getContentsMargins() == (0, 0, 0, 0)
     assert action_layout.spacing() == 4
-    assert action_layout.count() == 3
+    assert action_layout.count() == 4
     assert action_layout.itemAt(0).spacerItem() is not None
     assert edit_button.text() == "编辑"
+    assert template_button.text() == "存为模板"
+    assert not template_button.isEnabled()
     assert delete_button.text() == "删除"
     assert edit_button.isVisibleTo(actions)
     assert delete_button.isVisibleTo(actions)
     assert table.item(row, 1).toolTip() == long_path
     assert table.columnWidth(1) > table.columnWidth(0)
-    assert table.columnWidth(1) > table.columnWidth(2)
+    assert table.columnWidth(2) < table.viewport().width()
     assert (
         table.columnViewportPosition(2) + table.columnWidth(2)
         <= table.viewport().width()
@@ -358,6 +361,7 @@ def test_constants_table_stretches_values_and_right_aligns_compact_actions(
 def test_constant_row_actions_survive_refresh_search_and_reduced_width(
     qtbot,
     tmp_path,
+    monkeypatch,
 ) -> None:
     workspace, config = _workspace(qtbot, tmp_path)
     config.set_constant("DATA_ROOT", "/data")
@@ -381,7 +385,7 @@ def test_constant_row_actions_survive_refresh_search_and_reduced_width(
     data_actions = workspace.constants_table.cellWidget(data_row, 2)
     data_layout = data_actions.layout()
     edit_button = data_layout.itemAt(1).widget()
-    delete_button = data_layout.itemAt(2).widget()
+    delete_button = data_layout.itemAt(3).widget()
     assert edit_button.isVisibleTo(data_actions)
     assert delete_button.isVisibleTo(data_actions)
 
@@ -390,9 +394,14 @@ def test_constant_row_actions_survive_refresh_search_and_reduced_width(
     assert workspace.constant_value.text() == "/data"
     qtbot.mouseClick(workspace.cancel_constant_button, Qt.LeftButton)
 
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QMessageBox.Yes,
+    )
     output_row = _constant_row(workspace, "OUTPUT_ROOT")
     output_actions = workspace.constants_table.cellWidget(output_row, 2)
-    output_delete = output_actions.layout().itemAt(2).widget()
+    output_delete = output_actions.layout().itemAt(3).widget()
     qtbot.mouseClick(output_delete, Qt.LeftButton)
 
     assert config.constants() == {"DATA_ROOT": "/data"}
@@ -1064,33 +1073,58 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
     workspace.show()
     workspace.tabs.setCurrentWidget(workspace.modules_tab)
 
-    footer_actions = [
+    secondary_actions = [
         action.text()
         for action in workspace.module_actions_toolbar.actions()
         if action.text()
     ]
-    assert footer_actions == ["删除模块", "导出模块", "放弃更改", "保存模块"]
-    footer_buttons = [
-        workspace.module_actions_toolbar.widgetForAction(action)
-        for action in (
-            workspace.delete_module_action,
-            workspace.export_module_action,
-            workspace.discard_module_action,
-            workspace.save_module_action,
-        )
+    commit_actions = [
+        action.text()
+        for action in workspace.module_commit_toolbar.actions()
+        if action.text()
     ]
+    assert secondary_actions == ["删除模块", "导出模块", "存为模板"]
+    assert commit_actions == ["放弃更改", "保存模块"]
+    footer_toolbars = (
+        (workspace.module_actions_toolbar, workspace.delete_module_action, "删除模块"),
+        (workspace.module_actions_toolbar, workspace.export_module_action, "导出模块"),
+        (
+            workspace.module_actions_toolbar,
+            workspace.save_module_template_action,
+            "存为模板",
+        ),
+        (workspace.module_commit_toolbar, workspace.discard_module_action, "放弃更改"),
+        (workspace.module_commit_toolbar, workspace.save_module_action, "保存模块"),
+    )
+    footer_buttons = [
+        toolbar.widgetForAction(action) for toolbar, action, _text in footer_toolbars
+    ]
+    for (toolbar, _action, text), button in zip(footer_toolbars, footer_buttons):
+        assert button is not None and button.text() == text
     visible_footer_buttons = [
         button for button in footer_buttons if button.isVisible()
     ]
     if len(visible_footer_buttons) < len(footer_buttons):
-        footer_extension = workspace.module_actions_toolbar.findChild(
-            QToolButton,
-            "qt_toolbar_ext_button",
+        for toolbar in (workspace.module_actions_toolbar, workspace.module_commit_toolbar):
+            footer_extension = toolbar.findChild(
+                QToolButton,
+                "qt_toolbar_ext_button",
+            )
+            if not all(
+                toolbar.widgetForAction(action).isVisible()
+                for _tb, action, _text in footer_toolbars
+                if _tb is toolbar
+            ):
+                assert footer_extension is not None and footer_extension.isVisible()
+    for toolbar in (workspace.module_actions_toolbar, workspace.module_commit_toolbar):
+        toolbar_buttons = [
+            toolbar.widgetForAction(action)
+            for _tb, action, _text in footer_toolbars
+            if _tb is toolbar
+        ]
+        assert [button.x() for button in toolbar_buttons] == sorted(
+            button.x() for button in toolbar_buttons
         )
-        assert footer_extension is not None and footer_extension.isVisible()
-    assert [button.x() for button in visible_footer_buttons] == sorted(
-        button.x() for button in visible_footer_buttons
-    )
 
     assert isinstance(workspace.module_code, QPlainTextEdit)
     assert workspace.module_code.lineWrapMode() == QPlainTextEdit.LineWrapMode.NoWrap
@@ -1116,6 +1150,10 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
     assert actions_row is not None
     assert actions_row.layout().indexOf(workspace.module_actions_toolbar) == 0
     assert actions_row.layout().contentsMargins().left() == 12
+    commit_row = editor_pane_layout.itemAt(2).widget()
+    assert commit_row is not None
+    assert commit_row.layout().indexOf(workspace.module_commit_toolbar) == 1
+    assert commit_row.layout().contentsMargins().left() == 12
     assert workspace.module_splitter.widget(1) is editor_pane
 
     workspace.module_code.setPlainText(
@@ -1230,26 +1268,41 @@ def test_key_toolbars_keep_actions_visible_with_wide_native_buttons(
     assert workspace.import_module_button.isVisible()
 
     footer_buttons = [
-        workspace.module_actions_toolbar.widgetForAction(action)
-        for action in (
-            workspace.delete_module_action,
-            workspace.export_module_action,
-            workspace.discard_module_action,
-            workspace.save_module_action,
+        toolbar.widgetForAction(action)
+        for toolbar, action in (
+            (workspace.module_actions_toolbar, workspace.delete_module_action),
+            (workspace.module_actions_toolbar, workspace.export_module_action),
+            (
+                workspace.module_actions_toolbar,
+                workspace.save_module_template_action,
+            ),
+            (workspace.module_commit_toolbar, workspace.discard_module_action),
+            (workspace.module_commit_toolbar, workspace.save_module_action),
         )
     ]
     if not all(button.isVisible() for button in footer_buttons):
-        footer_extension = workspace.module_actions_toolbar.findChild(
-            QToolButton,
-            "qt_toolbar_ext_button",
-        )
-        assert footer_extension is not None and footer_extension.isVisible()
+        for toolbar in (workspace.module_actions_toolbar, workspace.module_commit_toolbar):
+            if not all(
+                toolbar.widgetForAction(action).isVisible()
+                for action in toolbar.actions()
+            ):
+                footer_extension = toolbar.findChild(
+                    QToolButton,
+                    "qt_toolbar_ext_button",
+                )
+                assert footer_extension is not None and footer_extension.isVisible()
     visible_footer_buttons = [
         button for button in footer_buttons if button.isVisible()
     ]
-    assert [button.x() for button in visible_footer_buttons] == sorted(
-        button.x() for button in visible_footer_buttons
-    )
+    for toolbar in (workspace.module_actions_toolbar, workspace.module_commit_toolbar):
+        toolbar_buttons = [
+            toolbar.widgetForAction(action)
+            for action in toolbar.actions()
+            if toolbar.widgetForAction(action) is not None
+        ]
+        assert [button.x() for button in toolbar_buttons] == sorted(
+            button.x() for button in toolbar_buttons
+        )
     assert (
         workspace.module_actions_toolbar.sizePolicy().horizontalPolicy()
         == QSizePolicy.Policy.Preferred
@@ -1542,6 +1595,210 @@ def test_project_workspace_copies_editable_constant_and_module_templates(
     assert templates.module(source.module_id).module.label == "Template label"
 
 
+def test_save_module_as_template_requires_template_service(qtbot, tmp_path) -> None:
+    workspace, _config = _workspace(qtbot, tmp_path)
+
+    assert not workspace.save_module_template_action.isEnabled()
+
+    workspace._save_module_as_template()
+
+    assert "模板服务不可用" in workspace.error_label.text()
+
+
+def _workspace_with_templates(qtbot, tmp_path):
+    templates = TemplateService(tmp_path / "install")
+    config = ConfigurationService(
+        ProjectService(tmp_path / "install" / "projects.json"),
+        TableService(),
+    )
+    config.create_project("SAMPLE", tmp_path)
+    config.replace_subjects(pd.DataFrame({"easyqcid": ["SUB001"]}))
+    language = LanguageController(
+        settings=QSettings(
+            str(tmp_path / "language.ini"),
+            QSettings.IniFormat,
+        )
+    )
+    workspace = QtProjectConfigWorkspace(
+        config,
+        templates=templates,
+        project_templates=ProjectTemplateService(templates),
+        language=language,
+    )
+    qtbot.addWidget(workspace)
+    qtbot.waitUntil(lambda: not workspace.io_task_controller.busy, timeout=2000)
+    return workspace, config, templates
+
+
+def _constant_template_button(workspace, name: str):
+    row = _constant_row(workspace, name)
+    actions = workspace.constants_table.cellWidget(row, 2)
+    return actions.layout().itemAt(2).widget()
+
+
+def _constant_delete_button(workspace, name: str):
+    row = _constant_row(workspace, name)
+    actions = workspace.constants_table.cellWidget(row, 2)
+    return actions.layout().itemAt(3).widget()
+
+
+def test_constant_row_save_as_template_confirms_creates_and_overwrites(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workspace, config, templates = _workspace_with_templates(qtbot, tmp_path)
+    config.set_constant("DATA_ROOT", "/data")
+    workspace._refresh_constants()
+    workspace.tabs.setCurrentWidget(workspace.constants_tab)
+    workspace.show()
+
+    questions: list[tuple] = []
+
+    def accept(*args, **kwargs):
+        questions.append(args)
+        return QMessageBox.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", accept)
+    template_button = _constant_template_button(workspace, "DATA_ROOT")
+    assert template_button.isEnabled()
+    qtbot.mouseClick(template_button, Qt.LeftButton)
+
+    assert questions[0][1] == "保存常量模板"
+    assert "将常量 DATA_ROOT" in questions[0][2]
+    assert templates.constants() == {"DATA_ROOT": "/data"}
+    assert "常量模板已保存" in workspace.status_label.text()
+
+    config.set_constant("DATA_ROOT", "/updated")
+    workspace._refresh_constants()
+
+    def refuse(*args, **kwargs):
+        questions.append(args)
+        return QMessageBox.No
+
+    monkeypatch.setattr(QMessageBox, "question", refuse)
+    template_button = _constant_template_button(workspace, "DATA_ROOT")
+    qtbot.mouseClick(template_button, Qt.LeftButton)
+    assert questions[1][1] == "覆盖常量模板"
+    assert "同名常量模板 DATA_ROOT" in questions[1][2]
+    assert templates.constants() == {"DATA_ROOT": "/data"}
+
+    monkeypatch.setattr(QMessageBox, "question", accept)
+    qtbot.mouseClick(template_button, Qt.LeftButton)
+    assert templates.constants() == {"DATA_ROOT": "/updated"}
+
+
+def test_constant_delete_requires_confirmation(qtbot, tmp_path, monkeypatch) -> None:
+    workspace, config = _workspace(qtbot, tmp_path)
+    config.set_constant("DATA_ROOT", "/data")
+    workspace._refresh_constants()
+
+    questions: list[tuple] = []
+
+    def refuse(*args, **kwargs):
+        questions.append(args)
+        return QMessageBox.No
+
+    monkeypatch.setattr(QMessageBox, "question", refuse)
+    delete_button = _constant_delete_button(workspace, "DATA_ROOT")
+    qtbot.mouseClick(delete_button, Qt.LeftButton)
+    assert questions[0][1] == "删除常量"
+    assert "删除常量 DATA_ROOT" in questions[0][2]
+    assert config.constants() == {"DATA_ROOT": "/data"}
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QMessageBox.Yes,
+    )
+    qtbot.mouseClick(delete_button, Qt.LeftButton)
+    assert config.constants() == {}
+
+
+def test_project_workspace_saves_module_as_template_and_overwrites_on_confirm(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    templates = TemplateService(tmp_path / "install")
+    config = ConfigurationService(
+        ProjectService(tmp_path / "install" / "projects.json"),
+        TableService(),
+    )
+    config.create_project("SAMPLE", tmp_path)
+    config.replace_subjects(pd.DataFrame({"easyqcid": ["SUB001"]}))
+    language = LanguageController(
+        settings=QSettings(
+            str(tmp_path / "language.ini"),
+            QSettings.IniFormat,
+        )
+    )
+    workspace = QtProjectConfigWorkspace(
+        config,
+        templates=templates,
+        project_templates=ProjectTemplateService(templates),
+        language=language,
+    )
+    qtbot.addWidget(workspace)
+    qtbot.waitUntil(lambda: not workspace.io_task_controller.busy, timeout=2000)
+    workspace.resize(980, 720)
+    workspace.show()
+    workspace.tabs.setCurrentWidget(workspace.modules_tab)
+    assert workspace.add_module("FuncQC", "功能质控")
+    assert workspace.save_module_template_action.isEnabled()
+
+    questions: list[tuple] = []
+
+    def record_and_accept(*args, **kwargs):
+        questions.append(args)
+        return QMessageBox.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", record_and_accept)
+    qtbot.mouseClick(workspace.save_module_template_button, Qt.LeftButton)
+    qtbot.waitUntil(
+        lambda: "模块模板已保存" in workspace.status_label.text(),
+        timeout=2000,
+    )
+    assert questions[0][1] == "保存模块模板"
+    assert "将当前模块 FuncQC" in questions[0][2]
+    records = templates.modules().records
+    assert [record.module.name for record in records] == ["FuncQC"]
+    module_id = records[0].module_id
+    assert templates.module(module_id).module.label == "功能质控"
+    qtbot.waitUntil(lambda: not workspace.io_task_controller.busy, timeout=2000)
+
+    workspace.module_label.setText("更新后的标签")
+
+    def record_and_refuse(*args, **kwargs):
+        questions.append(args)
+        return QMessageBox.No
+
+    monkeypatch.setattr(QMessageBox, "question", record_and_refuse)
+    qtbot.mouseClick(workspace.save_module_template_button, Qt.LeftButton)
+    assert len(questions) == 2
+    assert questions[1][1] == "覆盖模块模板"
+    assert "同名模板 FuncQC" in questions[1][2]
+    assert templates.module(module_id).module.label == "功能质控"
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QMessageBox.Yes,
+    )
+    qtbot.mouseClick(workspace.save_module_template_button, Qt.LeftButton)
+    qtbot.waitUntil(
+        lambda: (
+            templates.module(module_id).module.label == "更新后的标签"
+            and not workspace.io_task_controller.busy
+            and "模块模板已保存" in workspace.status_label.text()
+        ),
+        timeout=2000,
+    )
+    assert [record.module_id for record in templates.modules().records] == [
+        module_id
+    ]
+
+
 def test_project_template_copy_dialog_keeps_conflict_visible(
     qtbot,
     tmp_path,
@@ -1578,3 +1835,32 @@ def test_project_template_copy_dialog_keeps_conflict_visible(
     assert dialog.isVisible()
     assert "site" in dialog.error_label.text()
     assert config.constants() == {}
+
+
+def test_module_toolbar_buttons_keep_text_width_in_narrow_windows(
+    qtbot,
+    tmp_path,
+) -> None:
+    workspace, config = _workspace(qtbot, tmp_path)
+    config.add_module("AnatQC", "Anatomical QC")
+    for index in range(workspace.tabs.count()):
+        if workspace.tabs.widget(index) is workspace.modules_tab:
+            workspace.tabs.setCurrentIndex(index)
+    workspace.module_list.setCurrentRow(0)
+    workspace.show()
+    workspace.resize(820, 640)
+    qtbot.wait(80)
+
+    for toolbar in (workspace.module_actions_toolbar, workspace.module_commit_toolbar):
+        for button in toolbar.findChildren(QToolButton):
+            text = button.text()
+            if not text:
+                continue
+            needed = button.fontMetrics().horizontalAdvance(text) + 20
+            assert button.width() >= needed, (text, button.width(), needed)
+
+    save = workspace.save_module_button
+    assert save.text() == "保存模块"
+    position = save.mapTo(workspace.modules_tab, QPoint(0, 0))
+    assert position.x() >= 0
+    assert position.x() + save.width() <= workspace.modules_tab.width()

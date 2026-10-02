@@ -855,7 +855,9 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "选择 EasyQC 项目目录": "Select EasyQC project folder",
     "选择项目上级目录": "Select parent folder for project",
     "选择包含名单目录的文件夹": "Select the folder containing list files",
-    "选择 CSV、Excel、TXT 或 LIST 文件": "Select a CSV, Excel, TXT or LIST file",
+    "选择 CSV、TSV、Excel、TXT 或 LIST 文件": (
+        "Select a CSV, TSV, Excel, TXT or LIST file"
+    ),
     "导入质控模块": "Import QC module",
     "导出质控模块": "Export QC module",
     "删除质控模块": "Delete QC module",
@@ -882,7 +884,6 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "常量名": "Constant name",
     "常量值": "Value",
     "添加常量": "Add constant",
-    "删除选中常量": "Delete selected constant",
     "搜索常量名或值": "Search name or value",
     "搜索常量": "Search constants",
     "质控前名单": "Pre-QC list",
@@ -911,6 +912,19 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "新建模块": "New module",
     "导入模块": "Import module",
     "导出模块": "Export module",
+    "存为模板": "Save as template",
+    "覆盖模块模板": "Overwrite module template",
+    "保存模块模板": "Save module template",
+    "覆盖常量模板": "Overwrite constant template",
+    "保存常量模板": "Save constant template",
+    "模板服务不可用，无法保存模块模板": (
+        "Template service unavailable; cannot save the module template"
+    ),
+    "模板服务不可用，无法保存常量模板": (
+        "Template service unavailable; cannot save the constant template"
+    ),
+    "常量模板已保存": "Constant template saved",
+    "删除常量": "Delete constant",
     "删除模块": "Delete module",
     "保存模块": "Save module",
     "放弃更改": "Discard changes",
@@ -1389,8 +1403,8 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "项目加载失败；请返回项目管理页重新加载。": (
         "Project loading failed. Return to project management and reload the project."
     ),
-    "名单文件 (*.csv *.xlsx *.xls *.txt *.list)": (
-        "List files (*.csv *.xlsx *.xls *.txt *.list)"
+    "名单文件 (*.csv *.tsv *.xlsx *.xls *.txt *.list)": (
+        "List files (*.csv *.tsv *.xlsx *.xls *.txt *.list)"
     ),
     "选择项目上级目录": "Select project parent folder",
     "选择 EasyQC 项目目录": "Select EasyQC project folder",
@@ -1450,12 +1464,15 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "项目信息操作": "Project-detail actions",
     "模块列表操作": "Module-list actions",
     "模块编辑操作": "Module-edit actions",
+    "模块保存操作": "Module-save actions",
     "质控模块名称": "QC module name",
     "质控模块显示标签": "QC module display label",
     "固定 easyqcid 列": "Pinned easyqcid column",
     "刷新质控结果": "Refresh QC results",
     "正在导入项目…": "Importing project…",
     "正在导入质控模块…": "Importing QC module…",
+    "正在保存模块模板…": "Saving module template…",
+    "模块模板已保存": "Module template saved",
     "正在导出质控模块…": "Exporting QC module…",
     "请先保存或放弃当前质控修改": (
         "Save or discard the current QC changes first."
@@ -1901,6 +1918,28 @@ _SOURCE_PATTERNS = (
     (
         re.compile(r"^删除模块 (?P<value>.*)？该操作不可撤销。$"),
         "Delete module {value}? This cannot be undone.",
+    ),
+    (
+        re.compile(r"^模板库中已存在同名模板 (?P<value>.*)。用当前模块内容覆盖它？$"),
+        "A module template named {value} already exists. "
+        "Overwrite it with the current module?",
+    ),
+    (
+        re.compile(r"^将当前模块 (?P<value>.*) 保存为安装模板？$"),
+        "Save the current module {value} as an installation template?",
+    ),
+    (
+        re.compile(r"^删除常量 (?P<value>.*)？该操作不可撤销。$"),
+        "Delete constant {value}? This cannot be undone.",
+    ),
+    (
+        re.compile(r"^将常量 (?P<value>.*) 保存为安装模板？$"),
+        "Save constant {value} as an installation template?",
+    ),
+    (
+        re.compile(r"^模板库中已存在同名常量模板 (?P<value>.*)。用当前值覆盖它？$"),
+        "A constant template named {value} already exists. "
+        "Overwrite it with the current value?",
     ),
     (
         re.compile(r"^项目目录不存在: (?P<value>.*)$"),

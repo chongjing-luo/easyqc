@@ -592,6 +592,7 @@ class QtMainWindow(QMainWindow):
         self.navigation.blockSignals(True)
         self.navigation.setCurrentRow(-1)
         self.navigation.blockSignals(False)
+        self.cross_project_settings_page.refresh()
         self.workspace_stack.setCurrentIndex(self.cross_project_settings_page_index)
 
     @Slot()

@@ -30,6 +30,7 @@ from core.event_bus import EventType
 from core.project_context_service import ProjectContextError
 from core.qc_workflow_service import QcWorkflowService
 from core.table_view_service import TableViewService
+from models.qcmodule import QCModule
 from gui_qt.application import build_product_window
 from gui_qt.i18n import LanguageController, get_or_create_language_controller
 from gui_qt.main_window import QtMainWindow
@@ -544,6 +545,24 @@ def test_cross_project_settings_page_opens_without_execution_tab(qtbot, tmp_path
         "QC module templates",
         "Language",
     ]
+
+
+def test_opening_settings_refreshes_stale_template_lists(qtbot, tmp_path) -> None:
+    window, services = _window(qtbot, tmp_path)
+    page = window.cross_project_settings_page
+    assert page.module_list.count() == 0
+
+    services.template_service.add_module(
+        QCModule(name="AnatQC", label="解剖质控"),
+        display_order=10,
+    )
+    assert page.module_list.count() == 0
+
+    qtbot.mouseClick(window.settings_button, Qt.LeftButton)
+
+    assert window.workspace_stack.currentWidget() is page
+    assert page.module_list.count() == 1
+    assert page.module_list.item(0).text() == "AnatQC — 解剖质控"
 
 
 def test_settings_language_toggle_without_losing_page_or_draft(
