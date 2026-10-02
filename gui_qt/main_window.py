@@ -1644,7 +1644,9 @@ class QtMainWindow(QMainWindow):
             return
         snapshot = self.current_context
         source_identity = entry.easyqcid or identity
-        self._show_command_output()
+        # Output still streams into the journal, but the window stays hidden
+        # for a successful viewer launch; it surfaces itself on failure.
+        self._ensure_command_output_panel()
         # The collector resumes after startup, avoiding concurrent mutation of
         # the executor's process registry by the worker and Qt timer.
         self.row_command_output_panel.timer.stop()
@@ -1657,7 +1659,9 @@ class QtMainWindow(QMainWindow):
             ),
         )
 
-    def _show_command_output(self):
+    def _ensure_command_output_panel(self):
+        """Create the row-command output window once without showing it."""
+
         if self.command_output_window is None:
             self.command_output_window = QDialog(self)
             self.command_output_window.setObjectName("rowCommandOutputWindow")
@@ -1671,8 +1675,12 @@ class QtMainWindow(QMainWindow):
             layout.addWidget(self.row_command_output_panel)
             self.row_command_output_panel.set_expanded(True)
             self.language.register_root(self.command_output_window)
-        self.command_output_window.show()
-        self.command_output_window.raise_()
+        return self.command_output_window
+
+    def _show_command_output(self):
+        window = self._ensure_command_output_panel()
+        window.show()
+        window.raise_()
 
     def _row_command_finished(self, _revision, _result):
         self.row_command_output_panel.timer.start()
