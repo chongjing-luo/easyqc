@@ -1083,7 +1083,7 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
         for action in workspace.module_commit_toolbar.actions()
         if action.text()
     ]
-    assert list_footer_actions == ["删除模块", "导出模块"]
+    assert list_footer_actions == ["删除模块", "导出模块", "上移", "下移"]
     assert commit_actions == ["存为模板", "放弃更改", "保存模块"]
     footer_toolbars = (
         (
@@ -1095,6 +1095,16 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
             workspace.module_list_footer_toolbar,
             workspace.export_module_action,
             "导出模块",
+        ),
+        (
+            workspace.module_list_footer_toolbar,
+            workspace.module_up_action,
+            "上移",
+        ),
+        (
+            workspace.module_list_footer_toolbar,
+            workspace.module_down_action,
+            "下移",
         ),
         (
             workspace.module_commit_toolbar,
@@ -1132,9 +1142,11 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
         workspace.module_commit_toolbar,
     ):
         toolbar_buttons = [
-            toolbar.widgetForAction(action)
+            button
             for _tb, action, _text in footer_toolbars
             if _tb is toolbar
+            for button in [toolbar.widgetForAction(action)]
+            if button is not None and button.isVisible()
         ]
         assert [button.x() for button in toolbar_buttons] == sorted(
             button.x() for button in toolbar_buttons
@@ -1285,6 +1297,14 @@ def test_key_toolbars_keep_actions_visible_with_wide_native_buttons(
                 workspace.export_module_action,
             ),
             (
+                workspace.module_list_footer_toolbar,
+                workspace.module_up_action,
+            ),
+            (
+                workspace.module_list_footer_toolbar,
+                workspace.module_down_action,
+            ),
+            (
                 workspace.module_commit_toolbar,
                 workspace.save_module_template_action,
             ),
@@ -1314,9 +1334,11 @@ def test_key_toolbars_keep_actions_visible_with_wide_native_buttons(
         workspace.module_commit_toolbar,
     ):
         toolbar_buttons = [
-            toolbar.widgetForAction(action)
-            for action in toolbar.actions()
-            if toolbar.widgetForAction(action) is not None
+            button
+            for button in (
+                toolbar.widgetForAction(action) for action in toolbar.actions()
+            )
+            if button is not None and button.isVisible()
         ]
         assert [button.x() for button in toolbar_buttons] == sorted(
             button.x() for button in toolbar_buttons
@@ -1887,46 +1909,40 @@ def test_module_toolbar_buttons_keep_text_width_in_narrow_windows(
     assert position.x() + save.width() <= workspace.modules_tab.width()
 
 
-def test_module_list_drag_reorder_routes_through_service(qtbot, tmp_path) -> None:
+def test_module_list_has_no_drag_and_moves_via_footer_buttons(qtbot, tmp_path) -> None:
     workspace, config = _workspace(qtbot, tmp_path)
     config.add_module("AnatQC", "Anatomical QC")
     config.add_module("FuncQC", "Functional QC")
     qtbot.wait(50)
 
     module_list = workspace.module_list
-    assert module_list.dragDropMode() == (
-        QAbstractItemView.DragDropMode.InternalMove
-    )
-    assert module_list.defaultDropAction() == Qt.MoveAction
-    assert module_list.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
-    assert not hasattr(workspace, "module_up_button")
-    assert not hasattr(workspace, "module_down_button")
+    assert module_list.dragDropMode() == QAbstractItemView.DragDropMode.NoDragDrop
+    assert module_list.contextMenuPolicy() != Qt.ContextMenuPolicy.CustomContextMenu
+    assert workspace.module_up_button.text() == "上移"
+    assert workspace.module_down_button.text() == "下移"
+    assert workspace.module_list_footer_toolbar.actions()[-2:] == [
+        workspace.module_up_action,
+        workspace.module_down_action,
+    ]
 
-    names_before = [module.name for module in config.modules()]
-    assert names_before == ["example", "AnatQC", "FuncQC"]
+    module_list.setCurrentRow(0)
+    assert workspace._selected_module_name == "example"
+    workspace.module_down_button.click()
 
-    workspace._reorder_module_from_drop(0, 2)
-
-    names_after = [module.name for module in config.modules()]
-    assert names_after == ["AnatQC", "FuncQC", "example"]
+    assert [module.name for module in config.modules()] == ["AnatQC", "example", "FuncQC"]
     assert [
         module_list.item(row).data(Qt.UserRole)
         for row in range(module_list.count())
-    ] == ["AnatQC", "FuncQC", "example"]
-    rebuilt_row_button = module_list.itemWidget(module_list.item(2)).findChild(
+    ] == ["AnatQC", "example", "FuncQC"]
+    rebuilt_row_button = module_list.itemWidget(module_list.item(1)).findChild(
         QPushButton,
         "moduleRowStart",
     )
     assert rebuilt_row_button is workspace.module_start_buttons["example"]
 
-
-def test_module_context_menu_fallback_moves_selection(qtbot, tmp_path) -> None:
-    workspace, config = _workspace(qtbot, tmp_path)
-    config.add_module("AnatQC", "Anatomical QC")
-    qtbot.wait(50)
-
-    workspace.module_list.setCurrentRow(0)
-    assert workspace._selected_module_name == "example"
-    workspace._move_selected_module(1)
-
-    assert [module.name for module in config.modules()] == ["AnatQC", "example"]
+    workspace.module_up_button.click()
+    assert [module.name for module in config.modules()] == [
+        "example",
+        "AnatQC",
+        "FuncQC",
+    ]
