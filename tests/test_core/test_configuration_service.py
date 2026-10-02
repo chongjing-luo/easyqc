@@ -424,6 +424,20 @@ def test_file_import_drafts_preserve_text_easyqcid_for_csv_and_excel(
     assert converter(7) == 7
 
 
+def test_file_import_draft_reads_tsv_with_text_easyqcid(tmp_path) -> None:
+    service, _projects = _service(tmp_path)
+    tsv_path = tmp_path / "incoming.tsv"
+    tsv_path.write_text(
+        "easyqcid\tvisit\n001\t1\n01-A\t2\n",
+        encoding="utf-8",
+    )
+
+    tsv_draft = service.draft_from_file(tsv_path)
+
+    assert tsv_draft["easyqcid"].tolist() == ["001", "01-A"]
+    assert tsv_draft["visit"].tolist() == [1, 2]
+
+
 def test_import_subject_csv_preserves_leading_zero_easyqcid(tmp_path) -> None:
     service, _projects = _service(tmp_path)
     source = tmp_path / "subjects.csv"
@@ -1340,3 +1354,29 @@ def test_explicit_subject_import_rejects_ambiguous_inputs_before_write(
 
     assert table_path.read_bytes() == before_bytes
     pd.testing.assert_frame_equal(service.subjects(), current)
+
+
+def test_module_save_rejects_multicmd_prefix_form_in_direct_mode(tmp_path) -> None:
+    service, _ = _service(tmp_path)
+    service.add_module("AnatQC", "Anatomical QC")
+    module = next(item for item in service.modules() if item.name == "AnatQC")
+    module.code = "source env.sh MULTICMD freeview {image};|itksnap {image}"
+    module.interper = "direct"
+
+    with pytest.raises(ConfigurationError, match="shell"):
+        service.save_module(module, original_name="AnatQC")
+
+    stored = next(item for item in service.modules() if item.name == "AnatQC")
+    assert stored.code is None
+
+    module.interper = "shell"
+    service.save_module(module, original_name="AnatQC")
+    stored = next(item for item in service.modules() if item.name == "AnatQC")
+    assert stored.interper == "shell"
+
+    leading = next(item for item in service.modules() if item.name == "AnatQC")
+    leading.code = "MULTICMD freeview {image};|itksnap {image}"
+    leading.interper = "direct"
+    service.save_module(leading, original_name="AnatQC")
+    stored = next(item for item in service.modules() if item.name == "AnatQC")
+    assert stored.code == "MULTICMD freeview {image};|itksnap {image}"

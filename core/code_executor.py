@@ -41,6 +41,77 @@ _GENERIC_OUTPUT_CONTEXT = ViewerExecutionContext(
     easyqcid="",
     command_index=0,
 )
+_MULTICMD_KEYWORD = "MULTICMD"
+_MULTICMD_SEPARATOR = ";|"
+
+
+def split_multicmd_template(template: str) -> tuple[str, str] | None:
+    """Return (prefix, command_text) for a MULTICMD template, else None.
+
+    Detection runs on the raw template so only the keyword the configurator
+    wrote can create a multi-command plan; substituted values can never
+    introduce one. ``prefix`` is empty for the leading-keyword form.
+    """
+
+    stripped = template.strip()
+    if stripped.startswith(_MULTICMD_KEYWORD):
+        return "", stripped[len(_MULTICMD_KEYWORD):]
+    index = stripped.find(_MULTICMD_KEYWORD)
+    if index == -1:
+        return None
+    return stripped[:index], stripped[index + len(_MULTICMD_KEYWORD):]
+
+
+def _split_outside_quotes(text: str, delimiter: str) -> list[str]:
+    """Split on one delimiter, keeping quoted regions (single/double) intact."""
+
+    parts: list[str] = []
+    buffer: list[str] = []
+    quote = ""
+    index = 0
+    length = len(text)
+    while index < length:
+        character = text[index]
+        if quote:
+            buffer.append(character)
+            if character == quote:
+                quote = ""
+            index += 1
+            continue
+        if character in "\"'":
+            quote = character
+            buffer.append(character)
+            index += 1
+            continue
+        if text.startswith(delimiter, index):
+            parts.append("".join(buffer))
+            buffer = []
+            index += len(delimiter)
+            continue
+        buffer.append(character)
+        index += 1
+    parts.append("".join(buffer))
+    return parts
+
+
+def validate_module_command_template(code: str, interper: str) -> None:
+    """Reject the MULTICMD prefix form combined with direct execution.
+
+    The prefix form copies its prefix into every split command joined by a
+    ";" that only a Shell interprets; direct execution would glue that ";"
+    into one bogus argument. Failing here surfaces the invalid combination
+    when the module is saved instead of silently at viewer launch.
+    """
+
+    parts = split_multicmd_template(code or "")
+    if parts is None:
+        return
+    prefix, _command_text = parts
+    if prefix.strip() and interper != "shell":
+        raise CodeExecutorError(
+            "MULTICMD 前缀写法需要 Shell 解释器：请将模块切换为 shell 模式，"
+            "或移除 MULTICMD 之前的命令"
+        )
 
 
 def build_external_process_environment(
@@ -163,24 +234,39 @@ class CodeExecutor:
         template: str,
         variables: Mapping[str, Any],
     ) -> tuple[str, dict[int, str]]:
-        """Expand one viewer template into an ordered, explicit command plan."""
+        """Expand one viewer template into an ordered, explicit command plan.
 
-        rendered = self.parse_template(template, variables)
-        if rendered.startswith("MULTICMD"):
-            command_text = rendered.replace("MULTICMD", "", 1).strip()
-            commands = [part.strip() for part in command_text.split(";|") if part.strip()]
-            return command_text, {index: command for index, command in enumerate(commands)}
-        if "MULTICMD" in rendered:
-            prefix, command_text = rendered.split("MULTICMD", 1)
-            prefix = prefix.strip()
-            if prefix and not prefix.endswith(";"):
-                prefix += ";"
-            commands = [part.strip() for part in command_text.strip().split(";|") if part.strip()]
-            return rendered, {
-                index: f"{prefix}{command}"
-                for index, command in enumerate(commands)
-            }
-        return rendered, {0: rendered}
+        Structure comes from the raw template only: the MULTICMD keyword and
+        ";|" separators are located before variable substitution, so values
+        can never split commands or introduce the keyword. The first return
+        value is the fully rendered text without the keyword.
+        """
+
+        parts = split_multicmd_template(template)
+        if parts is None:
+            rendered = self.parse_template(template, variables)
+            return rendered, {0: rendered}
+        prefix_text, command_text = parts
+        segments = [
+            segment.strip()
+            for segment in _split_outside_quotes(command_text, _MULTICMD_SEPARATOR)
+            if segment.strip()
+        ]
+        rendered_prefix = self.parse_template(prefix_text, variables).strip()
+        prefix = ""
+        if rendered_prefix:
+            prefix = (
+                rendered_prefix
+                if rendered_prefix.endswith(";")
+                else f"{rendered_prefix};"
+            )
+        commands = [
+            f"{prefix}{self.parse_template(segment, variables)}"
+            for segment in segments
+        ]
+        return _MULTICMD_SEPARATOR.join(commands), {
+            index: command for index, command in enumerate(commands)
+        }
 
     def split_command(self, command: str | Sequence[str]) -> list[str]:
         if isinstance(command, str):

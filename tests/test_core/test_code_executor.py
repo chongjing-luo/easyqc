@@ -1318,3 +1318,104 @@ def test_executor_close_keeps_journal_open_when_process_cleanup_is_incomplete(
     assert not any(
         action == "journal.close" for action, _value in journal.lifecycle
     )
+
+
+# ---- MULTICMD plan parsing: structure comes from the template, never data ----
+
+
+def test_multicmd_basic_form_splits_template_and_expands_each_segment() -> None:
+    executor = CodeExecutor()
+
+    rendered, commands = executor.render_command_plan(
+        "MULTICMD freeview {image};|itksnap {image}",
+        {"image": "scan.nii"},
+    )
+
+    assert commands == {0: "freeview scan.nii", 1: "itksnap scan.nii"}
+    assert "MULTICMD" not in rendered
+    assert rendered == "freeview scan.nii;|itksnap scan.nii"
+
+
+def test_multicmd_separator_inside_variable_value_stays_literal() -> None:
+    executor = CodeExecutor()
+
+    _, commands = executor.render_command_plan(
+        "MULTICMD freeview {image};|itksnap {image}",
+        {"image": "weird;|name.nii"},
+    )
+
+    assert commands == {0: "freeview weird;|name.nii", 1: "itksnap weird;|name.nii"}
+
+
+def test_variable_value_cannot_introduce_multicmd_keyword() -> None:
+    executor = CodeExecutor()
+
+    rendered, commands = executor.render_command_plan(
+        "freeview {image}",
+        {"image": "MULTICMD a;|b"},
+    )
+
+    assert commands == {0: "freeview MULTICMD a;|b"}
+    assert rendered == "freeview MULTICMD a;|b"
+
+
+def test_multicmd_quoted_separator_stays_inside_one_command() -> None:
+    executor = CodeExecutor()
+
+    _, commands = executor.render_command_plan(
+        'MULTICMD echo "a;|b";|freeview',
+        {},
+    )
+
+    assert commands == {0: 'echo "a;|b"', 1: "freeview"}
+
+
+def test_multicmd_prefix_form_expands_variables_in_prefix_and_segments() -> None:
+    executor = CodeExecutor()
+
+    rendered, commands = executor.render_command_plan(
+        "source {env} MULTICMD freeview {image};|itksnap {image}",
+        {"env": "env.sh", "image": "scan.nii"},
+    )
+
+    assert commands == {
+        0: "source env.sh;freeview scan.nii",
+        1: "source env.sh;itksnap scan.nii",
+    }
+    assert "MULTICMD" not in rendered
+
+
+def test_multicmd_empty_segments_are_dropped() -> None:
+    executor = CodeExecutor()
+
+    _, commands = executor.render_command_plan(
+        "MULTICMD freeview {image};|;|itksnap {image}",
+        {"image": "scan.nii"},
+    )
+
+    assert commands == {0: "freeview scan.nii", 1: "itksnap scan.nii"}
+
+
+def test_validate_module_command_template_rejects_prefix_form_in_direct_mode() -> None:
+    from core.code_executor import validate_module_command_template
+
+    with pytest.raises(CodeExecutorError, match="shell"):
+        validate_module_command_template(
+            "source env.sh MULTICMD freeview {image};|itksnap {image}",
+            "direct",
+        )
+
+
+def test_validate_module_command_template_allows_valid_combinations() -> None:
+    from core.code_executor import validate_module_command_template
+
+    validate_module_command_template(
+        "source env.sh MULTICMD freeview {image};|itksnap {image}",
+        "shell",
+    )
+    validate_module_command_template(
+        "MULTICMD freeview {image};|itksnap {image}",
+        "direct",
+    )
+    validate_module_command_template("freeview {image}", "direct")
+    validate_module_command_template(None, "direct")

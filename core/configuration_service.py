@@ -12,6 +12,7 @@ from typing import Any
 
 import pandas as pd
 
+from core.code_executor import CodeExecutorError, validate_module_command_template
 from core.event_bus import Event, EventType
 from core.module_filter import resolve_module_filter_identities
 from core.project_service import (
@@ -290,6 +291,13 @@ class ConfigurationService:
         try:
             if suffix == ".csv":
                 frame = self.table_service.read_csv(source)
+            elif suffix == ".tsv":
+                frame = pd.read_csv(
+                    source,
+                    sep="\t",
+                    encoding="utf-8",
+                    converters={"easyqcid": lambda value: value},
+                )
             elif suffix in {".xlsx", ".xls"}:
                 frame = pd.read_excel(
                     source,
@@ -1043,7 +1051,8 @@ class ConfigurationService:
             validate_module_name(typed.name)
             if typed.rater is not None and typed.rater != "":
                 validate_rater(typed.rater)
-        except RatingIdentityError as exc:
+            validate_module_command_template(typed.code or "", typed.interper)
+        except (RatingIdentityError, CodeExecutorError) as exc:
             raise ConfigurationError(str(exc)) from exc
         typed.easyqcid = None
         typed.time = None
