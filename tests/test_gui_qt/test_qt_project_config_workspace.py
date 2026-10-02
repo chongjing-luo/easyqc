@@ -1011,8 +1011,8 @@ def test_module_list_header_owns_right_side_new_import_and_each_row_launches_exa
     assert workspace.import_module_action.text() == "导入模块"
     assert workspace.new_module_action in workspace.module_list_toolbar.actions()
     assert workspace.import_module_action in workspace.module_list_toolbar.actions()
-    assert workspace.new_module_action not in workspace.module_actions_toolbar.actions()
-    assert workspace.import_module_action not in workspace.module_actions_toolbar.actions()
+    assert workspace.new_module_action not in workspace.module_list_footer_toolbar.actions()
+    assert workspace.import_module_action not in workspace.module_list_footer_toolbar.actions()
     assert workspace.new_module_button.isVisible()
     assert workspace.import_module_button.isVisible()
 
@@ -1073,9 +1073,9 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
     workspace.show()
     workspace.tabs.setCurrentWidget(workspace.modules_tab)
 
-    secondary_actions = [
+    list_footer_actions = [
         action.text()
-        for action in workspace.module_actions_toolbar.actions()
+        for action in workspace.module_list_footer_toolbar.actions()
         if action.text()
     ]
     commit_actions = [
@@ -1083,13 +1083,21 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
         for action in workspace.module_commit_toolbar.actions()
         if action.text()
     ]
-    assert secondary_actions == ["删除模块", "导出模块", "存为模板"]
-    assert commit_actions == ["放弃更改", "保存模块"]
+    assert list_footer_actions == ["删除模块", "导出模块"]
+    assert commit_actions == ["存为模板", "放弃更改", "保存模块"]
     footer_toolbars = (
-        (workspace.module_actions_toolbar, workspace.delete_module_action, "删除模块"),
-        (workspace.module_actions_toolbar, workspace.export_module_action, "导出模块"),
         (
-            workspace.module_actions_toolbar,
+            workspace.module_list_footer_toolbar,
+            workspace.delete_module_action,
+            "删除模块",
+        ),
+        (
+            workspace.module_list_footer_toolbar,
+            workspace.export_module_action,
+            "导出模块",
+        ),
+        (
+            workspace.module_commit_toolbar,
             workspace.save_module_template_action,
             "存为模板",
         ),
@@ -1105,7 +1113,10 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
         button for button in footer_buttons if button.isVisible()
     ]
     if len(visible_footer_buttons) < len(footer_buttons):
-        for toolbar in (workspace.module_actions_toolbar, workspace.module_commit_toolbar):
+        for toolbar in (
+            workspace.module_list_footer_toolbar,
+            workspace.module_commit_toolbar,
+        ):
             footer_extension = toolbar.findChild(
                 QToolButton,
                 "qt_toolbar_ext_button",
@@ -1116,7 +1127,10 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
                 if _tb is toolbar
             ):
                 assert footer_extension is not None and footer_extension.isVisible()
-    for toolbar in (workspace.module_actions_toolbar, workspace.module_commit_toolbar):
+    for toolbar in (
+        workspace.module_list_footer_toolbar,
+        workspace.module_commit_toolbar,
+    ):
         toolbar_buttons = [
             toolbar.widgetForAction(action)
             for _tb, action, _text in footer_toolbars
@@ -1138,19 +1152,11 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
     assert editor_layout.indexOf(workspace.module_viewer_section) > editor_layout.indexOf(
         workspace.module_row_actions_toolbar
     )
-    assert editor_layout.indexOf(workspace.module_actions_toolbar) == -1
-    assert (
-        workspace.module_actions_toolbar.parentWidget()
-        is not workspace.module_editor_scroll.widget()
-    )
+    assert editor_layout.indexOf(workspace.module_commit_toolbar) == -1
     editor_pane = workspace.module_editor_scroll.parentWidget()
     editor_pane_layout = editor_pane.layout()
     assert editor_pane_layout.indexOf(workspace.module_editor_scroll) == 0
-    actions_row = editor_pane_layout.itemAt(1).widget()
-    assert actions_row is not None
-    assert actions_row.layout().indexOf(workspace.module_actions_toolbar) == 0
-    assert actions_row.layout().contentsMargins().left() == 12
-    commit_row = editor_pane_layout.itemAt(2).widget()
+    commit_row = editor_pane_layout.itemAt(1).widget()
     assert commit_row is not None
     assert commit_row.layout().indexOf(workspace.module_commit_toolbar) == 1
     assert commit_row.layout().contentsMargins().left() == 12
@@ -1270,10 +1276,16 @@ def test_key_toolbars_keep_actions_visible_with_wide_native_buttons(
     footer_buttons = [
         toolbar.widgetForAction(action)
         for toolbar, action in (
-            (workspace.module_actions_toolbar, workspace.delete_module_action),
-            (workspace.module_actions_toolbar, workspace.export_module_action),
             (
-                workspace.module_actions_toolbar,
+                workspace.module_list_footer_toolbar,
+                workspace.delete_module_action,
+            ),
+            (
+                workspace.module_list_footer_toolbar,
+                workspace.export_module_action,
+            ),
+            (
+                workspace.module_commit_toolbar,
                 workspace.save_module_template_action,
             ),
             (workspace.module_commit_toolbar, workspace.discard_module_action),
@@ -1281,7 +1293,10 @@ def test_key_toolbars_keep_actions_visible_with_wide_native_buttons(
         )
     ]
     if not all(button.isVisible() for button in footer_buttons):
-        for toolbar in (workspace.module_actions_toolbar, workspace.module_commit_toolbar):
+        for toolbar in (
+        workspace.module_list_footer_toolbar,
+        workspace.module_commit_toolbar,
+    ):
             if not all(
                 toolbar.widgetForAction(action).isVisible()
                 for action in toolbar.actions()
@@ -1294,7 +1309,10 @@ def test_key_toolbars_keep_actions_visible_with_wide_native_buttons(
     visible_footer_buttons = [
         button for button in footer_buttons if button.isVisible()
     ]
-    for toolbar in (workspace.module_actions_toolbar, workspace.module_commit_toolbar):
+    for toolbar in (
+        workspace.module_list_footer_toolbar,
+        workspace.module_commit_toolbar,
+    ):
         toolbar_buttons = [
             toolbar.widgetForAction(action)
             for action in toolbar.actions()
@@ -1304,7 +1322,7 @@ def test_key_toolbars_keep_actions_visible_with_wide_native_buttons(
             button.x() for button in toolbar_buttons
         )
     assert (
-        workspace.module_actions_toolbar.sizePolicy().horizontalPolicy()
+        workspace.module_commit_toolbar.sizePolicy().horizontalPolicy()
         == QSizePolicy.Policy.Preferred
     )
 
@@ -1335,7 +1353,7 @@ def test_qt_configuration_uses_responsive_toolbars_splitter_and_long_tooltips(
     project_toolbar = workspace.findChild(QToolBar, "configProjectToolbar")
     module_splitter = workspace.findChild(QSplitter, "configModuleSplitter")
     editor_scroll = workspace.findChild(QScrollArea, "configModuleEditorScroll")
-    module_toolbar = workspace.findChild(QToolBar, "configModuleActions")
+    module_toolbar = workspace.findChild(QToolBar, "configModuleCommitActions")
     assert project_toolbar is workspace.project_toolbar
     assert not project_toolbar.isMovable()
     assert not project_toolbar.isFloatable()
@@ -1344,7 +1362,7 @@ def test_qt_configuration_uses_responsive_toolbars_splitter_and_long_tooltips(
     assert not module_splitter.isCollapsible(1)
     assert editor_scroll is workspace.module_editor_scroll
     assert editor_scroll.widgetResizable()
-    assert module_toolbar is workspace.module_actions_toolbar
+    assert module_toolbar is workspace.module_commit_toolbar
     assert workspace.score_table.horizontalHeader().sectionResizeMode(0) == (
         QHeaderView.ResizeMode.Interactive
     )
@@ -1851,7 +1869,10 @@ def test_module_toolbar_buttons_keep_text_width_in_narrow_windows(
     workspace.resize(820, 640)
     qtbot.wait(80)
 
-    for toolbar in (workspace.module_actions_toolbar, workspace.module_commit_toolbar):
+    for toolbar in (
+        workspace.module_list_footer_toolbar,
+        workspace.module_commit_toolbar,
+    ):
         for button in toolbar.findChildren(QToolButton):
             text = button.text()
             if not text:
@@ -1864,3 +1885,48 @@ def test_module_toolbar_buttons_keep_text_width_in_narrow_windows(
     position = save.mapTo(workspace.modules_tab, QPoint(0, 0))
     assert position.x() >= 0
     assert position.x() + save.width() <= workspace.modules_tab.width()
+
+
+def test_module_list_drag_reorder_routes_through_service(qtbot, tmp_path) -> None:
+    workspace, config = _workspace(qtbot, tmp_path)
+    config.add_module("AnatQC", "Anatomical QC")
+    config.add_module("FuncQC", "Functional QC")
+    qtbot.wait(50)
+
+    module_list = workspace.module_list
+    assert module_list.dragDropMode() == (
+        QAbstractItemView.DragDropMode.InternalMove
+    )
+    assert module_list.defaultDropAction() == Qt.MoveAction
+    assert module_list.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
+    assert not hasattr(workspace, "module_up_button")
+    assert not hasattr(workspace, "module_down_button")
+
+    names_before = [module.name for module in config.modules()]
+    assert names_before == ["example", "AnatQC", "FuncQC"]
+
+    workspace._reorder_module_from_drop(0, 2)
+
+    names_after = [module.name for module in config.modules()]
+    assert names_after == ["AnatQC", "FuncQC", "example"]
+    assert [
+        module_list.item(row).data(Qt.UserRole)
+        for row in range(module_list.count())
+    ] == ["AnatQC", "FuncQC", "example"]
+    rebuilt_row_button = module_list.itemWidget(module_list.item(2)).findChild(
+        QPushButton,
+        "moduleRowStart",
+    )
+    assert rebuilt_row_button is workspace.module_start_buttons["example"]
+
+
+def test_module_context_menu_fallback_moves_selection(qtbot, tmp_path) -> None:
+    workspace, config = _workspace(qtbot, tmp_path)
+    config.add_module("AnatQC", "Anatomical QC")
+    qtbot.wait(50)
+
+    workspace.module_list.setCurrentRow(0)
+    assert workspace._selected_module_name == "example"
+    workspace._move_selected_module(1)
+
+    assert [module.name for module in config.modules()] == ["AnatQC", "example"]

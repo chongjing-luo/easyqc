@@ -8,16 +8,18 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pandas as pd
-from PySide6.QtCore import QSize, Qt, QUrl, Slot
+from PySide6.QtCore import QPoint, QSize, Qt, QUrl, Signal, Slot
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
     QDesktopServices,
+    QDropEvent,
     QFontDatabase,
     QKeySequence,
     QPainter,
 )
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -29,6 +31,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -123,6 +126,74 @@ class _ElidingLabel(QLabel):
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt virtual API
         hint = super().minimumSizeHint()
         return QSize(0, hint.height())
+
+
+class _DragReorderModuleList(QListWidget):
+    """Module list with drag-to-reorder routed through the service layer.
+
+    Qt's built-in InternalMove would silently relocate list items while the
+    per-row widgets (启动质控 button closures bound to module names) stay
+    attached to stale rows. The drop event is therefore consumed here and
+    re-emitted as row indexes; the workspace performs the reorder through
+    ConfigurationService and rebuilds every row. Keyboard and accessibility
+    users keep a context-menu fallback (上移/下移) on the same list.
+    """
+
+    orderChangeRequested = Signal(int, int)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self.setDropIndicatorShown(True)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+
+    def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802 - Qt virtual API
+        if event.source() is not self or self.count() < 2:
+            event.ignore()
+            return
+        event.accept()
+        event.setDropAction(Qt.MoveAction)
+        from_row = self.currentRow()
+        if from_row < 0:
+            return
+        index = self.indexAt(event.position().toPoint())
+        if index.isValid():
+            hovered = index.row()
+            below = (
+                self.dropIndicatorPosition()
+                == QAbstractItemView.DropIndicatorPosition.BelowItem
+            )
+            to_row = hovered + 1 if below else hovered
+        else:
+            to_row = self.count() - 1
+        if to_row > from_row:
+            to_row -= 1
+        to_row = max(0, min(self.count() - 1, to_row))
+        if to_row != from_row:
+            self.orderChangeRequested.emit(from_row, to_row)
+
+
+def _new_strip_toolbar(
+    title: str,
+    object_name: str,
+    parent: QWidget,
+) -> QToolBar:
+    """One non-movable text-only strip toolbar for module action groups."""
+
+    toolbar = QToolBar(title, parent)
+    toolbar.setObjectName(object_name)
+    toolbar.setAccessibleName(title)
+    toolbar.setMovable(False)
+    toolbar.setFloatable(False)
+    toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
+    toolbar.setSizePolicy(
+        QSizePolicy.Preferred,
+        QSizePolicy.Fixed,
+    )
+    return toolbar
 
 
 class QtProjectConfigWorkspace(QWidget):
@@ -432,7 +503,7 @@ class QtProjectConfigWorkspace(QWidget):
         switches because translated widths differ.
         """
 
-        for toolbar in (self.module_actions_toolbar, self.module_commit_toolbar):
+        for toolbar in (self.module_list_footer_toolbar, self.module_commit_toolbar):
             for button in toolbar.findChildren(QToolButton):
                 text = button.text()
                 if text:
@@ -561,18 +632,38 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_from_template_action.setEnabled(self.templates is not None)
         module_header_layout.addWidget(self.module_list_toolbar)
         left.addWidget(self.module_list_header)
-        self.module_list = QListWidget(left_panel)
+        self.module_list = _DragReorderModuleList(left_panel)
         self.module_list.setObjectName("moduleList")
         self.module_list.setAccessibleName("质控模块列表")
         protect_user_text(self.module_list, "items")
         self.module_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.module_list.orderChangeRequested.connect(
+            self._reorder_module_from_drop
+        )
+        self.module_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.module_list.customContextMenuRequested.connect(
+            self._show_module_list_context_menu
+        )
         left.addWidget(self.module_list, 1)
-        move_row = QHBoxLayout()
-        self.module_up_button = QPushButton("上移", left_panel)
-        self.module_down_button = QPushButton("下移", left_panel)
-        move_row.addWidget(self.module_up_button)
-        move_row.addWidget(self.module_down_button)
-        left.addLayout(move_row)
+        self.module_list_footer_toolbar = _new_strip_toolbar(
+            "模块列表操作",
+            "configModuleListFooterActions",
+            left_panel,
+        )
+        self.delete_module_action, self.delete_module_button = self._add_toolbar_action(
+            self.module_list_footer_toolbar,
+            "删除模块",
+            QKeySequence("Ctrl+Delete"),
+            self._delete_selected_module,
+        )
+        self.export_module_action, self.export_module_button = self._add_toolbar_action(
+            self.module_list_footer_toolbar,
+            "导出模块",
+            QKeySequence("Ctrl+E"),
+            self._choose_module_export,
+        )
+        set_button_role(self.delete_module_button, "danger")
+        left.addWidget(self.module_list_footer_toolbar)
         self.module_editor_scroll = QScrollArea(self.module_splitter)
         self.module_editor_scroll.setObjectName("configModuleEditorScroll")
         self.module_editor_scroll.setWidgetResizable(True)
@@ -777,49 +868,21 @@ class QtProjectConfigWorkspace(QWidget):
         viewer_layout.addLayout(execution_row)
         editor.addWidget(self.module_viewer_section)
 
-        def _new_module_toolbar(title: str, object_name: str) -> QToolBar:
-            toolbar = QToolBar(title, self.modules_tab)
-            toolbar.setObjectName(object_name)
-            toolbar.setAccessibleName(title)
-            toolbar.setMovable(False)
-            toolbar.setFloatable(False)
-            toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
-            toolbar.setSizePolicy(
-                QSizePolicy.Preferred,
-                QSizePolicy.Fixed,
-            )
-            return toolbar
-
-        self.module_actions_toolbar = _new_module_toolbar(
-            "模块编辑操作",
-            "configModuleActions",
-        )
-        self.delete_module_action, self.delete_module_button = self._add_toolbar_action(
-            self.module_actions_toolbar,
-            "删除模块",
-            QKeySequence("Ctrl+Delete"),
-            self._delete_selected_module,
-        )
-        self.export_module_action, self.export_module_button = self._add_toolbar_action(
-            self.module_actions_toolbar,
-            "导出模块",
-            QKeySequence("Ctrl+E"),
-            self._choose_module_export,
+        self.module_commit_toolbar = _new_strip_toolbar(
+            "模块保存操作",
+            "configModuleCommitActions",
+            self.modules_tab,
         )
         (
             self.save_module_template_action,
             self.save_module_template_button,
         ) = self._add_toolbar_action(
-            self.module_actions_toolbar,
+            self.module_commit_toolbar,
             "存为模板",
             QKeySequence(),
             self._save_module_as_template,
         )
         self.save_module_template_action.setEnabled(self.templates is not None)
-        self.module_commit_toolbar = _new_module_toolbar(
-            "模块保存操作",
-            "configModuleCommitActions",
-        )
         self.discard_module_action, self.discard_module_button = self._add_toolbar_action(
             self.module_commit_toolbar,
             "放弃更改",
@@ -835,7 +898,6 @@ class QtProjectConfigWorkspace(QWidget):
         self._sync_module_toolbar_minimum()
         self.save_module_button.setObjectName("primaryAction")
         set_button_role(self.save_module_button, "primary")
-        set_button_role(self.delete_module_button, "danger")
         self.module_editor_scroll.setWidget(editor_widget)
         editor_pane = QWidget(self.modules_tab)
         editor_pane.setObjectName("configModuleEditorPane")
@@ -843,13 +905,6 @@ class QtProjectConfigWorkspace(QWidget):
         editor_pane_layout.setContentsMargins(0, 0, 0, 6)
         editor_pane_layout.setSpacing(CONTROL_SPACING)
         editor_pane_layout.addWidget(self.module_editor_scroll, 1)
-        module_actions_row = QWidget(editor_pane)
-        module_actions_row.setObjectName("configModuleActionsRow")
-        module_actions_layout = QHBoxLayout(module_actions_row)
-        module_actions_layout.setContentsMargins(12, 0, 12, 0)
-        module_actions_layout.addWidget(self.module_actions_toolbar)
-        module_actions_layout.addStretch(1)
-        editor_pane_layout.addWidget(module_actions_row)
         module_commit_row = QWidget(editor_pane)
         module_commit_row.setObjectName("configModuleCommitRow")
         module_commit_layout = QHBoxLayout(module_commit_row)
@@ -874,8 +929,6 @@ class QtProjectConfigWorkspace(QWidget):
         layout.addWidget(self.module_launch_status_label)
 
         self.module_list.currentRowChanged.connect(self._module_row_changed)
-        self.module_up_button.clicked.connect(lambda: self._move_selected_module(-1))
-        self.module_down_button.clicked.connect(lambda: self._move_selected_module(1))
         self.set_module_filter_button.clicked.connect(
             self._open_module_filter_dialog
         )
@@ -2122,6 +2175,29 @@ class QtProjectConfigWorkspace(QWidget):
     def _move_selected_module(self, delta: int) -> None:
         if self._selected_module_name:
             self.move_module(self._selected_module_name, delta)
+
+    def _reorder_module_from_drop(self, from_row: int, to_row: int) -> None:
+        """Apply one drag reorder through the service and rebuild all rows."""
+
+        item = self.module_list.item(from_row)
+        name = item.data(Qt.UserRole) if item is not None else None
+        if not name:
+            return
+        delta = to_row - from_row
+        if delta:
+            self.move_module(str(name), delta)
+
+    def _show_module_list_context_menu(self, position: QPoint) -> None:
+        """Keyboard/accessibility fallback for drag-based module reordering."""
+
+        menu = QMenu(self.module_list)
+        move_up = menu.addAction(translate_ui_text("上移"))
+        move_down = menu.addAction(translate_ui_text("下移"))
+        chosen = menu.exec(self.module_list.mapToGlobal(position))
+        if chosen is move_up:
+            self._move_selected_module(-1)
+        elif chosen is move_down:
+            self._move_selected_module(1)
 
     def _collect_module_from_form(self) -> QCModule | None:
         name = self.module_name.text().strip()
