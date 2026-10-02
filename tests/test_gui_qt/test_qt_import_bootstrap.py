@@ -77,6 +77,20 @@ def test_first_import_generates_identity_and_commits_from_full_window(
     assert not window.shell_error_label.text()
 
 
+def _filesystem_is_case_sensitive(root) -> bool:
+    upper = root / "EasyQC_case_probe"
+    lower = root / "easyqc_case_probe"
+    upper.write_text("u", encoding="utf-8")
+    try:
+        if lower.exists():
+            return False
+        lower.write_text("l", encoding="utf-8")
+        return upper.read_text(encoding="utf-8") == "u"
+    finally:
+        upper.unlink(missing_ok=True)
+        lower.unlink(missing_ok=True)
+
+
 @pytest.mark.parametrize("language_code", ["zh_CN", "en"])
 def test_file_browse_shows_files_after_folder_mode_and_has_all_files_filter(
     qtbot, tmp_path, monkeypatch, qapp, language_code
@@ -92,6 +106,11 @@ def test_file_browse_shows_files_after_folder_mode_and_has_all_files_filter(
     language.set_language(language_code)
     source = tmp_path / "inputs"
     source.mkdir()
+    # On case-insensitive volumes (macOS APFS default) list.CSV replaces the
+    # content of list.csv under the first spelling; the case-variant surface
+    # is then checked through the surviving spelling instead.
+    case_variant_visible = _filesystem_is_case_sensitive(source)
+    variant_name = "list.CSV" if case_variant_visible else "list.csv"
     (source / "list.csv").write_text("easyqcid\nS001\n", encoding="utf-8")
     (source / "list.CSV").write_text("easyqcid\nS002\n", encoding="utf-8")
     (source / "unsupported.data").write_text("not a supported list", encoding="utf-8")
@@ -122,9 +141,11 @@ def test_file_browse_shows_files_after_folder_mode_and_has_all_files_filter(
             assert all_filters == ["All files (*)" if language_code == "en" else "所有文件 (*)"]
             assert picker.selectedNameFilter() == all_filters[0]
             picker.selectNameFilter(all_filters[0])
-            qtbot.waitUntil(lambda: "unsupported.data" in names() and "list.CSV" in names())
+            qtbot.waitUntil(
+                lambda: "unsupported.data" in names() and variant_name in names()
+            )
             if accept:
-                picker.findChild(QLineEdit, "fileNameEdit").setText("list.CSV")
+                picker.findChild(QLineEdit, "fileNameEdit").setText(variant_name)
                 picker.accept()
                 assert picker.result() == QFileDialog.Accepted, picker.selectedFiles()
         except Exception as exc:
@@ -144,7 +165,7 @@ def test_file_browse_shows_files_after_folder_mode_and_has_all_files_filter(
             if not accept:
                 assert page.source_path_edit.text() == "unchanged-on-cancel"
         assert len(observed_modes) == 4
-        assert page.source_path_edit.text() == str(source / "list.CSV")
+        assert page.source_path_edit.text() == str(source / variant_name)
         qtbot.mouseClick(page.read_preview_button, Qt.LeftButton)
         qtbot.waitUntil(lambda: not page.task_controller.busy)
         assert page.draft["easyqcid"].tolist() == ["S002"]
