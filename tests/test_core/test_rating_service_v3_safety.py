@@ -192,12 +192,18 @@ def test_save_rejects_casefold_equivalent_identity_before_writing(
         project.rating_dir,
         RatingIdentity(*requested_identity),
     )
+    original = existing.read_text(encoding="utf-8")
 
     with pytest.raises(RatingIdentityConflictError):
         service.save_rating(requested)
 
     assert existing.exists()
-    assert not requested_path.exists()
+    assert existing.read_text(encoding="utf-8") == original
+    # Case-insensitive filesystems (macOS APFS default) resolve the requested
+    # spelling to the same file; the invariant is that no second payload was
+    # written and the stored one is untouched, not that the spelling is absent.
+    if requested_path.exists():
+        assert requested_path.samefile(existing)
 
 
 def test_save_rejects_case_variant_json_suffix_before_writing(
@@ -219,10 +225,29 @@ def test_save_rejects_case_variant_json_suffix_before_writing(
         service.save_rating(rating)
 
     assert case_variant.read_text(encoding="utf-8") == original
-    assert not canonical.exists()
+    if canonical.exists():
+        assert canonical.samefile(case_variant)
+
+
+def _filesystem_is_case_sensitive(root: Path) -> bool:
+    upper = root / "EasyQC_case_probe"
+    lower = root / "easyqc_case_probe"
+    upper.write_text("u", encoding="utf-8")
+    try:
+        if lower.exists():
+            return False
+        lower.write_text("l", encoding="utf-8")
+        return upper.read_text(encoding="utf-8") == "u"
+    finally:
+        upper.unlink(missing_ok=True)
+        lower.unlink(missing_ok=True)
 
 
 def test_scan_reports_casefold_identity_collision(tmp_path: Path) -> None:
+    if not _filesystem_is_case_sensitive(tmp_path):
+        pytest.skip(
+            "casefold-distinct rating files require a case-sensitive filesystem"
+        )
     project = _project(tmp_path)
     service = RatingService(project)
     upper_rating = _rating(

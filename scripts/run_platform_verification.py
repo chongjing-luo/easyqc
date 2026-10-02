@@ -144,6 +144,17 @@ def _github_failure_annotation_payloads(
         (f"failed tests {index}/{len(inventory_chunks)}", message)
         for index, message in enumerate(inventory_chunks, start=1)
     ]
+    failures_index = text.find("=== FAILURES ===")
+    if failures_index != -1:
+        payloads.append(
+            (
+                "first failure excerpt",
+                text[
+                    failures_index : failures_index
+                    + _GITHUB_ANNOTATION_MESSAGE_CHARS
+                ],
+            )
+        )
     if len(text) > _GITHUB_ANNOTATION_MESSAGE_CHARS:
         marker = "[truncated]\n"
         text = marker + text[
