@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import shlex
 import shutil
 import sys
 
@@ -137,9 +138,19 @@ class FakeStableAdapter:
             environment_python.parent.mkdir(parents=True)
             shutil.copy2(Path(sys.executable).resolve(), environment_python)
         else:
+        # A copied interpreter binary cannot relocate its standard library on
+        # uv-managed standalone CPython (build prefix is absent), which fails
+        # with "No module named 'encodings'" on CI runners. The shell wrapper
+        # keeps the executable inside the version root and execs the real
+        # interpreter with argv preserved.
             runtime_python = request.version_root / "runtime/python"
             runtime_python.parent.mkdir()
-            shutil.copy2(Path(sys.executable).resolve(), runtime_python)
+            native_python = shlex.quote(str(Path(sys.executable).resolve()))
+            runtime_python.write_text(
+                f'#!/bin/sh\nexec {native_python} "$@"\n',
+                encoding="utf-8",
+            )
+            runtime_python.chmod(0o755)
             environment_python = request.version_root / "env/bin/python"
             environment_python.parent.mkdir(parents=True)
             environment_python.symlink_to(runtime_python)

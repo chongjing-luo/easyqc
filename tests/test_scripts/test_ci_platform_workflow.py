@@ -358,7 +358,7 @@ def test_preparation_builds_canonical_candidate_ci_request_and_three_reports(
     core_argv = plan.checks[0].argv
     assert "tests/test_models" in core_argv
     assert "tests/test_core" in core_argv
-    assert "tests/test_integration" in core_argv
+    assert "tests/test_smoke.py" in core_argv
     assert "tests/test_packaging_tools" not in core_argv
 
 

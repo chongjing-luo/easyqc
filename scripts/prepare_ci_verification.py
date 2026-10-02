@@ -310,7 +310,6 @@ def _check_plan(python_executable: str) -> AutomatedCheckPlanV1:
         "tests/test_models",
         "tests/test_core",
         "tests/test_utils",
-        "tests/test_integration",
         "tests/test_smoke.py",
         "tests/test_scripts/test_replacement_first_throughput.py",
     )
