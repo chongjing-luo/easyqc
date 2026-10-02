@@ -1,5 +1,7 @@
 """Full-window first-import and actual file-chooser regressions."""
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 from PySide6.QtCore import Qt, QTimer
@@ -165,7 +167,9 @@ def test_file_browse_shows_files_after_folder_mode_and_has_all_files_filter(
             if not accept:
                 assert page.source_path_edit.text() == "unchanged-on-cancel"
         assert len(observed_modes) == 4
-        assert page.source_path_edit.text() == str(source / variant_name)
+        # QFileDialog may return forward slashes on Windows; compare as
+        # paths so the separator style does not decide the outcome.
+        assert Path(page.source_path_edit.text()) == source / variant_name
         qtbot.mouseClick(page.read_preview_button, Qt.LeftButton)
         qtbot.waitUntil(lambda: not page.task_controller.busy)
         assert page.draft["easyqcid"].tolist() == ["S002"]
