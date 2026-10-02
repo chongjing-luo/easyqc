@@ -1097,7 +1097,7 @@ def test_process_lookup_race_finalizes_only_with_observable_returncode(
     [
         ("completed", 3),
         ("terminated", -signal.SIGTERM),
-        ("killed", -signal.SIGKILL),
+        ("killed", -getattr(signal, "SIGKILL", 9)),
     ],
 )
 def test_close_current_processes_finalizes_before_forgetting_every_exit_path(

@@ -202,7 +202,9 @@ class TableService:
 
     @staticmethod
     def _fsync_file(path: Path) -> None:
-        with path.open("rb") as handle:
+        # Windows FlushFileBuffers requires a write-capable handle; fsync on
+        # a read-only descriptor raises EBADF there while POSIX accepts it.
+        with path.open("rb+") as handle:
             os.fsync(handle.fileno())
 
     @staticmethod
