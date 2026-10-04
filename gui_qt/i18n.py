@@ -963,6 +963,11 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "上一页": "Previous page",
     "下一页": "Next page",
     "每页": "Per page",
+    "全部": "All",
+    "每页行数必须是正整数；留空或输入“全部”显示全部行": (
+        "Rows per page must be a positive integer; leave blank or enter All "
+        "to show every row"
+    ),
     "视图设置": "View settings",
     "关闭": "Close",
     "重置": "Reset",

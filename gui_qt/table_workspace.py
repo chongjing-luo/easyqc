@@ -80,6 +80,8 @@ from models.table_view_state import (
 
 
 class QtTableWorkspace(QWidget):
+    ALL_PAGE_SIZE = 10**9
+
     """Coordinate typed view state, bounded rendering and identity-safe actions."""
 
     exportProgress = Signal(int, int, int)
@@ -555,8 +557,12 @@ class QtTableWorkspace(QWidget):
         self.page_size_combo = QComboBox(footer)
         for size in (25, 50, 100, 200, 500):
             self.page_size_combo.addItem(str(size), size)
-        if self.page_size_combo.findData(self.applied_state.page_size) < 0:
+        self.page_size_combo.addItem("全部", self.ALL_PAGE_SIZE)
+        if self.applied_state.page_size >= self.ALL_PAGE_SIZE:
+            self.page_size_combo.setCurrentText("全部")
+        elif self.page_size_combo.findData(self.applied_state.page_size) < 0:
             self.page_size_combo.insertItem(0, str(self.applied_state.page_size), self.applied_state.page_size)
+        self.page_size_combo.setEditable(True)
         self.previous_button = QPushButton("上一页", footer)
         self.next_button = QPushButton("下一页", footer)
         footer_layout.addWidget(self.page_size_combo)
@@ -586,6 +592,7 @@ class QtTableWorkspace(QWidget):
         self.previous_button.clicked.connect(self.previous_page)
         self.next_button.clicked.connect(self.next_page)
         self.page_size_combo.currentIndexChanged.connect(self._page_size_changed)
+        self.page_size_combo.lineEdit().returnPressed.connect(self._page_size_changed)
         self.table_view.horizontalHeader().sectionClicked.connect(self._header_clicked)
         self.pinned_view.horizontalHeader().sectionClicked.connect(self._header_clicked)
         self.pinned_view.horizontalHeader().sectionResized.connect(self._pinned_section_resized)
@@ -1670,9 +1677,34 @@ class QtTableWorkspace(QWidget):
         self._export_revision = None
 
     def _page_size_changed(self) -> None:
-        page_size = self.page_size_combo.currentData()
-        if page_size is not None and int(page_size) != self.applied_state.page_size:
-            self.set_page_size(int(page_size))
+        page_size = self._resolve_page_size_text(self.page_size_combo.currentText())
+        if page_size is None:
+            self._set_error("每页行数必须是正整数；留空或输入“全部”显示全部行")
+            self._sync_page_size_widget()
+            return
+        if page_size != self.applied_state.page_size:
+            self.set_page_size(page_size)
+
+    def _resolve_page_size_text(self, text: str) -> int | None:
+        """Parse one manual page size; blank or 全部 means a single full page."""
+
+        stripped = text.strip()
+        if not stripped or stripped == "全部":
+            return self.ALL_PAGE_SIZE
+        if stripped.isdigit() and int(stripped) > 0:
+            return int(stripped)
+        return None
+
+    def _sync_page_size_widget(self) -> None:
+        page_size = self.applied_state.page_size
+        text = "全部" if page_size >= self.ALL_PAGE_SIZE else str(page_size)
+        combo = self.page_size_combo
+        combo.blockSignals(True)
+        index = combo.findData(page_size)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+        combo.setCurrentText(text)
+        combo.blockSignals(False)
 
     def set_page_size(self, page_size: int) -> bool:
         return self._commit_state(
@@ -2556,11 +2588,7 @@ class QtTableWorkspace(QWidget):
             self.selection_status_label.setText(
                 self._ui_text("未选择记录")
             )
-        page_index = self.page_size_combo.findData(self.applied_state.page_size)
-        if page_index >= 0:
-            self.page_size_combo.blockSignals(True)
-            self.page_size_combo.setCurrentIndex(page_index)
-            self.page_size_combo.blockSignals(False)
+        self._sync_page_size_widget()
         self.previous_button.setEnabled(self.page_offset > 0)
         self.next_button.setEnabled(
             self.page_offset + self.applied_state.page_size < self.result.matched_total
