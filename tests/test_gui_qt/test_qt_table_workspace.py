@@ -1964,25 +1964,21 @@ def test_list_deletion_runs_core_write_off_the_qt_thread(
 def test_page_size_accepts_manual_values_blank_and_all(qtbot) -> None:
     workspace = QtTableWorkspace(_source(), page_size=2)
 
-    workspace.page_size_combo.setCurrentText("3")
+    workspace.page_size_edit.setText("3")
     workspace._page_size_changed()
     assert workspace.applied_state.page_size == 3
-    assert workspace.page_size_combo.currentText() == "3"
+    assert workspace.page_size_edit.text() == "3"
 
-    workspace.page_size_combo.setCurrentText("全部")
+    workspace.page_size_edit.setText("")
     workspace._page_size_changed()
     assert workspace.applied_state.page_size == workspace.ALL_PAGE_SIZE
     assert workspace.result.matched_total <= workspace.ALL_PAGE_SIZE
     assert not workspace.next_button.isEnabled()
-    assert workspace.page_size_combo.currentText() == "全部"
-
-    workspace.page_size_combo.setCurrentText("")
-    workspace._page_size_changed()
-    assert workspace.applied_state.page_size == workspace.ALL_PAGE_SIZE
+    assert workspace.page_size_edit.text() == ""
 
     workspace.set_page_size(2)
-    workspace.page_size_combo.setCurrentText("abc")
+    workspace.page_size_edit.setText("abc")
     workspace._page_size_changed()
     assert workspace.applied_state.page_size == 2
-    assert workspace.page_size_combo.currentText() == "2"
+    assert workspace.page_size_edit.text() == "2"
     assert workspace.error_label.text()

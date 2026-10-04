@@ -199,7 +199,7 @@ class QtMainWindow(QMainWindow):
         self.setObjectName("qtPreviewWindow")
         self.setAccessibleName("EasyQC 表格预览" if self._injected_preview else "EasyQC 工作区")
         self.setWindowTitle("EasyQC")
-        self.resize(1360, 840)
+        self.resize(1460, 840)
         self._build_content(initial_source)
         self.language.languageChanged.connect(self.retranslate_ui)
         self.language.register_root(self)
