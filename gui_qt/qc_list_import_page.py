@@ -75,7 +75,7 @@ class QtQcListImportPage(QWidget):
     """Own one non-authoritative import draft and one explicit apply action."""
 
     deriveBusyChanged = Signal(bool)
-    PAGE_SIZE = 100
+    PAGE_SIZE = 500
 
     def __init__(
         self,

@@ -967,6 +967,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
         "Rows per page must be a positive integer; leave blank to show every row"
     ),
     "留空显示全部": "blank shows all",
+    "确定": "OK",
     "视图设置": "View settings",
     "关闭": "Close",
     "重置": "Reset",

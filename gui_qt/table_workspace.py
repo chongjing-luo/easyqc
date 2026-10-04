@@ -112,7 +112,7 @@ class QtTableWorkspace(QWidget):
             Callable[[str, QcModuleMenuEntry], None] | None
         ) = None,
         on_open_qc_record: Callable[[QcRecordMenuEntry], None] | None = None,
-        page_size: int = 200,
+        page_size: int = 500,
         background_row_threshold: int = 10_000,
         language: LanguageController | None = None,
         parent: QWidget | None = None,
@@ -560,9 +560,12 @@ class QtTableWorkspace(QWidget):
         self.page_size_edit.setMaximumWidth(96)
         if self.applied_state.page_size < self.ALL_PAGE_SIZE:
             self.page_size_edit.setText(str(self.applied_state.page_size))
+        self.page_size_confirm_button = QPushButton("确定", footer)
+        self.page_size_confirm_button.setObjectName("pageSizeConfirmButton")
         self.previous_button = QPushButton("上一页", footer)
         self.next_button = QPushButton("下一页", footer)
         footer_layout.addWidget(self.page_size_edit)
+        footer_layout.addWidget(self.page_size_confirm_button)
         footer_layout.addWidget(self.previous_button)
         footer_layout.addWidget(self.next_button)
         table_panel_layout.addWidget(footer)
@@ -589,6 +592,7 @@ class QtTableWorkspace(QWidget):
         self.previous_button.clicked.connect(self.previous_page)
         self.next_button.clicked.connect(self.next_page)
         self.page_size_edit.returnPressed.connect(self._page_size_changed)
+        self.page_size_confirm_button.clicked.connect(self._page_size_changed)
         self.table_view.horizontalHeader().sectionClicked.connect(self._header_clicked)
         self.pinned_view.horizontalHeader().sectionClicked.connect(self._header_clicked)
         self.pinned_view.horizontalHeader().sectionResized.connect(self._pinned_section_resized)

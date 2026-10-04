@@ -186,7 +186,7 @@ def test_results_page_switches_prepared_services_with_independent_mode_state(
     assert page.table_workspace.service is wide
     assert page.table_workspace.applied_state.sort_rules == ()
     assert page.table_workspace.applied_state.columns.hidden == ()
-    assert page.table_workspace.applied_state.page_size == 25
+    assert page.table_workspace.applied_state.page_size == 500
 
 
 def test_results_page_export_uses_only_the_visible_long_mode(qtbot, tmp_path) -> None:

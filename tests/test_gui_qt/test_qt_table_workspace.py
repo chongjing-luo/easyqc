@@ -1964,8 +1964,10 @@ def test_list_deletion_runs_core_write_off_the_qt_thread(
 def test_page_size_accepts_manual_values_blank_and_all(qtbot) -> None:
     workspace = QtTableWorkspace(_source(), page_size=2)
 
+    assert QtTableWorkspace(_source()).applied_state.page_size == 500
+
     workspace.page_size_edit.setText("3")
-    workspace._page_size_changed()
+    qtbot.mouseClick(workspace.page_size_confirm_button, Qt.LeftButton)
     assert workspace.applied_state.page_size == 3
     assert workspace.page_size_edit.text() == "3"
 

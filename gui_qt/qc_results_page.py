@@ -94,7 +94,7 @@ class QtQcResultsPage(QWidget):
         self._on_derived_column_committed = on_derived_column_committed
         self.language = language
         self._refresh_busy = False
-        self._default_page_size = 25
+        self._default_page_size = 500
         self.wide_service = TableViewService(source)
         self.long_service = TableViewService(
             pd.DataFrame(
