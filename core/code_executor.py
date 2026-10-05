@@ -43,6 +43,17 @@ _GENERIC_OUTPUT_CONTEXT = ViewerExecutionContext(
 )
 _MULTICMD_KEYWORD = "MULTICMD"
 _MULTICMD_SEPARATOR = ";|"
+_SCRIPT_KEYWORD = "SCRIPT"
+
+
+def _is_script_template(template: str) -> bool:
+    """True when the template's first token is the SCRIPT keyword."""
+
+    stripped = template.lstrip()
+    return bool(stripped) and (
+        stripped.split(None, 1)[0] == _SCRIPT_KEYWORD
+        or stripped.startswith(_SCRIPT_KEYWORD + "\n")
+    )
 
 
 def split_multicmd_template(template: str) -> tuple[str, str] | None:
@@ -236,12 +247,22 @@ class CodeExecutor:
     ) -> tuple[str, dict[int, str]]:
         """Expand one viewer template into an ordered, explicit command plan.
 
-        Structure comes from the raw template only: the MULTICMD keyword and
-        ";|" separators are located before variable substitution, so values
-        can never split commands or introduce the keyword. The first return
-        value is the fully rendered text without the keyword.
+        Structure comes from the raw template only: the SCRIPT, MULTICMD
+        keywords and ";|" separators are located before variable
+        substitution, so values can never split commands or introduce a
+        keyword. For plain and MULTICMD forms the first return value is the
+        rendered text (keyword removed for MULTICMD); the SCRIPT carrier
+        keeps its keyword because execution recognises it by token.
         """
 
+        if _is_script_template(template):
+            header, _, body = template.strip().partition("\n")
+            viewer_text = header[len(_SCRIPT_KEYWORD):].strip()
+            carrier = (
+                f"{_SCRIPT_KEYWORD} {self.parse_template(viewer_text, variables)}"
+                f"\n{self.parse_template(body, variables)}"
+            )
+            return carrier, {0: carrier}
         parts = split_multicmd_template(template)
         if parts is None:
             rendered = self.parse_template(template, variables)
@@ -366,6 +387,8 @@ class CodeExecutor:
     ) -> str | list[str]:
         """Return one command in the shape required by the selected mode."""
 
+        if isinstance(command, str) and _is_script_template(command):
+            return self._split_script_command(command)
         if not shell_enabled:
             return self.split_command(command)
         if isinstance(command, str):
@@ -409,6 +432,38 @@ class CodeExecutor:
             delete=False,
         ) as handle:
             handle.write(script_text)
+            script_path = Path(handle.name)
+        self._pending_temp_files.append(script_path)
+        return viewer_parts + [str(script_path)]
+
+    def _split_script_command(self, command: str) -> list[str]:
+        """Turn one SCRIPT carrier into a direct viewer + temp-script launch.
+
+        ``SCRIPT <viewer>\\n<body>`` is EasyQC's readable form for
+        script-driven viewers (MRIcroGL and friends). The body is written
+        verbatim to a temp file and the viewer is launched directly with
+        it, regardless of the module's interpreter setting: no shell ever
+        parses the script text. The viewer command is validated before the
+        temp file exists so a malformed carrier leaks nothing.
+        """
+
+        header, _, body = command.partition("\n")
+        viewer = header[len(_SCRIPT_KEYWORD):].strip()
+        if not viewer:
+            raise CodeExecutorError("SCRIPT 模板首行缺少查看器命令")
+        if not body.strip():
+            raise CodeExecutorError("SCRIPT 模板缺少脚本文本")
+        viewer_parts = self.split_command(viewer)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            suffix=".py",
+            prefix="easyqc_script_",
+            delete=False,
+        ) as handle:
+            handle.write(body)
+            if not body.endswith("\n"):
+                handle.write("\n")
             script_path = Path(handle.name)
         self._pending_temp_files.append(script_path)
         return viewer_parts + [str(script_path)]
@@ -528,6 +583,7 @@ class CodeExecutor:
         timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
         shell_enabled = self.shell_enabled
+        script_carrier = isinstance(command, str) and _is_script_template(command)
         args = self._command_for_subprocess(
             command,
             shell_enabled=shell_enabled,
@@ -539,7 +595,7 @@ class CodeExecutor:
                 args,
                 cwd=cwd,
                 env=build_external_process_environment(system=self.system),
-                shell=shell_enabled,
+                shell=shell_enabled and not script_carrier,
                 check=False,
                 text=True,
                 capture_output=True,
@@ -568,6 +624,8 @@ class CodeExecutor:
     ) -> subprocess.Popen:
         self._require_open()
         shell_enabled = self.shell_enabled if shell is None else bool(shell)
+        script_carrier = isinstance(command, str) and _is_script_template(command)
+        effective_shell = shell_enabled and not script_carrier
         args = self._command_for_subprocess(
             command,
             shell_enabled=shell_enabled,
@@ -587,7 +645,7 @@ class CodeExecutor:
         popen_kwargs: dict[str, Any] = {
             "cwd": cwd,
             "env": child_environment,
-            "shell": shell_enabled,
+            "shell": effective_shell,
             "stdout": capture.stdout_handle,
             "stderr": capture.stderr_handle,
         }
@@ -616,7 +674,7 @@ class CodeExecutor:
             raise
         self.current_processes.append(process)
         self._process_execution_ids[process.pid] = capture.execution_id
-        self._process_shell_modes[process.pid] = shell_enabled
+        self._process_shell_modes[process.pid] = effective_shell
         self._process_stderr_paths[process.pid] = capture.stderr_path
         self._process_labels[process.pid] = command_label
         if temp_files:

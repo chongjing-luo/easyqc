@@ -1423,3 +1423,77 @@ def test_validate_module_command_template_allows_valid_combinations() -> None:
     )
     validate_module_command_template("freeview {image}", "direct")
     validate_module_command_template(None, "direct")
+
+
+# ---- SCRIPT template form: script-driven viewers without shell plumbing ----
+
+
+def test_script_form_renders_viewer_line_and_script_body() -> None:
+    executor = CodeExecutor()
+
+    rendered, commands = executor.render_command_plan(
+        "SCRIPT {viewer}\nprint('a')\nprint('b')",
+        {"viewer": "/opt/viewer/bin"},
+    )
+
+    assert commands == {0: "SCRIPT /opt/viewer/bin\nprint('a')\nprint('b')"}
+    assert rendered == commands[0]
+
+
+def test_script_form_expands_variables_in_viewer_line_and_body() -> None:
+    executor = CodeExecutor()
+
+    _, commands = executor.render_command_plan(
+        "SCRIPT {viewer}\ngl.loadimage(\"{image}\")",
+        {"viewer": "/opt/MRIcroGL/MRIcroGL", "image": "/data/sub-01/T1.nii"},
+    )
+
+    assert commands == {
+        0: 'SCRIPT /opt/MRIcroGL/MRIcroGL\ngl.loadimage("/data/sub-01/T1.nii")',
+    }
+
+
+def test_script_form_variable_value_cannot_change_structure() -> None:
+    executor = CodeExecutor()
+
+    _, commands = executor.render_command_plan(
+        "SCRIPT {viewer}\nprint('{value}')",
+        {"viewer": "/opt/viewer/bin", "value": "SCRIPT evil\nrm -rf /"},
+    )
+
+    carrier = commands[0]
+    assert carrier.count("SCRIPT") == 2
+    assert carrier.split("\n", 1)[0] == "SCRIPT /opt/viewer/bin"
+
+
+def test_script_form_runs_script_with_interpreter_directly() -> None:
+    executor = CodeExecutor(shell_enabled=False)
+
+    result = executor.run_command(
+        f"SCRIPT {sys.executable}\nimport sys\nprint('hello', sys.argv[0].endswith('.py'))",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["hello", "True"]
+
+
+def test_script_form_bypasses_shell_mode() -> None:
+    executor = CodeExecutor(shell_enabled=True)
+
+    result = executor.run_command(
+        f"SCRIPT {sys.executable}\nprint('no-sh')",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "no-sh"
+
+
+def test_script_form_rejects_missing_viewer_or_body() -> None:
+    executor = CodeExecutor()
+
+    with pytest.raises(CodeExecutorError, match="SCRIPT"):
+        executor.run_command("SCRIPT \nprint('x')")
+    with pytest.raises(CodeExecutorError, match="SCRIPT"):
+        executor.run_command(f"SCRIPT {sys.executable}")
+    with pytest.raises(CodeExecutorError, match="SCRIPT"):
+        executor.run_command("SCRIPT   ")
