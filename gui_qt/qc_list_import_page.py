@@ -404,7 +404,7 @@ class QtQcListImportPage(QWidget):
         apply_layout = QVBoxLayout(apply_panel)
         apply_layout.setContentsMargins(8, 8, 8, 8)
         apply_header_row = QHBoxLayout()
-        apply_header_row.addWidget(QLabel("写入：质控前名单", apply_panel))
+        apply_header_row.addWidget(QLabel("写入：质控总名单", apply_panel))
         apply_header_row.addStretch(1)
         self.stats_label = QLabel("尚未读取导入数据", apply_panel)
         self.stats_label.setObjectName("qcListImportStats")
@@ -437,7 +437,7 @@ class QtQcListImportPage(QWidget):
         apply_action_row = QHBoxLayout()
         apply_action_row.addStretch(1)
         self.clear_button = QPushButton("清空导入数据", apply_panel)
-        self.apply_button = QPushButton("写入质控前名单", apply_panel)
+        self.apply_button = QPushButton("写入质控总名单", apply_panel)
         self.apply_button.setObjectName("primaryAction")
         set_button_role(self.apply_button, "primary")
         self.clear_button.clicked.connect(self.clear_draft)
@@ -590,7 +590,7 @@ class QtQcListImportPage(QWidget):
         mode, conflict_policy = self.current_import_policy()
         response = QMessageBox.question(
             self,
-            translate_ui_text("确认写入质控前名单"),
+            translate_ui_text("确认写入质控总名单"),
             translate_ui_text(
                 self._import_confirmation_text(mode, conflict_policy)
             ),
@@ -666,7 +666,7 @@ class QtQcListImportPage(QWidget):
         }[mode]
         if conflict_policy is None:
             detail = (
-                f"将使用导入草稿替换现有质控前名单"
+                f"将使用导入草稿替换现有质控总名单"
                 f"（{len(self._current):,} 行 → {len(self._draft):,} 行）。"
             )
         else:
@@ -706,7 +706,7 @@ class QtQcListImportPage(QWidget):
             if operation == "rename"
             else "正在搜索导入预览…"
             if operation == "search"
-            else "正在写入质控前名单…"
+            else "正在写入质控总名单…"
         )
         self.task_controller.submit(self._revision, function)
         return True
@@ -757,7 +757,7 @@ class QtQcListImportPage(QWidget):
                     raise TypeError("名单写入任务返回了无效表格")
                 self.refresh_current(result)
                 self.configuration.publish_subjects_changed()
-                self.status_label.setText(f"已写入质控前名单，共 {len(result):,} 条")
+                self.status_label.setText(f"已写入质控总名单，共 {len(result):,} 条")
         except Exception as exc:
             if operation == "rename" and self._pending_rename is not None:
                 self._pending_rename[3].set_error(str(exc))
@@ -887,7 +887,7 @@ class QtQcListImportPage(QWidget):
         self._derived_draft_result = None
         self.preview_search.clear()
         self._render_empty_preview()
-        self.status_label.setText("已清空导入草稿；质控前名单未改变")
+        self.status_label.setText("已清空导入草稿；质控总名单未改变")
         self._set_error("")
         self._update_stats()
         self._update_actions()

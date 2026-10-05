@@ -447,7 +447,7 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
     },
     "nav.import": {"zh_CN": "质控名单导入", "en": "QC list import"},
     "nav.modules": {"zh_CN": "质控模块", "en": "QC modules"},
-    "nav.pre_qc": {"zh_CN": "质控前名单", "en": "Pre-QC list"},
+    "nav.pre_qc": {"zh_CN": "质控总名单", "en": "Master QC list"},
     "nav.projects": {"zh_CN": "项目管理", "en": "Project management"},
     "nav.results": {"zh_CN": "质控结果", "en": "QC results"},
     "startup.accessible": {"zh_CN": "EasyQC 启动", "en": "EasyQC startup"},
@@ -550,8 +550,8 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     ),
     "从上到下依次应用排序规则。": "Sort rules are applied from top to bottom.",
     "排序优先级": "Sort priority",
-    "使用质控前名单中的已有列生成普通新列": (
-        "Create a regular new column from existing Pre-QC list columns"
+    "使用质控总名单中的已有列生成普通新列": (
+        "Create a regular new column from existing Master QC list columns"
     ),
     "使用导入草稿中的已有列生成普通新列": (
         "Create a regular new column from existing import-draft columns"
@@ -598,8 +598,8 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "查看器命令模板，例如：freeview {image} --title {easyqcid}": (
         "Viewer command template, for example: freeview {image} --title {easyqcid}"
     ),
-    "写入：质控前名单": "Write to Pre-QC list",
-    "写入质控前名单": "Write to Pre-QC list",
+    "写入：质控总名单": "Write to Master QC list",
+    "写入质控总名单": "Write to Master QC list",
     "质控名单筛选事务正在完成，请稍候": (
         "The QC-list filter transaction is finishing. Please wait."
     ),
@@ -626,8 +626,8 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "质控名单导入错误": "QC list import error",
     "删除导入草稿选中行": "Delete selected import-draft rows",
     "删除导入草稿当前列": "Delete current import-draft column",
-    "删除质控前名单选中行": "Delete selected Pre-QC list rows",
-    "删除质控前名单当前列": "Delete current Pre-QC list column",
+    "删除质控总名单选中行": "Delete selected Master QC list rows",
+    "删除质控总名单当前列": "Delete current Master QC list column",
     "按条件删除导入草稿行": "Delete import-draft rows by condition",
     "使用筛选条件删除当前导入草稿行；评分记录不会被删除": (
         "Delete current import-draft rows with filter conditions; "
@@ -638,8 +638,8 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
         "Select one or more import-draft columns from the list; "
         "rating records will be retained"
     ),
-    "按条件删除质控前名单行": "Delete Pre-QC list rows by condition",
-    "选择删除质控前名单列": "Select Pre-QC list columns to delete",
+    "按条件删除质控总名单行": "Delete Master QC list rows by condition",
+    "选择删除质控总名单列": "Select Master QC list columns to delete",
     "按条件删除行": "Delete rows by condition",
     "按条件删除行…": "Delete rows by condition…",
     "按筛选条件删除表格行": "Delete table rows by filter conditions",
@@ -681,7 +681,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "重复编号整行跳过，不补写新字段。": "Skip duplicate rows entirely, without filling their new fields.",
     "现有评分记录不会被删除。是否继续？": "Existing rating records will not be deleted. Continue?",
     "匹配 {matched} · 新增 {added} · 草稿问题 {issues} · 重复行 {duplicates} · {policy} · 新增列 {columns}": "Matched {matched} · new {added} · draft issues {issues} · duplicate rows {duplicates} · {policy} · new columns {columns}",
-    "确认写入质控前名单": "Confirm Pre-QC list write",
+    "确认写入质控总名单": "Confirm Master QC list write",
     "名单删除状态": "List deletion status",
     "质控名单导入": "QC list import",
     "质控名单筛选信息仍在加载": "QC-list filter information is still loading.",
@@ -718,7 +718,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
         "The selected record is no longer current. Select it again."
     ),
     "请先选择要删除的导入草稿行": "Select import-draft rows to delete first.",
-    "请先选择要删除的质控前名单行": "Select Pre-QC list rows to delete first.",
+    "请先选择要删除的质控总名单行": "Select Master QC list rows to delete first.",
     "请先选择要删除列中的一个单元格": (
         "Select a cell in the column to delete first."
     ),
@@ -730,11 +730,11 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "删除列窗口返回了无效选择": (
         "The column-deletion dialog returned an invalid selection."
     ),
-    "删除条件没有匹配任何质控前名单行": (
-        "The deletion conditions matched no Pre-QC list rows."
+    "删除条件没有匹配任何质控总名单行": (
+        "The deletion conditions matched no Master QC list rows."
     ),
-    "当前没有可删除的质控前名单列": (
-        "There are no deletable Pre-QC list columns."
+    "当前没有可删除的质控总名单列": (
+        "There are no deletable Master QC list columns."
     ),
     "名单行删除返回了无效结果": "Row deletion returned an invalid result.",
     "名单列删除返回了无效结果": "Column deletion returned an invalid result.",
@@ -762,8 +762,8 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "所选名单行包含重复 easyqcid": (
         "The selected list rows contain duplicate easyqcid values."
     ),
-    "当前没有可维护的质控前名单": (
-        "There is no current Pre-QC list to maintain."
+    "当前没有可维护的质控总名单": (
+        "There is no current Master QC list to maintain."
     ),
     "项目数据正在刷新，请稍后重试": (
         "Project data is refreshing. Try again shortly."
@@ -886,7 +886,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "添加常量": "Add constant",
     "搜索常量名或值": "Search name or value",
     "搜索常量": "Search constants",
-    "质控前名单": "Pre-QC list",
+    "质控总名单": "Master QC list",
     "质控结果": "QC results",
     "质控模块": "QC modules",
     "已有质控记录": "Existing QC records",
@@ -1301,7 +1301,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "正在刷新质控结果…": "Refreshing QC results…",
     "正在读取导入预览…": "Reading import preview…",
     "正在搜索导入预览…": "Searching import preview…",
-    "正在写入质控前名单…": "Writing Pre-QC list…",
+    "正在写入质控总名单…": "Writing Master QC list…",
     "正在计算…": "Calculating…",
     "正在应用…": "Applying…",
     "正在等待筛选保存…": "Waiting for the filter to be saved…",
@@ -1317,7 +1317,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "已应用筛选": "Filter applied",
     "已应用视图": "View applied",
     "未选择记录": "No record selected",
-    "没有可显示的质控前名单。": "No Pre-QC list records to display.",
+    "没有可显示的质控总名单。": "No Master QC list records to display.",
     "没有可显示的质控结果": "No QC results to display.",
     "请输入精确的 easyqcid": "Enter an exact easyqcid",
     "没有匹配的 easyqcid": "No matching easyqcid",
@@ -1340,7 +1340,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "已登记项目": "Registered project",
     "配置任务状态": "Configuration task status",
     "直接输入名单": "Direct-entry list",
-    "为质控前名单新增列": "Add a column to the Pre-QC list",
+    "为质控总名单新增列": "Add a column to the Master QC list",
     "为导入草稿新增列": "Add a column to the import draft",
     "仅在导入单列数据时使用": "Use only when importing one data column",
     "例如 easyqcid 或 scanner_model": "For example: easyqcid or scanner_model",
@@ -1445,7 +1445,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "取消新增列": "Cancel new column",
     "新增列状态": "New-column status",
     "EasyQC 启动": "EasyQC startup",
-    "EasyQC 质控前名单": "EasyQC Pre-QC list",
+    "EasyQC 质控总名单": "EasyQC Master QC list",
     "确认删除": "Confirm deletion",
     "删除行": "Delete rows",
     "删除列": "Delete columns",
@@ -1460,7 +1460,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "编辑": "Edit",
     "启动失败": "Start failed",
     "未知错误": "Unknown error",
-    "质控前名单为空": "The Pre-QC list is empty.",
+    "质控总名单为空": "The Master QC list is empty.",
     "配置任务失败": "Configuration task failed",
     "名单导入任务失败": "List import task failed",
     "筛选不可用": "Filtering unavailable",
@@ -1488,8 +1488,8 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "兼容性错误：旧版筛选不可用": (
         "Compatibility error: the legacy filter is unavailable."
     ),
-    "已清空导入草稿；质控前名单未改变": (
-        "The import draft was cleared; the Pre-QC list was not changed."
+    "已清空导入草稿；质控总名单未改变": (
+        "The import draft was cleared; the Master QC list was not changed."
     ),
     "该列名包含空格或标点，不能直接用于表达式": (
         "This column name contains spaces or punctuation and cannot be used "
@@ -1543,20 +1543,20 @@ _SOURCE_PATTERNS = (
         "Unknown quick template: {value}",
     ),
     (
-        re.compile(r"^质控前名单不能删除 (?P<column>.*)$"),
-        "The Pre-QC list cannot delete {column}.",
+        re.compile(r"^质控总名单不能删除 (?P<column>.*)$"),
+        "The Master QC list cannot delete {column}.",
     ),
     (
-        re.compile(r"^质控前名单不能删除受保护列: (?P<value>.*)$"),
-        "The Pre-QC list cannot delete protected columns: {value}.",
+        re.compile(r"^质控总名单不能删除受保护列: (?P<value>.*)$"),
+        "The Master QC list cannot delete protected columns: {value}.",
     ),
     (
-        re.compile(r"^质控前名单行不存在或已变化: (?P<value>.*)$"),
-        "Pre-QC list rows are missing or changed: {value}",
+        re.compile(r"^质控总名单行不存在或已变化: (?P<value>.*)$"),
+        "Master QC list rows are missing or changed: {value}",
     ),
     (
-        re.compile(r"^质控前名单列不存在或已变化: (?P<value>.*)$"),
-        "Pre-QC list columns are missing or changed: {value}",
+        re.compile(r"^质控总名单列不存在或已变化: (?P<value>.*)$"),
+        "Master QC list columns are missing or changed: {value}",
     ),
     (
         re.compile(r"^(?P<column>.*)   · 受保护$"),
@@ -1625,8 +1625,8 @@ _SOURCE_PATTERNS = (
     (re.compile(r"^已更新质控名单：(?P<value>.*)$"), "QC list updated: {value}"),
     (re.compile(r"^已生成列：(?P<value>.*)$"), "Column created: {value}"),
     (
-        re.compile(r"^已生成质控前名单列：(?P<value>.*)$"),
-        "Pre-QC list column created: {value}",
+        re.compile(r"^已生成质控总名单列：(?P<value>.*)$"),
+        "Master QC list column created: {value}",
     ),
     (
         re.compile(r"^当前模块筛选匹配 (?P<count>[\d,]+) 条$"),
@@ -1807,8 +1807,8 @@ _SOURCE_PATTERNS = (
         "Preview search complete; matched {count} records.",
     ),
     (
-        re.compile(r"^已写入质控前名单，共 (?P<count>[\d,]+) 条$"),
-        "Wrote {count} records to the Pre-QC list.",
+        re.compile(r"^已写入质控总名单，共 (?P<count>[\d,]+) 条$"),
+        "Wrote {count} records to the Master QC list.",
     ),
     (
         re.compile(r"^已生成导入草稿列：(?P<name>.+)；尚未写入$"),
@@ -1828,22 +1828,22 @@ _SOURCE_PATTERNS = (
     ),
     (
         re.compile(
-            r"^已从质控前名单删除 (?P<count>[\d,]+) 行；评分记录已保留$"
+            r"^已从质控总名单删除 (?P<count>[\d,]+) 行；评分记录已保留$"
         ),
-        "Deleted {count} Pre-QC list rows; rating records were retained.",
+        "Deleted {count} Master QC list rows; rating records were retained.",
     ),
     (
         re.compile(
-            r"^已从质控前名单删除列：(?P<column>.*)；评分记录已保留$"
+            r"^已从质控总名单删除列：(?P<column>.*)；评分记录已保留$"
         ),
-        "Deleted Pre-QC list column {column}; rating records were retained.",
+        "Deleted Master QC list column {column}; rating records were retained.",
     ),
     (
         re.compile(
-            r"^已从质控前名单删除 (?P<count>[\d,]+) 列："
+            r"^已从质控总名单删除 (?P<count>[\d,]+) 列："
             r"(?P<columns>.*)；评分记录已保留$"
         ),
-        "Deleted {count} Pre-QC list columns: {columns}; "
+        "Deleted {count} Master QC list columns: {columns}; "
         "rating records were retained.",
     ),
     (
@@ -1864,27 +1864,27 @@ _SOURCE_PATTERNS = (
     ),
     (
         re.compile(
-            r"^将从质控前名单删除 (?P<count>[\d,]+) 行。\n"
+            r"^将从质控总名单删除 (?P<count>[\d,]+) 行。\n"
             r"现有评分记录不会被删除。是否继续？$"
         ),
-        "Delete {count} rows from the Pre-QC list.\n"
+        "Delete {count} rows from the Master QC list.\n"
         "Existing rating records will be retained. Continue?",
     ),
     (
         re.compile(
-            r"^将从质控前名单删除 (?P<count>[\d,]+) 列："
+            r"^将从质控总名单删除 (?P<count>[\d,]+) 列："
             r"(?P<columns>.*)。\n"
             r"现有评分记录不会被删除。是否继续？$"
         ),
-        "Delete {count} columns from the Pre-QC list: {columns}.\n"
+        "Delete {count} columns from the Master QC list: {columns}.\n"
         "Existing rating records will be retained. Continue?",
     ),
     (
         re.compile(
-            r"^将从质控前名单删除列“(?P<column>.*)”。\n"
+            r"^将从质控总名单删除列“(?P<column>.*)”。\n"
             r"现有评分记录不会被删除。是否继续？$"
         ),
-        "Delete column “{column}” from the Pre-QC list.\n"
+        "Delete column “{column}” from the Master QC list.\n"
         "Existing rating records will be retained. Continue?",
     ),
     (

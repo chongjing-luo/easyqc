@@ -364,10 +364,10 @@ class QtTableWorkspace(QWidget):
             self.derive_button.setObjectName("deriveColumnButton")
         if self.delete_rows_button is not None:
             self.delete_rows_button.setObjectName("deleteTableRowsButton")
-            self.delete_rows_button.setAccessibleName("按条件删除质控前名单行")
+            self.delete_rows_button.setAccessibleName("按条件删除质控总名单行")
         if self.delete_columns_button is not None:
             self.delete_columns_button.setObjectName("deleteTableColumnButton")
-            self.delete_columns_button.setAccessibleName("选择删除质控前名单列")
+            self.delete_columns_button.setAccessibleName("选择删除质控总名单列")
         self.find_edit = QLineEdit(self.action_toolbar)
         self.find_edit.setObjectName("findIdentity")
         self.find_edit.setAccessibleName("查找精确 easyqcid")
@@ -437,7 +437,7 @@ class QtTableWorkspace(QWidget):
         table_panel_layout.setSpacing(6)
 
         self.empty_state_label = QLabel(
-            "没有可显示的质控前名单。",
+            "没有可显示的质控总名单。",
             self.table_panel,
         )
         self.empty_state_label.setObjectName("previewEmptyState")
@@ -464,7 +464,7 @@ class QtTableWorkspace(QWidget):
         )
         self.table_view = QTableView(self.table_surface)
         self.table_view.setObjectName("previewTable")
-        self.table_view.setAccessibleName("EasyQC 质控前名单")
+        self.table_view.setAccessibleName("EasyQC 质控总名单")
         self.table_view.setAccessibleDescription(
             "只读名单；筛选和排序作用于完整结果。"
         )
@@ -1849,7 +1849,7 @@ class QtTableWorkspace(QWidget):
             self._set_error("另一项名单删除任务仍在运行")
             return None
         if self.service.source_total <= 0:
-            self._set_error("当前没有可维护的质控前名单")
+            self._set_error("当前没有可维护的质控总名单")
             return None
         if self.delete_rows_dialog is not None and self.delete_rows_dialog.isVisible():
             self.delete_rows_dialog.raise_()
@@ -1893,7 +1893,7 @@ class QtTableWorkspace(QWidget):
         ).with_filter(expression)
         result = self.service.apply_state(state)
         if not result.matched_total:
-            raise TableViewError("删除条件没有匹配任何质控前名单行")
+            raise TableViewError("删除条件没有匹配任何质控总名单行")
         return self.service.validate_qc_identities(result)
 
     def _delete_rows_from_dialog(
@@ -1907,7 +1907,7 @@ class QtTableWorkspace(QWidget):
             dialog.set_error(str(exc).strip() or type(exc).__name__)
             return
         question = (
-            f"将从质控前名单删除 {len(identities):,} 行。\n"
+            f"将从质控总名单删除 {len(identities):,} 行。\n"
             "现有评分记录不会被删除。是否继续？"
         )
         response = QMessageBox.question(
@@ -1944,7 +1944,7 @@ class QtTableWorkspace(QWidget):
             if column not in self.protected_delete_columns
         )
         if not deletable:
-            self._set_error("当前没有可删除的质控前名单列")
+            self._set_error("当前没有可删除的质控总名单列")
             return None
         if (
             self.delete_columns_dialog is not None
@@ -2003,19 +2003,19 @@ class QtTableWorkspace(QWidget):
             return
         missing = tuple(column for column in columns if column not in available)
         if missing:
-            dialog.set_error(f"质控前名单列不存在或已变化: {missing}")
+            dialog.set_error(f"质控总名单列不存在或已变化: {missing}")
             return
         protected = tuple(
             column for column in columns if column in self.protected_delete_columns
         )
         if protected:
             dialog.set_error(
-                f"质控前名单不能删除受保护列: {protected}"
+                f"质控总名单不能删除受保护列: {protected}"
             )
             return
         names = "、".join(columns)
         question = (
-            f"将从质控前名单删除 {len(columns):,} 列：{names}。\n"
+            f"将从质控总名单删除 {len(columns):,} 列：{names}。\n"
             "现有评分记录不会被删除。是否继续？"
         )
         response = QMessageBox.question(
@@ -2093,11 +2093,11 @@ class QtTableWorkspace(QWidget):
         self.selection_outside_view = False
         self.table_view.clearSelection()
         if operation == "rows":
-            message = f"已从质控前名单删除 {result:,} 行；评分记录已保留"
+            message = f"已从质控总名单删除 {result:,} 行；评分记录已保留"
         else:
             names = "、".join(targets)
             message = (
-                f"已从质控前名单删除 {result:,} 列：{names}；"
+                f"已从质控总名单删除 {result:,} 列：{names}；"
                 "评分记录已保留"
             )
         self.mutation_status_label.setText(self._ui_text(message))

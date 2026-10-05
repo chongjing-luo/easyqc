@@ -316,7 +316,7 @@ def test_empty_preview_explains_that_no_project_table_is_connected(qtbot, tmp_pa
     assert empty_state is not None
     assert not empty_state.isHidden()
     assert "没有可显示" in empty_state.text()
-    assert table.accessibleName() == "EasyQC 质控前名单"
+    assert table.accessibleName() == "EasyQC 质控总名单"
 
 
 def test_gui_qt_package_has_no_tkinter_dependency():

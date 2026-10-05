@@ -105,7 +105,7 @@ class QtMainWindow(QMainWindow):
     NAVIGATION_LABELS = (
         "项目管理",
         "质控名单导入",
-        "质控前名单",
+        "质控总名单",
         "常量设置",
         "质控模块",
         "质控结果",
@@ -1501,7 +1501,7 @@ class QtMainWindow(QMainWindow):
         if not self.current_context.has_project:
             return self._reject_qc_launch("请先打开项目")
         if self.current_context.subjects.empty:
-            return self._reject_qc_launch("质控前名单为空")
+            return self._reject_qc_launch("质控总名单为空")
         module_names = {module.name for module in self.current_context.modules}
         if requested not in module_names:
             return self._reject_qc_launch(f"质控模块不存在: {requested}")

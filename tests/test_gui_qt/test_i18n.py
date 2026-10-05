@@ -145,32 +145,32 @@ def test_translation_formatting_is_strict_and_keeps_business_identifiers(tmp_pat
         ("site   · 受保护", "site   · protected"),
         ("删除所选列", "Delete checked columns"),
         (
-            "按条件删除质控前名单行",
-            "Delete Pre-QC list rows by condition",
+            "按条件删除质控总名单行",
+            "Delete Master QC list rows by condition",
         ),
         (
-            "选择删除质控前名单列",
-            "Select Pre-QC list columns to delete",
+            "选择删除质控总名单列",
+            "Select Master QC list columns to delete",
         ),
         (
-            "已从质控前名单删除 2 行；评分记录已保留",
-            "Deleted 2 Pre-QC list rows; rating records were retained.",
+            "已从质控总名单删除 2 行；评分记录已保留",
+            "Deleted 2 Master QC list rows; rating records were retained.",
         ),
         (
-            "已从质控前名单删除 2 列：site、age；评分记录已保留",
-            "Deleted 2 Pre-QC list columns: site、age; "
+            "已从质控总名单删除 2 列：site、age；评分记录已保留",
+            "Deleted 2 Master QC list columns: site、age; "
             "rating records were retained.",
         ),
         (
-            "将从质控前名单删除列“site”。\n"
+            "将从质控总名单删除列“site”。\n"
             "现有评分记录不会被删除。是否继续？",
-            "Delete column “site” from the Pre-QC list.\n"
+            "Delete column “site” from the Master QC list.\n"
             "Existing rating records will be retained. Continue?",
         ),
         (
-            "将从质控前名单删除 2 列：site、age。\n"
+            "将从质控总名单删除 2 列：site、age。\n"
             "现有评分记录不会被删除。是否继续？",
-            "Delete 2 columns from the Pre-QC list: site、age.\n"
+            "Delete 2 columns from the Master QC list: site、age.\n"
             "Existing rating records will be retained. Continue?",
         ),
     ),

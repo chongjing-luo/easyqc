@@ -273,7 +273,7 @@ def test_qt_main_window_uses_seven_direct_navigation_pages(qtbot, tmp_path) -> N
     assert _primary_navigation_labels(window) == [
         "项目管理",
         "质控名单导入",
-        "质控前名单",
+        "质控总名单",
         "常量设置",
         "质控模块",
         "质控结果",
@@ -396,7 +396,7 @@ def test_runtime_language_switch_updates_seven_pages_and_preserves_context(
     assert _primary_navigation_labels(window) == [
         "Project management",
         "QC list import",
-        "Pre-QC list",
+        "Master QC list",
         "Constants",
         "QC modules",
         "QC results",
