@@ -199,6 +199,53 @@ def test_viewer_plan_launch_navigation_and_close_use_code_executor(tmp_path) -> 
     assert executor.close_calls == 2
 
 
+def test_navigation_keeps_previous_viewers_when_module_control_is_disabled(
+    tmp_path,
+) -> None:
+    executor = _FakeExecutor()
+    module = _module()
+    module["control"] = False
+    workflow = _workflow(tmp_path, module=module, executor=executor)
+
+    assert workflow.viewer_plan().control is False
+    workflow.launch_viewer()
+    assert executor.close_calls == 0
+
+    assert workflow.navigate_to("SUB002")
+    assert executor.close_calls == 0
+    workflow.launch_viewer()
+    assert executor.close_calls == 0
+    assert executor.started[0][1] is False
+    assert executor.started[1][1] is False
+
+    workflow.close()
+    assert executor.close_calls == 1
+
+
+def test_viewer_plan_control_uses_template_not_saved_case_snapshot(
+    tmp_path,
+) -> None:
+    executor = _FakeExecutor()
+    enabled = _module()
+    enabled["control"] = True
+    workflow = _workflow(tmp_path, module=enabled, executor=executor)
+    workflow.set_score("1", "Good")
+    workflow.save()
+    workflow.close()
+    assert executor.close_calls == 1
+
+    disabled = _module()
+    disabled["control"] = False
+    reopened = _workflow(tmp_path, module=disabled, executor=executor)
+    assert reopened.viewer_plan().control is False
+    assert reopened.navigate_to("SUB002")
+    assert reopened.navigate_to("SUB001")
+    assert reopened.current_easyqcid == "SUB001"
+    assert reopened.viewer_plan().control is False
+    reopened.launch_viewer()
+    assert executor.close_calls == 1
+
+
 def test_viewer_plan_shell_mode_follows_module_interper(tmp_path) -> None:
     shell_executor = _FakeExecutor()
     shell_workflow = _workflow(

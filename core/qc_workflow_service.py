@@ -444,7 +444,7 @@ class QcWorkflowService:
         return ViewerPlan(
             rendered_template=rendered,
             commands=dict(commands),
-            control=bool(self._working_module.control),
+            control=bool(self._module_template.get("control")),
             shell=self._working_module.interper == "shell",
         )
 
@@ -561,7 +561,13 @@ class QcWorkflowService:
         previous_module = self._working_module
         previous_dirty = self._dirty
         previous_case_reasons = self._case_read_only_reasons
-        self._code_executor.close_current_processes()
+        # Closing managed viewers on case switch is the module-level launch
+        # policy behind the "close viewers before relaunching" checkbox.
+        # With control disabled the previous viewers stay open so consecutive
+        # cases can be compared side by side; they remain tracked and are
+        # closed when the workflow closes.
+        if bool(self._module_template.get("control")):
+            self._code_executor.close_current_processes()
         self._current_index = target_index
         try:
             self._load_current_rating()
