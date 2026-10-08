@@ -231,6 +231,16 @@ FORMULA_FUNCTION_CATALOG: Final = (
         'SUBSTITUTE([label], "-", "_")',
     ),
     _spec(
+        "TEXT",
+        "text",
+        1,
+        "TEXT(value)",
+        "将值转换为文本；整数不带小数点（3.0 转为 \"3\"），空值保持为空。",
+        "Convert a value to text; whole numbers drop the decimal point "
+        "(3.0 becomes \"3\"); blanks stay blank.",
+        "TEXT([score])",
+    ),
+    _spec(
         "TEXTAFTER",
         "text",
         2,

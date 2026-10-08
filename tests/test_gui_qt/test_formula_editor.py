@@ -175,7 +175,7 @@ def test_advanced_insertion_uses_exact_columns_and_shared_function_metadata(
     assert widget.function_signature.text() == "ROUND(number, digits)"
     assert widget.function_description.text()
     assert widget.function_example.text()
-    assert widget.function_combo.count() == 24
+    assert widget.function_combo.count() == 25
 
     qtbot.mouseClick(widget.insert_function_button, Qt.LeftButton)
     assert widget.formula() == "ROUND()"

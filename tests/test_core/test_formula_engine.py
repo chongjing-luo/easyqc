@@ -250,3 +250,36 @@ def test_random_formula_is_reproducible_prefix_stable_and_locally_seeded() -> No
 def test_random_formula_rejects_invalid_seed_literals(formula: str) -> None:
     with pytest.raises(FormulaValidationError, match="RANDOM"):
         FormulaEngine().evaluate(pd.DataFrame({"a": [1, 2]}), formula)
+
+
+# ---- TEXT: value -> text with whole-number decimal dropping ----
+
+def test_text_drops_decimal_point_for_whole_numbers() -> None:
+    frame = _frame()
+    frame["num"] = [3.0, 2.5, pd.NA, 40.0]
+
+    result = FormulaEngine().evaluate(frame, "TEXT([num])")
+
+    assert result.values.tolist() == ["3", "2.5", pd.NA, "40"]
+    assert not result.has_errors
+
+
+def test_text_passes_text_through_unchanged() -> None:
+    result = FormulaEngine().evaluate(_frame(), "TEXT([fallback])")
+
+    for produced, original in zip(result.values, _frame()["fallback"]):
+        if pd.isna(original):
+            assert pd.isna(produced)
+        else:
+            assert produced == str(original)
+    assert not result.has_errors
+
+
+def test_text_propagates_row_errors_as_blanks() -> None:
+    result = FormulaEngine().evaluate(
+        _frame(),
+        "TEXT(VALUE([raw]))",
+    )
+
+    assert result.values.iloc[1] is pd.NA or pd.isna(result.values.iloc[1])
+    assert result.errors.iloc[1] == "VALUE 无法转换为数值"

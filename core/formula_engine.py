@@ -437,6 +437,8 @@ class FormulaEngine:
                 allow_text=True,
             )
             return FormulaEvaluation(values, errors)
+        if name == "TEXT":
+            return self._text_format(args[0])
         if name in {"ABS", "ROUND"}:
             return self._numeric_function(name, node, args)
         if name in {"PATHNAME", "PARENTPATH", "EXTENSION", "STEM"}:
@@ -467,6 +469,27 @@ class FormulaEngine:
             dtype="float64",
         )
         return FormulaEvaluation(values, _blank_errors(frame.index))
+
+    @staticmethod
+    def _text_format(argument: FormulaEvaluation) -> FormulaEvaluation:
+        """Convert values to text; whole-number floats drop the trailing .0.
+
+        TEXT(3.0) -> "3", TEXT(2.5) -> "2.5"; NaN stays NA (blank in, blank
+        out); prior row errors propagate as NA like the other text functions.
+        """
+
+        def _format(value):
+            if pd.isna(value):
+                return pd.NA
+            if isinstance(value, float) and value.is_integer():
+                return str(int(value))
+            return str(value)
+
+        values = argument.values.map(_format).astype("string")
+        errors = argument.errors.copy()
+        return FormulaEvaluation(
+            values.mask(errors.notna(), pd.NA), errors
+        )
 
     @staticmethod
     def _text_unary(
