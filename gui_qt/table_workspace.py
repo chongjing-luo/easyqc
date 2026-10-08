@@ -104,6 +104,8 @@ class QtTableWorkspace(QWidget):
         delete_columns_callback: Callable[[tuple[str, ...]], int] | None = None,
         rename_column_callback: Callable[[str, str], int] | None = None,
         rename_source_columns: Callable[[], tuple[str, ...]] | None = None,
+        group_column_callback: Callable[[str, int, str, object], str] | None = None,
+        rater_assignment_callback: Callable[[list, int, object], str] | None = None,
         on_data_mutation_committed: Callable[[], None] | None = None,
         protected_delete_columns: tuple[str, ...] = (),
         row_key_columns: tuple[str, ...] = ("easyqcid",),
@@ -127,7 +129,7 @@ class QtTableWorkspace(QWidget):
             raise TypeError("initial_state must be a TableViewState or None")
         if derive_preview_source is not None and not callable(derive_preview_source):
             raise TypeError("derive_preview_source must be callable")
-        if any(value is not None and not callable(value) for value in (rename_column_callback, rename_source_columns)):
+        if any(value is not None and not callable(value) for value in (rename_column_callback, rename_source_columns, group_column_callback, rater_assignment_callback)):
             raise TypeError("Column rename callbacks must be callable")
         deletion_callbacks = (delete_rows_callback, delete_columns_callback)
         if any(callback is not None for callback in deletion_callbacks) and not all(
@@ -211,6 +213,8 @@ class QtTableWorkspace(QWidget):
         self.delete_rows_callback = delete_rows_callback
         self.delete_columns_callback = delete_columns_callback
         self.rename_column_callback = rename_column_callback
+        self.group_column_callback = group_column_callback
+        self.rater_assignment_callback = rater_assignment_callback
         self.rename_source_columns = rename_source_columns
         self._renamed_view_state: TableViewState | None = None
         self.on_data_mutation_committed = on_data_mutation_committed
@@ -1377,6 +1381,10 @@ class QtTableWorkspace(QWidget):
             preview_source,
             self.derive_column_callback,
             self,
+            row_count=self.service.source_total,
+            existing_columns=tuple(profile.name for profile in self.service.profiles),
+            group_handler=self.group_column_callback,
+            assignment_handler=self.rater_assignment_callback,
         )
         dialog.busyChanged.connect(self._set_derive_busy)
         dialog.columnCommitted.connect(self._derived_column_committed)

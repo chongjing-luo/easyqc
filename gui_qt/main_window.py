@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.app_services import AppServices
+from core.code_executor import CodeExecutor
 from core.configuration_service import ConfigurationSnapshot
 from core.event_bus import Event, EventType
 from core.module_filter import (
@@ -195,6 +196,9 @@ class QtMainWindow(QMainWindow):
         )
         self.qc_workspace: QtQcWorkspace | None = None
         self.qc_controller: QtQcControllerWindow | None = None
+        # Multiple live QC controller windows are allowed; the two attributes
+        # above always reference the MOST RECENT one for compatibility.
+        self.qc_controllers: list[QtQcControllerWindow] = []
 
         self.setObjectName("qtPreviewWindow")
         self.setAccessibleName("EasyQC 表格预览" if self._injected_preview else "EasyQC 工作区")
@@ -461,6 +465,12 @@ class QtMainWindow(QMainWindow):
             rename_column_callback=(
                 None if self._injected_preview else self._rename_pre_qc_column
             ),
+            group_column_callback=(
+                None if self._injected_preview else self._add_subject_group_column
+            ),
+            rater_assignment_callback=(
+                None if self._injected_preview else self._export_rater_assignment
+            ),
             rename_source_columns=lambda: tuple(self.current_context.subjects.columns),
             on_data_mutation_committed=(
                 None
@@ -720,6 +730,24 @@ class QtMainWindow(QMainWindow):
     def active_workflow(self) -> QcWorkflowService | None:
         return self.qc_workspace.workflow if self.qc_workspace is not None else None
 
+    def _any_qc_dirty(self) -> bool:
+        """True when ANY live QC window has an unsaved draft."""
+
+        return any(
+            controller.workflow.dirty for controller in self.qc_controllers
+        )
+
+    def _new_qc_code_executor(self):
+        """One dedicated CodeExecutor per QC window.
+
+        Shared executors let one window's navigation/control mode kill another
+        window's viewers and would interleave command journals; per-window
+        executors keep processes and output isolated. Closed with the window.
+        """
+        return CodeExecutor(
+            shell_enabled=self.services.template_service.shell_enabled(),
+        )
+
     def _set_error(self, message: str) -> None:
         self.shell_error_label.setText(message)
         self.shell_error_label.setVisible(bool(message))
@@ -744,7 +772,7 @@ class QtMainWindow(QMainWindow):
         if self.config_workspace.module_filter_write_busy:
             self._set_error("质控名单筛选事务正在完成，请稍候")
             return False
-        if self.active_workflow is not None and self.active_workflow.dirty:
+        if self._any_qc_dirty():
             self._set_error("请先保存或放弃当前质控修改，再切换项目")
             return False
         name = str(name).strip()
@@ -758,7 +786,7 @@ class QtMainWindow(QMainWindow):
         )
 
     def refresh_context(self) -> bool:
-        if self.active_workflow is not None and self.active_workflow.dirty:
+        if self._any_qc_dirty():
             self._set_error("请先保存或放弃当前质控修改，再刷新项目")
             return False
         return self._submit_context(
@@ -770,7 +798,7 @@ class QtMainWindow(QMainWindow):
     def refresh_results(self) -> bool:
         """Refresh derived rating results without replacing a clean QC session."""
 
-        if self.active_workflow is not None and self.active_workflow.dirty:
+        if self._any_qc_dirty():
             message = "请先保存或放弃当前质控修改，再刷新结果"
             self._set_error(message)
             self.results_page.show_error(message)
@@ -1015,6 +1043,38 @@ class QtMainWindow(QMainWindow):
             notify=False,
         )
 
+    def _add_subject_group_column(
+        self,
+        column: str,
+        size: int,
+        order: str,
+        seed: object,
+    ) -> str:
+        """Worker-side Core call: numbered group column over current order."""
+
+        return self.services.configuration_service.add_subject_group_column(
+            column,
+            size=size,
+            order=order,
+            seed=int(seed) if seed is not None else None,
+            notify=False,
+        )
+
+    def _export_rater_assignment(
+        self,
+        raters: list,
+        per_image: int,
+        seed: object,
+    ) -> int:
+        """Worker-side Core call: export the balanced assignment table."""
+
+        self.services.configuration_service.export_rater_assignment(
+            list(raters),
+            per_image=per_image,
+            seed=int(seed) if seed is not None else None,
+        )
+        return 1
+
     def _derived_subject_preview(self) -> pd.DataFrame:
         """Return ordinary subject columns, excluding rebuildable result fields."""
 
@@ -1054,16 +1114,29 @@ class QtMainWindow(QMainWindow):
         self,
         transaction: _QcFilterTransaction,
     ) -> bool:
-        workflow = self.active_workflow
+        source = transaction.source_controller
+        if source is not None and source not in self.qc_controllers:
+            return False
+        source_workflow = source.workflow if source is not None else None
         return (
-            self.qc_controller is transaction.source_controller
-            and self.current_context.context_revision
+            self.current_context.context_revision
             == transaction.context_revision
             and (
                 transaction.phase == "launch_candidate"
-                or self._active_module_name == transaction.module_name
+                or (
+                    source_workflow is not None
+                    and str(source_workflow.current_module.name)
+                    == transaction.module_name
+                )
             )
-            and (workflow is None or not workflow.dirty)
+            and (
+                # A dirty draft in the SOURCE window only invalidates filter
+                # replacements of that same window; launching a fresh,
+                # independent QC window beside it stays valid.
+                transaction.phase in {"launch_candidate", "launch_viewer"}
+                or source_workflow is None
+                or not source_workflow.dirty
+            )
         )
 
     @staticmethod
@@ -1139,13 +1212,26 @@ class QtMainWindow(QMainWindow):
             navigation_ids=identities,
             rater_override=rater_override,
             initial_read_only=initial_read_only,
+            code_executor=self._new_qc_code_executor(),
         )
         return module_name, snapshot.context_revision, identities, workflow
 
     @Slot()
     def _open_qc_filter_dialog(self) -> None:
-        controller = self.qc_controller
-        workflow = self.active_workflow
+        sender = self.sender()
+        controller = next(
+            (
+                candidate
+                for candidate in self.qc_controllers
+                if candidate.workspace is sender
+            ),
+            None,
+        )
+        if controller is None:
+            controller = self.qc_controller
+        workflow = (
+            controller.workflow if controller is not None else None
+        )
         if controller is None or workflow is None:
             self._set_error("请先启动质控")
             return
@@ -1165,7 +1251,7 @@ class QtMainWindow(QMainWindow):
             )
             return
         snapshot = self.current_context
-        module_name = self._active_module_name
+        module_name = str(workflow.current_module.name)
         self._qc_filter_revision += 1
         revision = self._qc_filter_revision
         transaction = _QcFilterTransaction(
@@ -1456,17 +1542,20 @@ class QtMainWindow(QMainWindow):
 
     @Slot(bool)
     def _set_qc_filter_busy(self, busy: bool) -> None:
-        if self.qc_workspace is not None:
-            self.qc_workspace.set_filter_busy(
-                busy
-                or self.config_workspace.module_filter_write_busy
+        for workspace in [
+            controller.workspace for controller in self.qc_controllers
+        ]:
+            workspace.set_filter_busy(
+                busy or self.config_workspace.module_filter_write_busy
             )
         self._update_context_controls()
 
     @Slot(bool)
     def _set_module_config_filter_busy(self, _busy: bool) -> None:
-        if self.qc_workspace is not None:
-            self.qc_workspace.set_filter_busy(
+        for workspace in [
+            controller.workspace for controller in self.qc_controllers
+        ]:
+            workspace.set_filter_busy(
                 self.config_workspace.module_filter_write_busy
                 or self.qc_filter_task_controller.busy
             )
@@ -1505,11 +1594,11 @@ class QtMainWindow(QMainWindow):
         module_names = {module.name for module in self.current_context.modules}
         if requested not in module_names:
             return self._reject_qc_launch(f"质控模块不存在: {requested}")
-        workflow = self.active_workflow
-        if workflow is not None and workflow.dirty:
-            return self._reject_qc_launch("请先保存或放弃当前质控修改")
         if self.qc_filter_task_controller.busy:
             return self._reject_qc_launch("另一项质控名单任务仍在运行")
+        # Same (module, rater) windows may also multi-open; last write wins
+        # per rating file (the user accepted this tradeoff).
+        workflow = self.active_workflow
         snapshot = self.current_context
         preferred_identity = (
             str(initial_easyqcid).strip()
@@ -1572,9 +1661,6 @@ class QtMainWindow(QMainWindow):
         if context_revision != self.current_context.context_revision:
             self._set_error("该表格操作属于已失效的项目上下文")
             return
-        if self.active_workflow is not None and self.active_workflow.dirty:
-            self._set_error("请先保存或放弃当前质控修改，再打开其他名单")
-            return
         module_name = str(self.module_combo.currentData() or "")
         try:
             navigation = self._table_navigation_ids()
@@ -1583,6 +1669,7 @@ class QtMainWindow(QMainWindow):
                 module_name=module_name,
                 initial_easyqcid=identity,
                 navigation_ids=navigation,
+                code_executor=self._new_qc_code_executor(),
             )
         except Exception as exc:
             self._set_error(str(exc))
@@ -1718,7 +1805,7 @@ class QtMainWindow(QMainWindow):
         dialog.open()
 
     def _save_result_associations(self, snapshot, save_state, rules, dialog):
-        if self.active_workflow is not None and self.active_workflow.dirty:
+        if self._any_qc_dirty():
             dialog.set_error("请先保存或放弃当前质控修改，再刷新结果")
             return
         def save_and_prepare():
@@ -1747,15 +1834,13 @@ class QtMainWindow(QMainWindow):
         if context_revision != self.current_context.context_revision:
             self._set_error("该表格操作属于已失效的项目上下文")
             return
-        if self.active_workflow is not None and self.active_workflow.dirty:
-            self._set_error("请先保存或放弃当前质控修改，再打开其他名单")
-            return
         try:
             replacement = self.context_service.create_qc_record_workflow(
                 self.current_context,
                 easyqcid=entry.easyqcid,
                 module_name=entry.module_name,
                 rater=entry.rater,
+                code_executor=self._new_qc_code_executor(),
             )
         except Exception as exc:
             self._set_error(str(exc).strip() or type(exc).__name__)
@@ -1816,12 +1901,8 @@ class QtMainWindow(QMainWindow):
     ) -> None:
         """Swap one already-built controller, then expose it to the user."""
 
-        previous = self.qc_controller
-        if previous is not None:
-            if previous.workspace.filter_busy:
-                previous.close_discarding_draft()
-            else:
-                previous.close()
+        # Multiple live windows: keep previous controllers open and running.
+        self.qc_controllers.append(replacement)
         self.qc_controller = replacement
         self.qc_workspace = replacement.workspace
         self._active_module_name = module_name
@@ -1831,28 +1912,37 @@ class QtMainWindow(QMainWindow):
         replacement.activateWindow()
 
     def _qc_controller_closed(self, controller: QtQcControllerWindow) -> None:
-        if self.qc_controller is not controller:
-            return
+        if controller in self.qc_controllers:
+            self.qc_controllers.remove(controller)
         self.language.unregister_root(controller)
-        self.qc_controller = None
-        self.qc_workspace = None
-        self._active_module_name = ""
+        if self.qc_controller is controller:
+            fallback = (
+                self.qc_controllers[-1] if self.qc_controllers else None
+            )
+            self.qc_controller = fallback
+            self.qc_workspace = fallback.workspace if fallback else None
+            if fallback is not None:
+                module = fallback.workflow.current_module
+                self._active_module_name = str(module.name)
+            else:
+                self._active_module_name = ""
         self._update_context_controls()
 
     def _clear_qc_workspace(self, *, discard_draft: bool = False) -> bool:
-        controller = self.qc_controller
-        if controller is not None:
+        all_closed = True
+        for controller in list(self.qc_controllers):
             closed = (
                 controller.close_discarding_draft()
                 if discard_draft
                 else controller.close()
             )
             if not closed:
-                return False
+                all_closed = False
+        self.qc_controllers.clear()
         self.qc_controller = None
         self.qc_workspace = None
         self._active_module_name = ""
-        return True
+        return all_closed
 
     @Slot(bool)
     def _on_qc_draft_changed(self, _dirty: bool) -> None:
@@ -1866,7 +1956,9 @@ class QtMainWindow(QMainWindow):
             or self.config_workspace.subjects_tab.derive_busy
         )
         mutation_busy = self.table_workspace.mutation_busy
-        dirty = bool(self.active_workflow is not None and self.active_workflow.dirty)
+        # Multi-instance: a dirty QC draft in one window no longer freezes the
+        # whole shell (there is always a live window otherwise). Data safety is
+        # enforced by the project-switch/refresh any-dirty gates instead.
         enabled = (
             not busy
             and not self.row_command_controller.busy
@@ -1874,7 +1966,6 @@ class QtMainWindow(QMainWindow):
             and not self.config_workspace.module_filter_write_busy
             and not derive_busy
             and not mutation_busy
-            and not dirty
             and not self._injected_preview
         )
         self.project_combo.setEnabled(enabled and bool(self.current_context.project_names))
@@ -1905,7 +1996,7 @@ class QtMainWindow(QMainWindow):
     def _on_project_facts_changed(self, event: Event) -> None:
         if self._closing or self._injected_preview:
             return
-        if self.active_workflow is not None and self.active_workflow.dirty:
+        if self._any_qc_dirty():
             self._set_error("项目内容已改变；请先保存或放弃当前质控修改，再刷新")
             return
         preserve_qc = bool(
@@ -1956,8 +2047,7 @@ class QtMainWindow(QMainWindow):
                 self.qc_workspace.show_filter_error(message)
             event.ignore()
             return
-        workflow = self.active_workflow
-        if workflow is not None and workflow.dirty:
+        if self._any_qc_dirty():
             answer = QMessageBox.question(
                 self,
                 translate_ui_text("尚未保存"),

@@ -484,6 +484,50 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
 # lets them participate in runtime switching while owners are migrated to stable
 # message keys. Longer phrases are applied before shorter terms.
 SOURCE_TRANSLATIONS: Mapping[str, str] = {
+    "公式": "Formula",
+    "新增列方式": "New column mode",
+    "评分者名单": "Rater list",
+    "随机种子": "Random seed",
+    "例如：张三, 李四, 王五, 赵六": "e.g. Alice, Bob, Carol, Dave",
+    "按当前表格行顺序编号分组（建议先排序），生成从 1 开始的组号。":
+        "Groups are numbered over the current row order (sort first), "
+        "starting from 1.",
+    "请输入非空列名": "Please enter a non-empty column name",
+    "当前表格不能新增编组列": "This table cannot add a grouping column",
+    "当前表格不能分配评分者": "This table cannot assign raters",
+    "编组任务没有返回正确的列名": "The grouping task did not return the column name",
+    "评分者分配任务没有返回成功结果": "The rater assignment task did not succeed",
+    "编组": "Grouping",
+    "评分者分配": "Rater assignment",
+    "每组行数": "Rows per group",
+    "分组方式": "Grouping mode",
+    "顺序": "Sequential",
+    "倒序": "Reverse",
+    "随机": "Random",
+    "顺序：按当前表格行顺序编号分组（建议先排序）；倒序：从最后一行开始编号；"
+    "随机：成员随机进入各组，每组人数相同。":
+        "Sequential: number groups over the current row order (sort first); "
+        "Reverse: numbering starts at the last row; Random: members are "
+        "randomly assigned so every group has the same size.",
+    "评分者（逗号分隔）": "Raters (comma-separated)",
+    "每图评分人数": "Raters per image",
+    "随机种子（可选）": "Random seed (optional)",
+    "分配结果列名": "Assignment column",
+    "预览前20行": "Preview first 20 rows",
+    "生成分配表": "Generate assignment table",
+    "按当前表格行顺序编号分组（建议先排序），数据值和评分记录保持不变。":
+        "Groups are numbered over the current row order (sort first); "
+        "data values and ratings are preserved.",
+    "每张图像随机分配给多位评分者（每图不重复），总量在评分者之间均衡；"
+    "结果导出为独立分配表（easyqcid 会按每图人数重复出现），不写回质控前名单。":
+        "Each image is randomly assigned to several distinct raters with "
+        "balanced totals. The result is exported to a standalone assignment "
+        "table (easyqcid repeats per rater); it is never written back to the "
+        "pre-QC list.",
+    "留空则每次随机": "Leave empty for a fresh random draw",
+    "请输入评分者名单": "Please enter the rater list",
+    "每图人数不能超过评分者数": "Raters per image cannot exceed the number of raters",
+    "随机种子必须是整数": "Random seed must be an integer",
     "复制": "Copy",
     "命令输出": "Command output",
     "打开质控页": "Open QC page",
@@ -1503,6 +1547,11 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
 
 
 _SOURCE_PATTERNS = (
+    (
+        re.compile(r"^当前表格 (?P<rows>[0-9]+) 行，每组 (?P<size>[0-9]+) 行，将生成 (?P<groups>[0-9]+) 组。$"),
+        "Current table has {rows} rows; {size} rows per group "
+        "produces {groups} groups.",
+    ),
     (
         re.compile(r"^关联规则已保存，但界面刷新失败：(?P<value>.*)$", re.DOTALL),
         "Association rules were saved, but refreshing the view failed: {value}",

@@ -951,7 +951,7 @@ def test_long_results_row_menu_uses_composite_identity_but_existing_easyqcid_con
     }
 
 
-def test_row_record_action_starts_toggleable_read_only_and_dirty_draft_blocks_replacement(
+def test_row_record_starts_read_only_and_same_module_dirty_launch_refocuses(
     qtbot,
     tmp_path,
     monkeypatch,
@@ -1022,9 +1022,18 @@ def test_row_record_action_starts_toggleable_read_only_and_dirty_draft_blocks_re
         "AnatQC"
     ].trigger()
 
-    assert window.qc_controller is current_controller
-    assert window.active_workflow.current_easyqcid == "SUB001"
-    assert "请先保存或放弃" in window.shell_error_label.text()
+    # Multi-instance semantics: the same (module, rater) may open another
+    # writable window even while a dirty draft lives in the first one.
+    qtbot.waitUntil(
+        lambda: window.qc_controller is not current_controller,
+        timeout=3000,
+    )
+    qtbot.waitUntil(lambda: not window.qc_filter_task_controller.busy, timeout=3000)
+    assert window.qc_controller is not current_controller
+    assert current_controller in window.qc_controllers
+    assert current_controller.workflow.current_easyqcid == "SUB001"
+    assert current_controller.workflow.dirty
+    assert window.shell_error_label.text() == ""
 
 
 def test_three_requested_pages_present_same_table_action_order(qtbot, tmp_path) -> None:
@@ -1503,18 +1512,38 @@ def test_module_launch_core_error_remains_visible_on_module_page(
     )
 
 
-def test_module_launch_replaces_exactly_one_top_level_controller(qtbot, tmp_path) -> None:
+def test_module_launch_supports_multiple_live_controllers(qtbot, tmp_path) -> None:
     window, _services = _window(qtbot, tmp_path, second_module=True)
     first_controller = _start_module_qc(window, qtbot)
-    first_workflow = window.qc_workspace.workflow
+    first_workflow = first_controller.workflow
+    first_executor = first_workflow._code_executor
 
-    _start_module_qc(window, qtbot, "FuncQC")
+    second_controller = _start_module_qc(window, qtbot, "FuncQC")
 
-    assert window.qc_controller is not first_controller
+    # Different modules coexist as independent top-level windows.
+    assert window.qc_controller is second_controller
     assert window.qc_workspace.workflow is not first_workflow
-    assert not isValid(first_controller) or not first_controller.isVisible()
-    assert window.qc_controller.isVisible()
-    assert window.findChildren(type(window.qc_controller)) == []
+    assert isValid(first_controller) and first_controller.isVisible()
+    assert second_controller.isVisible()
+    assert window.qc_controllers == [first_controller, second_controller]
+    # Each window owns a dedicated CodeExecutor (isolated viewers/output).
+    assert second_controller.workflow._code_executor is not first_executor
+
+    # Same (module, rater) launch opens ANOTHER independent window
+    # (multi-open allowed; last write wins per rating file).
+    focused = window.start_qc_module("AnatQC")
+    assert focused
+    qtbot.waitUntil(lambda: len(window.qc_controllers) == 3, timeout=3000)
+    qtbot.waitUntil(lambda: not window.qc_filter_task_controller.busy, timeout=3000)
+    assert first_controller in window.qc_controllers
+
+    # Closing one window keeps the others alive; the slot falls back to the
+    # most recently opened remaining window (the third one here).
+    second_controller.close()
+    qtbot.waitUntil(lambda: second_controller not in window.qc_controllers)
+    assert first_controller in window.qc_controllers
+    assert window.qc_controller is window.qc_controllers[-1]
+    assert first_workflow is not None
 
 
 def test_stale_table_callback_is_rejected_after_same_id_project_switch(qtbot, tmp_path) -> None:
@@ -1714,7 +1743,7 @@ def test_failed_qc_replacement_keeps_old_workflow_then_success_closes_it(
     previous = window.qc_workspace.workflow
     close_calls = []
     monkeypatch.setattr(
-        services.code_executor,
+        previous._code_executor,
         "close_current_processes",
         lambda *args, **kwargs: close_calls.append(True),
     )
@@ -1743,7 +1772,8 @@ def test_failed_qc_replacement_keeps_old_workflow_then_success_closes_it(
     monkeypatch.setattr(services.project_context_service, "create_qc_workflow", real_factory)
     _start_module_qc(window, qtbot, "FuncQC")
     assert window.qc_workspace.workflow is not previous
-    assert close_calls == [True]
+    # Multi-instance: the previous window keeps running; no teardown.
+    assert close_calls == []
 
 
 def test_qc_filter_prepares_hidden_candidate_before_save_then_swaps_and_refreshes(
@@ -1854,7 +1884,9 @@ def test_qc_filter_prepares_hidden_candidate_before_save_then_swaps_and_refreshe
     assert candidate_controller_threads == [gui_thread]
     assert published_threads == [get_ident()]
     assert window.config_workspace.module_filter_summary.text() == "已筛选：2 条"
-    assert not isValid(old_controller) or not old_controller.isVisible()
+    # Multi-instance: the pre-filter window keeps running beside the filtered
+    # replacement window.
+    assert isValid(old_controller) and old_controller.isVisible()
 
 
 def test_qc_filter_dialog_profiles_prepare_off_thread_and_cancel_writes_nothing(
@@ -1908,7 +1940,7 @@ def test_qc_filter_persistence_failure_preserves_then_success_retains_identity(
     window.qc_workspace._refresh()
     close_calls = []
     monkeypatch.setattr(
-        services.code_executor,
+        window.qc_workspace.workflow._code_executor,
         "close_current_processes",
         lambda: close_calls.append(True),
     )
@@ -1951,7 +1983,8 @@ def test_qc_filter_persistence_failure_preserves_then_success_retains_identity(
 
     assert window.qc_workspace.workflow.subject_ids == ("SUB002", "SUB003")
     assert window.qc_workspace.workflow.current_easyqcid == "SUB002"
-    assert close_calls == [True]
+    # Multi-instance: the original window survives the replacement.
+    assert close_calls == []
 
 
 def test_qc_filter_expected_identity_mismatch_preserves_live_controller_and_settings(
@@ -1971,7 +2004,7 @@ def test_qc_filter_expected_identity_mismatch_preserves_live_controller_and_sett
         lambda: changed_subjects.copy(deep=True),
     )
     monkeypatch.setattr(
-        services.code_executor,
+        window.qc_workspace.workflow._code_executor,
         "close_current_processes",
         lambda: close_calls.append(True),
     )
@@ -2004,7 +2037,7 @@ def test_qc_filter_zero_match_and_candidate_failure_write_nothing(
     viewer_close_calls = []
     real_create = window.context_service.create_qc_workflow
     monkeypatch.setattr(
-        services.code_executor,
+        window.qc_workspace.workflow._code_executor,
         "close_current_processes",
         lambda: viewer_close_calls.append(True),
     )
@@ -2191,7 +2224,7 @@ def test_unfiltered_module_launch_builds_workflow_off_thread_and_controller_on_g
     assert controller_threads == [gui_thread]
 
 
-def test_dirty_qc_disables_context_replacement_and_close_requires_confirmation(
+def test_dirty_qc_keeps_shell_alive_and_close_still_requires_confirmation(
     qtbot,
     tmp_path,
     monkeypatch,
@@ -2200,10 +2233,12 @@ def test_dirty_qc_disables_context_replacement_and_close_requires_confirmation(
     _start_module_qc(window, qtbot)
     qtbot.mouseClick(window.qc_workspace.score_buttons["1"]["Good"], Qt.LeftButton)
 
+    # Multi-instance: a dirty draft in one QC window no longer freezes the
+    # shell controls (other windows can still be used beside it).
     assert window.qc_workspace.workflow.dirty
-    assert not window.project_combo.isEnabled()
-    assert not window.module_combo.isEnabled()
-    assert not window.config_workspace.isEnabled()
+    assert window.project_combo.isEnabled()
+    assert window.module_combo.isEnabled()
+    assert window.config_workspace.isEnabled()
     monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.No)
     assert not window.close()
     assert window.isVisible()
@@ -2224,7 +2259,7 @@ def test_main_close_accepts_dirty_draft_once_and_closes_controller_resources(
     controller = _start_module_qc(window, qtbot)
     close_calls = []
     monkeypatch.setattr(
-        services.code_executor,
+        window.active_workflow._code_executor,
         "close_current_processes",
         lambda: close_calls.append(True),
     )

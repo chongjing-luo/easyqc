@@ -563,6 +563,7 @@ class ProjectContextService:
         easyqcid: str,
         module_name: str,
         rater: str,
+        code_executor: CodeExecutor | None = None,
     ) -> QcWorkflowService:
         """Create a complete saved-schema workflow for one accepted rating."""
 
@@ -648,7 +649,7 @@ class ProjectContextService:
             rating_dir=rating_dir,
             constants=snapshot.constants,
             rating_service=self.rating_service,
-            code_executor=self.code_executor,
+            code_executor=code_executor if code_executor is not None else self.code_executor,
             initial_easyqcid=identity,
             event_bus=self.event_bus,
             event_context={
