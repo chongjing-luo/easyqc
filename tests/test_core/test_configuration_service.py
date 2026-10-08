@@ -1380,3 +1380,85 @@ def test_module_save_rejects_multicmd_prefix_form_in_direct_mode(tmp_path) -> No
     service.save_module(leading, original_name="AnatQC")
     stored = next(item for item in service.modules() if item.name == "AnatQC")
     assert stored.code == "MULTICMD freeview {image};|itksnap {image}"
+
+
+# ---- P-assignment: group column + rater assignment (core/assignment.py integration) ----
+
+def test_add_subject_group_column_persists_group_numbers(tmp_path) -> None:
+    service, _ = _service(tmp_path)
+    service.replace_subjects(_subjects())
+
+    name = service.add_subject_group_column(column="group", size=1)
+
+    assert name == "group"
+    frame = service._subjects_snapshot().dataframe
+    assert frame["group"].tolist() == [1, 2]
+
+
+def test_add_subject_group_column_rejects_existing_column(tmp_path) -> None:
+    service, _ = _service(tmp_path)
+    subjects = _subjects()
+    subjects["group"] = 1
+    service.replace_subjects(subjects)
+
+    with pytest.raises(ConfigurationError):
+        service.add_subject_group_column(column="group", size=2)
+
+
+def test_add_subject_group_column_invalid_size_raises(tmp_path) -> None:
+    service, _ = _service(tmp_path)
+    service.replace_subjects(_subjects())
+
+    with pytest.raises(ConfigurationError):
+        service.add_subject_group_column(column="group", size=0)
+
+
+def test_export_rater_assignment_writes_independent_table(tmp_path) -> None:
+    """Assignment rows DUPLICATE easyqcid by design, so the result goes to a
+    dedicated table, never back into TABLE_ALL (validate_subjects enforces
+    unique easyqcid)."""
+    service, _ = _service(tmp_path)
+    service.replace_subjects(_subjects())
+
+    path = service.export_rater_assignment(
+        raters=["甲", "乙"],
+        per_image=1,
+        seed=7,
+        column="rater",
+    )
+
+    assert path is not None and path.exists()
+    out = pd.read_csv(path)
+    assert len(out) == 2
+    assert set(out["rater"]) == {"甲", "乙"}
+    # subjects table untouched
+    assert "rater" not in service._subjects_snapshot().dataframe.columns
+
+
+def test_export_rater_assignment_balances_and_duplicates_per_image(tmp_path) -> None:
+    service, _ = _service(tmp_path)
+    subjects = pd.DataFrame({"easyqcid": [f"S{i:02d}" for i in range(12)]})
+    service.replace_subjects(subjects)
+
+    path = service.export_rater_assignment(
+        raters=["甲", "乙", "丙"],
+        per_image=2,
+        seed=3,
+    )
+    out = pd.read_csv(path)
+
+    assert len(out) == 24
+    counts = out["easyqcid"].value_counts()
+    assert (counts == 2).all()
+    rater_counts = out["rater"].value_counts()
+    assert rater_counts.max() - rater_counts.min() <= 2
+
+
+def test_export_rater_assignment_rejects_bad_inputs(tmp_path) -> None:
+    service, _ = _service(tmp_path)
+    service.replace_subjects(_subjects())
+
+    with pytest.raises(ConfigurationError):
+        service.export_rater_assignment(raters=[], per_image=1)
+    with pytest.raises(ConfigurationError):
+        service.export_rater_assignment(raters=["甲"], per_image=2)

@@ -12,6 +12,7 @@ from typing import Any
 
 import pandas as pd
 
+from core.assignment import add_group_column, assign_raters
 from core.code_executor import CodeExecutorError, validate_module_command_template
 from core.event_bus import Event, EventType
 from core.module_filter import resolve_module_filter_identities
@@ -39,6 +40,8 @@ from models.table_view_state import (
     filter_expression_to_json_object,
 )
 from utils.file_utils import FileUtils
+
+RATER_ASSIGNMENT_TABLE: str = "ezqc_rater_assignment"
 
 
 class ConfigurationError(ValueError):
@@ -601,6 +604,87 @@ class ConfigurationService:
         if notify:
             self.publish_subjects_changed()
         return column_name
+
+    def add_subject_group_column(
+        self,
+        column: str,
+        *,
+        size: int,
+        order: str = "sequential",
+        seed: int | None = None,
+        notify: bool = True,
+    ) -> str:
+        """Add a group-number column following the CURRENT row order.
+
+        Groups are numbered over consecutive rows (0..size-1 -> 1, ...), so the
+        caller should sort the table first. Persisted through the standard
+        subjects chain (validate + revision-checked save).
+        """
+        if not isinstance(size, int) or isinstance(size, bool) or size < 1:
+            raise ConfigurationError(f"每组行数必须为不小于1的整数: {size!r}")
+        snapshot = self._subjects_snapshot()
+        assert snapshot.dataframe is not None
+        frame = snapshot.dataframe
+        if column in frame.columns:
+            raise ConfigurationError(f"列已存在: {column}")
+        try:
+            candidate = add_group_column(
+                frame, size=size, column=column, order=order, seed=seed
+            )
+            candidate = self.validate_subjects(candidate)
+            self._validate_association_list_candidate(candidate)
+        except (ArithmeticError, TypeError, ValueError) as exc:
+            raise ConfigurationError(str(exc)) from exc
+        self.table_service.save_table(
+            self._require_project(),
+            TABLE_ALL,
+            candidate,
+            expected_revision=snapshot.revision,
+        )
+        if notify:
+            self.publish_subjects_changed()
+        return column
+
+    def export_rater_assignment(
+        self,
+        raters: list[str],
+        *,
+        per_image: int,
+        seed: int | None = None,
+        column: str = "rater",
+    ) -> Path:
+        """Randomly assign raters to every subject row, balanced across raters.
+
+        The result duplicates easyqcid (per_image rows per subject) BY DESIGN,
+        so it is written to the dedicated ``ezqc_rater_assignment`` table —
+        never back into TABLE_ALL (validate_subjects enforces unique easyqcid).
+        """
+        names = [str(r).strip() for r in raters or [] if str(r).strip()]
+        if not names:
+            raise ConfigurationError("评分者名单不能为空")
+        if not isinstance(per_image, int) or isinstance(per_image, bool) or per_image < 1:
+            raise ConfigurationError(f"每图评分人数必须为不小于1的整数: {per_image!r}")
+        if per_image > len(names):
+            raise ConfigurationError(
+                f"每图人数({per_image})不能超过评分者数({len(names)})"
+            )
+        snapshot = self._subjects_snapshot()
+        frame = snapshot.dataframe
+        if frame is None or len(frame) == 0:
+            raise ConfigurationError("质控前名单为空，无法分配评分者")
+        try:
+            assigned = assign_raters(
+                frame,
+                raters=names,
+                per_image=per_image,
+                seed=seed,
+                column=column,
+            )
+        except ValueError as exc:
+            raise ConfigurationError(str(exc)) from exc
+        project = self._require_project()
+        self.table_service.save_table(project, RATER_ASSIGNMENT_TABLE, assigned)
+        return self.table_service.table_path(project, RATER_ASSIGNMENT_TABLE)
 
     def import_subject_csv(
         self,
