@@ -43,6 +43,21 @@ _GENERIC_OUTPUT_CONTEXT = ViewerExecutionContext(
 )
 _MULTICMD_KEYWORD = "MULTICMD"
 _MULTICMD_SEPARATOR = ";|"
+
+# The pre-Qt MRIcroGL mktemp pipeline is converted to a direct temp-file
+# launch at execution time, so it is exempt from separator validation.
+_LEGACY_MRICROGL_PATTERN = re.compile(
+    r"""^TMP=\$\(mktemp\s+[^)]+\);\s*"""
+    r"""TMP="\$TMP\.py";\s*"""
+    r"""printf\s+'(?P<script>.*?)'\s*>\s*"\$TMP";\s*"""
+    r"""(?P<viewer>.+?)\s+"\$TMP";\s*"""
+    r"""rm\s+-f\s+"\$TMP"\s*$""",
+    re.DOTALL,
+)
+
+# Characters that only a Shell interprets as separators; in direct execution
+# they would silently corrupt argv (e.g. "x.nii;" becomes a filename).
+_DIRECT_MODE_SEPARATOR_CHARS = (";", "&", "|")
 _SCRIPT_KEYWORD = "SCRIPT"
 
 
@@ -105,24 +120,111 @@ def _split_outside_quotes(text: str, delimiter: str) -> list[str]:
     return parts
 
 
-def validate_module_command_template(code: str, interper: str) -> None:
-    """Reject the MULTICMD prefix form combined with direct execution.
+def _unquoted_shell_separators(command: str) -> list[str]:
+    """Return shell separators that appear outside quotes in one command.
 
-    The prefix form copies its prefix into every split command joined by a
-    ";" that only a Shell interprets; direct execution would glue that ";"
-    into one bogus argument. Failing here surfaces the invalid combination
-    when the module is saved instead of silently at viewer launch.
+    Quoted occurrences stay literal on purpose ("a;b.nii" is a legal name);
+    only unquoted ; & | or a bare newline can mean the user expected
+    multiple statements where direct execution would silently corrupt argv.
     """
 
-    parts = split_multicmd_template(code or "")
-    if parts is None:
-        return
-    prefix, _command_text = parts
-    if prefix.strip() and interper != "shell":
-        raise CodeExecutorError(
-            "MULTICMD 前缀写法需要 Shell 解释器：请将模块切换为 shell 模式，"
-            "或移除 MULTICMD 之前的命令"
-        )
+    found = [
+        character
+        for character in _DIRECT_MODE_SEPARATOR_CHARS
+        if len(_split_outside_quotes(command, character)) > 1
+    ]
+    if "\n" in command:
+        found.append("换行")
+    return found
+
+
+def _separator_runtime_warning_line(command: str) -> str | None:
+    """One runtime warning line for direct-mode Shell separators, if any."""
+
+    text = command.strip()
+    if not text or _LEGACY_MRICROGL_PATTERN.match(text):
+        return None
+    if _is_script_template(text):
+        header = text.split("\n", 1)[0]
+        text = header[len(_SCRIPT_KEYWORD):].strip()
+    found = _unquoted_shell_separators(text)
+    if not found:
+        return None
+    shown = "、".join(f"「{item}」" for item in found)
+    return (
+        f"EasyQC 警告：直接执行按字面参数传递 Shell 分隔符 {shown}；"
+        "该命令不会被拆分成多条执行（保存时的警告已确认过此写法）"
+    )
+
+
+def direct_mode_shell_syntax_warning(code: str, interper: str) -> str | None:
+    """Return the save-time warning for direct-execution Shell syntax, if any.
+
+    Detects the same conditions validate_module_command_template rejects:
+    the MULTICMD prefix form (its copied prefix is joined with a ";" that
+    only a Shell understands) and unquoted ; & | separators or bare
+    newlines, which would never split statements and would pass through as
+    literal argv. Quoted characters, Shell modules, SCRIPT bodies and the
+    converted legacy MRIcroGL pipeline never warn.
+    """
+
+    if interper == "shell":
+        return None
+    text = code or ""
+    stripped = text.strip()
+    if not stripped or _LEGACY_MRICROGL_PATTERN.match(stripped):
+        return None
+    if _is_script_template(text):
+        header = stripped.split("\n", 1)[0]
+        segments = [header[len(_SCRIPT_KEYWORD):].strip()]
+    else:
+        parts = split_multicmd_template(text)
+        if parts is None:
+            segments = [text]
+        else:
+            prefix, command_text = parts
+            if prefix.strip():
+                return (
+                    "MULTICMD 前缀写法需要 Shell 解释器：请将模块切换为 shell "
+                    "模式，或移除 MULTICMD 之前的命令"
+                )
+            segments = [
+                segment.strip()
+                for segment in _split_outside_quotes(
+                    command_text, _MULTICMD_SEPARATOR
+                )
+                if segment.strip()
+            ]
+    found: list[str] = []
+    for segment in segments:
+        found.extend(_unquoted_shell_separators(segment))
+    if not found:
+        return None
+    shown = "、".join(f"「{item}」" for item in dict.fromkeys(found))
+    return (
+        f"直接执行不支持 Shell 分隔符 {shown}：多命令请改用 MULTICMD 与 "
+        f"{_MULTICMD_SEPARATOR} 分隔，或切换为 Shell 解释器"
+        "（该字符放入引号内可作普通字符）"
+    )
+
+
+def validate_module_command_template(
+    code: str,
+    interper: str,
+    *,
+    allow_shell_separators: bool = False,
+) -> None:
+    """Reject direct-execution Shell syntax unless the user acknowledged it.
+
+    Raises the warning text when direct-mode Shell syntax is present and
+    ``allow_shell_separators`` is False (the Core/API default so program
+    callers still fail loud); the GUI save path shows the same text as a
+    confirmation dialog and re-saves with the flag once the user accepts.
+    """
+
+    message = direct_mode_shell_syntax_warning(code, interper)
+    if message is not None and not allow_shell_separators:
+        raise CodeExecutorError(message)
 
 
 def build_external_process_environment(
@@ -295,6 +397,17 @@ class CodeExecutor:
             legacy_mricrogl_parts = self._split_legacy_mricrogl_temp_script(command)
             if legacy_mricrogl_parts is not None:
                 return legacy_mricrogl_parts
+            found = _unquoted_shell_separators(command)
+            if found:
+                # 保存时已弹框确认过的配置可以执行；这里只留日志线索，
+                # 分隔符按字面参数传给程序（与确认前的旧行为一致）。
+                log_error(
+                    "警告：直接执行按字面参数传递 Shell 分隔符 "
+                    + "、".join(found)
+                    + f"：{command}",
+                    "CodeExecutor",
+                    show_popup=False,
+                )
             if self.system == "Windows":
                 parts = self._split_windows_command_line(command)
             else:
@@ -408,15 +521,7 @@ class CodeExecutor:
         return str(command[0]) if command else "<empty>"
 
     def _split_legacy_mricrogl_temp_script(self, command: str) -> list[str] | None:
-        pattern = re.compile(
-            r"""^TMP=\$\(mktemp\s+[^)]+\);\s*"""
-            r"""TMP="\$TMP\.py";\s*"""
-            r"""printf\s+'(?P<script>.*?)'\s*>\s*"\$TMP";\s*"""
-            r"""(?P<viewer>.+?)\s+"\$TMP";\s*"""
-            r"""rm\s+-f\s+"\$TMP"\s*$""",
-            re.DOTALL,
-        )
-        match = pattern.match(command)
+        match = _LEGACY_MRICROGL_PATTERN.match(command)
         if match is None:
             return None
 
@@ -642,6 +747,14 @@ class CodeExecutor:
         except Exception:
             self._cleanup_temp_files(temp_files)
             raise
+        if not effective_shell and isinstance(command, str):
+            runtime_warning = _separator_runtime_warning_line(command)
+            if runtime_warning is not None:
+                journal.record_execution_warning(
+                    capture.execution_id,
+                    runtime_warning,
+                )
+
         popen_kwargs: dict[str, Any] = {
             "cwd": cwd,
             "env": child_environment,

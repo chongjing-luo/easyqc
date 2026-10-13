@@ -673,6 +673,25 @@ class CommandOutputJournal:
         else:
             self._emit(execution_id, "warning", message)
 
+    def record_execution_warning(
+        self,
+        execution_id: str,
+        message: str,
+    ) -> None:
+        """Attach one visible warning event to a known execution.
+
+        Used for executor-level diagnostics (for example direct-mode Shell
+        separators passed through literally) so they surface in the command
+        output panel instead of only the log file.
+        """
+
+        self._require_open()
+        if execution_id not in self._executions:
+            raise ValueError(f"unknown execution: {execution_id}")
+        if not isinstance(message, str) or not message.strip():
+            raise ValueError("message must be non-empty text")
+        self._emit(execution_id, "warning", message)
+
     def _flush_pending_warnings(self, execution_id: str) -> None:
         pending = tuple(self._pending_warning_events)
         self._pending_warning_events.clear()

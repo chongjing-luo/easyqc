@@ -76,6 +76,12 @@ def test_every_catalog_entry_has_a_vector_evaluator_handler() -> None:
             "number": [2.56],
             "path": [r"C:\data\sub_001.nii.gz"],
             "label": [" QC-pass "],
+            "easyqcid": ["CCNPCKG0001_01_rest01"],
+            "score1": [3.0],
+            "score2": [2.5],
+            "score3": [3.0],
+            "session": [2],
+            "run": [1.5],
         },
         index=[37],
     )

@@ -1065,6 +1065,7 @@ class QtMainWindow(QMainWindow):
         raters: list,
         per_image: int,
         seed: object,
+        strata: object = None,
     ) -> int:
         """Worker-side Core call: export the balanced assignment table."""
 
@@ -1072,6 +1073,7 @@ class QtMainWindow(QMainWindow):
             list(raters),
             per_image=per_image,
             seed=int(seed) if seed is not None else None,
+            strata=str(strata) if strata else None,
         )
         return 1
 

@@ -1356,6 +1356,44 @@ def test_explicit_subject_import_rejects_ambiguous_inputs_before_write(
     pd.testing.assert_frame_equal(service.subjects(), current)
 
 
+def test_module_save_rejects_shell_separators_in_direct_mode(tmp_path) -> None:
+    service, _ = _service(tmp_path)
+    service.add_module("AnatQC", "Anatomical QC")
+    module = next(item for item in service.modules() if item.name == "AnatQC")
+    module.code = "freeview {image}; itksnap {image}"
+    module.interper = "direct"
+
+    with pytest.raises(ConfigurationError, match="MULTICMD"):
+        service.save_module(module, original_name="AnatQC")
+    stored = next(item for item in service.modules() if item.name == "AnatQC")
+    assert stored.code is None
+
+    # 同一命令切换到 Shell 解释器即可保存
+    module.interper = "shell"
+    service.save_module(module, original_name="AnatQC")
+    stored = next(item for item in service.modules() if item.name == "AnatQC")
+    assert stored.interper == "shell"
+
+
+def test_module_save_allows_shell_separators_after_acknowledgement(tmp_path) -> None:
+    service, _ = _service(tmp_path)
+    service.add_module("AnatQC", "Anatomical QC")
+    module = next(item for item in service.modules() if item.name == "AnatQC")
+    module.code = "freeview {image}; itksnap {image}"
+    module.interper = "direct"
+
+    # 默认（程序调用）仍拒绝；GUI 弹框确认后带标志保存
+    with pytest.raises(ConfigurationError, match="MULTICMD"):
+        service.save_module(module, original_name="AnatQC")
+    service.save_module(
+        module,
+        original_name="AnatQC",
+        allow_shell_separators=True,
+    )
+    stored = next(item for item in service.modules() if item.name == "AnatQC")
+    assert stored.code == "freeview {image}; itksnap {image}"
+
+
 def test_module_save_rejects_multicmd_prefix_form_in_direct_mode(tmp_path) -> None:
     service, _ = _service(tmp_path)
     service.add_module("AnatQC", "Anatomical QC")
@@ -1462,3 +1500,46 @@ def test_export_rater_assignment_rejects_bad_inputs(tmp_path) -> None:
         service.export_rater_assignment(raters=[], per_image=1)
     with pytest.raises(ConfigurationError):
         service.export_rater_assignment(raters=["甲"], per_image=2)
+
+def test_export_rater_assignment_strata_balances_within_strata(tmp_path) -> None:
+    service, _ = _service(tmp_path)
+    subjects = pd.DataFrame(
+        {
+            "easyqcid": [f"S{i:03d}" for i in range(60)],
+            "site": ["A"] * 30 + ["B"] * 30,
+        }
+    )
+    service.replace_subjects(subjects)
+
+    path = service.export_rater_assignment(
+        raters=["甲", "乙", "丙"],
+        per_image=2,
+        seed=5,
+        strata="site",
+    )
+    out = pd.read_csv(path)
+
+    assert len(out) == 120
+    assert "site" in out.columns
+    for site in ("A", "B"):
+        counts = out[out["site"] == site]["rater"].value_counts()
+        assert set(counts.index) == {"甲", "乙", "丙"}
+        assert counts.max() - counts.min() <= 4  # 2 * per_image bound
+
+
+def test_export_rater_assignment_strata_failures_surface(tmp_path) -> None:
+    service, _ = _service(tmp_path)
+    service.replace_subjects(_subjects())
+
+    with pytest.raises(ConfigurationError, match="分层列不存在"):
+        service.export_rater_assignment(
+            raters=["甲", "乙"], per_image=1, strata="missing"
+        )
+    blank = pd.DataFrame(
+        {"easyqcid": ["S1", "S2", "S3"], "site": ["A", None, "B"]}
+    )
+    service.replace_subjects(blank)
+    with pytest.raises(ConfigurationError, match="空值"):
+        service.export_rater_assignment(
+            raters=["甲", "乙"], per_image=1, strata="site"
+        )

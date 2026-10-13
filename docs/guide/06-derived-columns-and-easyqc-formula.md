@@ -96,33 +96,48 @@ ROUND(([age] - [baseline_age]) / 12, 1)
 
 它会为每一行产生相同值。导入源没有 `easyqcid` 时，也可以先从名称提取，或在确定只有一行时生成固定身份；最终写入总名单仍必须通过唯一性校验。
 
-## 5. 23 个允许函数
+## 5. 38 个允许函数
 
 | 函数 | 典型用途 |
 |---|---|
-| `ABS(value)` | 绝对值 |
+| `ABS(number)` | 绝对值 |
+| `AVERAGE(a, b, ...)` | 非空数值的平均值；全空为空 |
+| `BETWEEN(value, low, high)` | 数值是否在闭区间内 |
 | `BLANK()` | 明确空值 |
 | `COALESCE(a, b, ...)` | 取第一个非空值 |
+| `CONTAINS(find_text, within_text)` | 是否包含固定文本（找不到为 FALSE，不报错） |
+| `COUNT(a, b, ...)` | 非空值计数（不区分类型） |
 | `EXTENSION(path)` | 文件扩展名 |
-| `FIND(text, within)` | 查找文本位置 |
-| `IF(condition, yes, no)` | 条件分支 |
-| `IFERROR(value, fallback)` | 显式处理逐行错误 |
+| `FIND(find_text, within_text)` | 查找文本位置 |
+| `IF(condition, when_true, when_false)` | 条件分支 |
+| `IFERROR(expression, fallback)` | 显式处理逐行错误 |
+| `IFS(condition, a, b, ..., default)` | 多条件顺序取值，末参为默认值 |
+| `INT(number)` | 向零截断取整 |
 | `ISBLANK(value)` | 判断空值 |
 | `LEFT(text, count)` | 左侧字符 |
 | `LEN(text)` | 文本长度 |
 | `LOWER(text)` | 小写 |
+| `MAX(a, b, ...)` | 非空数值最大值（多名评分人最好分） |
+| `MEDIAN(a, b, ...)` | 非空数值中位数（共识分） |
 | `MID(text, start, count)` | 中间字符 |
+| `MIN(a, b, ...)` | 非空数值最小值（多名评分人最差分） |
+| `MOD(number, divisor)` | 除法余数，除数为零该行报错 |
 | `PARENTPATH(path)` | 父路径 |
 | `PATHNAME(path)` | 路径末端名称 |
+| `RANDOM(seed)` | 固定种子的可复现随机数 |
 | `RIGHT(text, count)` | 右侧字符 |
-| `ROUND(value, digits)` | 四舍五入 |
+| `ROUND(number, digits)` | 四舍五入 |
+| `SPLITPART(text, delimiter, index)` | 按分隔符取第 N 段（负数从尾部数） |
+| `STDEV(a, b, ...)` | 非空数值样本标准差（评分人分歧） |
 | `STEM(path)` | 去除扩展名的名称 |
-| `SUBSTITUTE(text, old, new)` | 文本替换 |
+| `SUBSTITUTE(text, old_text, new_text)` | 文本替换 |
+| `SUM(a, b, ...)` | 非空数值求和 |
+| `TEXT(value)` | 值转文本（整数不带小数点） |
 | `TEXTAFTER(text, delimiter)` | 分隔符之后文本 |
 | `TEXTBEFORE(text, delimiter)` | 分隔符之前文本 |
-| `TRIM(text)` | 清除首尾和多余空白 |
+| `TRIM(text)` | 清除首尾空白 |
 | `UPPER(text)` | 大写 |
-| `VALUE(text)` | 文本转数值 |
+| `VALUE(value)` | 文本转数值 |
 
 函数名不区分大小写，但文档建议使用大写，以便与列和文本区分。函数参数数量和类型由注册表校验；未知函数不会退化为 Python 调用。
 
@@ -213,6 +228,33 @@ IFERROR(VALUE([age_text]), BLANK())
 ```
 
 `IFERROR` 表示用户明确接受一个回退规则。系统不会自动把错误替换为空值。
+
+### 6.8 多名评分人的最差分与共识分
+
+```text
+MIN([模块A.rater1.score1], [模块A.rater2.score1])
+MEDIAN([模块A.rater1.score1], [模块A.rater2.score1], [模块A.rater3.score1])
+```
+
+聚合函数逐行跳过空值：某位评分人未评不影响其他人；整行全空结果为空。
+`STDEV(...)` 可度量评分人分歧，`COUNT(...)` 可统计该行已评人数。
+
+### 6.9 拆开复合身份号
+
+```text
+SPLITPART([easyqcid], "_", 1)    → 第一段（被试号）
+SPLITPART([easyqcid], "_", -1)   → 最后一段（模态/run）
+```
+
+正数从头部数，负数从尾部数；段序号越界该行报错，会在预览中列出。
+
+### 6.10 评分分档
+
+```text
+IFS([score] >= 3, "pass", [score] >= 1, "review", "fail")
+```
+
+按顺序取第一个为真的条件；最后一个参数是全不满足时的默认值。
 
 ## 7. 预览和提交
 

@@ -51,6 +51,7 @@ from core.configuration_service import (
     ConfigurationSnapshot,
     ProjectListEntry,
 )
+from core.code_executor import direct_mode_shell_syntax_warning
 from core.module_filter import (
     ModuleFilterCompatibilityError,
     normalize_module_filter,
@@ -2174,15 +2175,45 @@ class QtProjectConfigWorkspace(QWidget):
         module.tags = tags
         return module
 
+    def _confirm_direct_shell_syntax(self, module: QCModule) -> bool | None:
+        """Warn about direct-mode Shell syntax; None means save cancelled."""
+
+        warning = direct_mode_shell_syntax_warning(
+            module.code or "",
+            module.interper,
+        )
+        if warning is None:
+            return False
+        answer = QMessageBox.question(
+            self,
+            translate_ui_text("Shell 语法警告"),
+            translate_ui_text(warning)
+            + "\n\n"
+            + translate_ui_text("仍要保存该模块吗？"),
+        )
+        if answer != QMessageBox.Yes:
+            return None
+        return True
+
     def _save_module_form(self) -> None:
         module = self._collect_module_from_form()
         if module is None:
             return
+        allow_separators = self._confirm_direct_shell_syntax(module)
+        if allow_separators is None:
+            return
         try:
             if self._selected_module_name is None:
-                self.configuration.create_module(module)
+                self.configuration.create_module(
+                    module,
+                    allow_shell_separators=allow_separators,
+                )
             else:
-                self.configuration.save_module(module, original_name=self._selected_module_name)
+                self.configuration.save_module(
+                    module,
+                    original_name=self._selected_module_name,
+                    allow_shell_separators=allow_separators,
+                )
         except Exception as exc:
             self._set_error(str(exc))
             return

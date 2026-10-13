@@ -84,6 +84,7 @@ def test_shell_mode_preserves_locals_across_lines_sed_semicolons_and_redirection
 def test_semicolon_requires_explicit_shell_mode():
     command = "echo FIRST; echo SECOND"
 
+    # 直接模式按字面传递（保存时已弹框确认过该类写法），Shell 模式才分隔
     direct_result = CodeExecutor().run_command(command)
     shell_result = CodeExecutor(shell_enabled=True).run_command(command)
 

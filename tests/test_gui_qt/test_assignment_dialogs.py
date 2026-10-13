@@ -30,8 +30,10 @@ def _workspace(tmp_path, config):
                 seed=int(seed) if seed is not None else None, notify=False,
             )
         ),
-        rater_assignment_callback=lambda raters, per_image, seed: (
-            config.export_rater_assignment(raters, per_image=per_image, seed=seed),
+        rater_assignment_callback=lambda raters, per_image, seed, strata=None: (
+            config.export_rater_assignment(
+                raters, per_image=per_image, seed=seed, strata=strata
+            ),
             1,
         )[1],
     )
@@ -126,6 +128,98 @@ def test_assignment_tab_preview_shows_stats(qtbot, tmp_path):
 
     assert dialog.preview_table.rowCount() > 0
     assert "每人" in dialog.assign_stats_label.text()
+
+
+# ---- assignment stratification ----
+
+def test_assignment_strata_combo_lists_subject_columns(qtbot, tmp_path):
+    config = config_for(tmp_path)
+    ws = _workspace(tmp_path, config)
+    qtbot.addWidget(ws)
+
+    dialog = ws.open_derived_column_dialog()
+    dialog.mode_tabs.setCurrentWidget(dialog.assignment_page)
+
+    assert dialog.assign_strata_combo.currentData() is None
+    assert dialog.assign_strata_combo.itemText(0) == "（不分层）"
+    data = [
+        dialog.assign_strata_combo.itemData(i)
+        for i in range(dialog.assign_strata_combo.count())
+    ]
+    assert "easyqcid" in data and "site" in data
+
+
+def test_assignment_strata_preview_mentions_stratum_and_passes_it(qtbot, tmp_path):
+    config = config_for(tmp_path)
+    ws = _workspace(tmp_path, config)
+    qtbot.addWidget(ws)
+
+    dialog = ws.open_derived_column_dialog()
+    dialog.mode_tabs.setCurrentWidget(dialog.assignment_page)
+    dialog.assign_raters_edit.setText("甲, 乙")
+    combo = dialog.assign_strata_combo
+    combo.setCurrentIndex(combo.findData("site"))
+    qtbot.mouseClick(dialog.preview_button, Qt.LeftButton)
+
+    assert "按 site 分层" in dialog.assign_stats_label.text()
+    assert dialog.preview_table.rowCount() > 0
+    # 预览表透传分层列，便于核查层内均衡
+    headers = [
+        dialog.preview_table.horizontalHeaderItem(c).text()
+        for c in range(dialog.preview_table.columnCount())
+    ]
+    assert "site" in headers
+
+
+def test_assignment_tab_exports_stratified_table_end_to_end(qtbot, tmp_path):
+    config = ConfigurationService(
+        ProjectService(tmp_path / "projects.json"), TableService()
+    )
+    config.create_project("STRATA", tmp_path / "project")
+    config.replace_subjects(
+        pd.DataFrame(
+            {
+                "easyqcid": [f"S{i:02d}" for i in range(12)],
+                "site": ["A"] * 6 + ["B"] * 6,
+            }
+        )
+    )
+    ws = QtTableWorkspace(
+        config._subjects_snapshot().dataframe,
+        derive_column_callback=lambda request: config.derive_subject_column(
+            request, notify=False
+        ),
+        group_column_callback=lambda column, size, order, seed: None,
+        rater_assignment_callback=lambda raters, per_image, seed, strata=None: (
+            config.export_rater_assignment(
+                raters, per_image=per_image, seed=seed, strata=strata
+            ),
+            1,
+        )[1],
+    )
+    qtbot.addWidget(ws)
+
+    dialog = ws.open_derived_column_dialog()
+    dialog.mode_tabs.setCurrentWidget(dialog.assignment_page)
+    dialog.assign_raters_edit.setText("甲, 乙, 丙")
+    dialog.assign_per_image_spin.setValue(2)
+    dialog.assign_seed_edit.setText("11")
+    combo = dialog.assign_strata_combo
+    combo.setCurrentIndex(combo.findData("site"))
+    qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
+    qtbot.waitUntil(
+        lambda: dialog.task_controller.busy is False and not dialog.isVisible()
+    )
+
+    path = config.table_service.table_path(
+        config._require_project(), "ezqc_rater_assignment"
+    )
+    out = pd.read_csv(path)
+    assert len(out) == 24
+    for site in ("A", "B"):
+        counts = out[out["site"] == site]["rater"].value_counts()
+        assert counts.max() - counts.min() <= 4
+    assert (out["easyqcid"].value_counts() == 2).all()
 
 
 # ---- tab availability ----

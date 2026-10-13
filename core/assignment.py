@@ -68,6 +68,7 @@ def assign_raters(
     per_image: int = 1,
     seed: int | None = None,
     column: str = "rater",
+    strata: str | None = None,
 ) -> pd.DataFrame:
     """Expand rows so each image is reviewed by ``per_image`` random raters.
 
@@ -79,7 +80,13 @@ def assign_raters(
     (spread <= per_image across raters) while remaining a valid random
     assignment. Every image gets ``per_image`` DISTINCT raters.
 
-    Non-mutating. Deterministic when ``seed`` is given.
+    ``strata`` (optional column name) processes rows stratum by stratum in
+    first-appearance order with one SHARED counter map, so each stratum stays
+    balanced as well as the grand total; a blank stratum value raises (fail
+    loud — silent "unknown stratum" buckets would skew the design).
+
+    Non-mutating. Deterministic when ``seed`` is given; ``strata=None``
+    behaves exactly like the unstratified original.
     """
     raters = [r.strip() for r in (raters or []) if r and r.strip()]
     if not raters:
@@ -91,17 +98,33 @@ def assign_raters(
 
     rng = random.Random(seed)
     counts = {r: 0 for r in raters}
-
     records: list[dict] = []
-    for row in df.to_dict("records"):
-        # least-count-first with random tie-break -> balanced + random
-        ordered = sorted(raters, key=lambda r: (counts[r], rng.random()))
-        chosen = ordered[:per_image]
-        for rater in chosen:
-            counts[rater] += 1
-            new_row = dict(row)
-            new_row[column] = rater
-            records.append(new_row)
+    rows = df.to_dict("records")
+    if strata is None:
+        row_groups: list[tuple[object, list[dict]]] = [(None, rows)]
+    else:
+        if strata not in df.columns:
+            raise ValueError(f"分层列不存在: {strata!r}")
+        blanks = [row for row in rows if row[strata] is None or pd.isna(row[strata])]
+        if blanks:
+            raise ValueError(
+                f"分层列 {strata!r} 存在 {len(blanks)} 个空值，无法分层分配"
+            )
+        groups: dict[object, list[dict]] = {}
+        for row in rows:
+            groups.setdefault(row[strata], []).append(row)
+        row_groups = list(groups.items())
+
+    for _stratum, group_rows in row_groups:
+        for row in group_rows:
+            # least-count-first with random tie-break -> balanced + random
+            ordered = sorted(raters, key=lambda r: (counts[r], rng.random()))
+            chosen = ordered[:per_image]
+            for rater in chosen:
+                counts[rater] += 1
+                new_row = dict(row)
+                new_row[column] = rater
+                records.append(new_row)
 
     return pd.DataFrame(records)
 

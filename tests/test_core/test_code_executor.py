@@ -1425,6 +1425,155 @@ def test_validate_module_command_template_allows_valid_combinations() -> None:
     validate_module_command_template(None, "direct")
 
 
+@pytest.mark.parametrize(
+    "code",
+    (
+        "freeview a.nii; itksnap b.nii",
+        "setup.sh && freeview a.nii",
+        "freeview a.nii &",
+        "cat report.txt | grep fail",
+        "freeview a.nii\nitksnap b.nii",
+        "freeview a.nii;|itksnap b.nii",
+    ),
+)
+def test_validate_module_command_template_rejects_shell_separators_in_direct_mode(
+    code: str,
+) -> None:
+    from core.code_executor import validate_module_command_template
+
+    with pytest.raises(CodeExecutorError, match="MULTICMD"):
+        validate_module_command_template(code, "direct")
+
+
+def test_validate_module_command_template_keeps_shell_quoted_and_legacy_forms() -> None:
+    from core.code_executor import validate_module_command_template
+
+    # 引号内的分隔符是普通文件名字符，直接执行合法
+    validate_module_command_template('freeview "a;b.nii" {image}', "direct")
+    # Shell 模式保留完整 Shell 语义
+    validate_module_command_template(
+        "source env.sh; freeview a.nii | viewer -", "shell"
+    )
+    # MULTICMD 多行表单：换行是结构的一部分，段内干净即可
+    validate_module_command_template(
+        "MULTICMD\nfreeview {image}\n;|\nitksnap {image}", "direct"
+    )
+    # SCRIPT 载体：脚本体里的分号是脚本内容
+    validate_module_command_template(
+        "SCRIPT freeview -v {image}\nprint('a;b')", "direct"
+    )
+    # 旧式 MRIcroGL mktemp 管道在执行时转换为临时文件直启，豁免
+    legacy = (
+        "TMP=$(mktemp /tmp/easyqc.XXXXXX); "
+        'TMP="$TMP.py"; '
+        "printf 'print(1)' > \"$TMP\"; "
+        'freeview "$TMP"; '
+        'rm -f "$TMP"'
+    )
+    validate_module_command_template(legacy, "direct")
+
+
+def test_validate_module_command_template_rejects_separator_in_script_header() -> None:
+    from core.code_executor import validate_module_command_template
+
+    with pytest.raises(CodeExecutorError, match="直接执行不支持"):
+        validate_module_command_template(
+            "SCRIPT freeview -v {image}; extra\nprint(1)", "direct"
+        )
+
+
+def test_split_command_passes_separators_literally_after_save_gate() -> None:
+    """执行层不再硬拦（保存时已弹框确认）；分隔符按字面参数传递并留日志线索。"""
+
+    executor = CodeExecutor()
+
+    assert executor.split_command("freeview a.nii; itksnap b.nii") == [
+        "freeview",
+        "a.nii;",
+        "itksnap",
+        "b.nii",
+    ]
+    # 引号内本来就是普通字符
+    assert executor.split_command('freeview "a;b.nii"') == [
+        "freeview",
+        "a;b.nii",
+    ]
+
+
+def test_start_command_records_separator_warning_in_output_journal(
+    monkeypatch, tmp_path
+) -> None:
+    """直接模式运行不拦截；警告作为 WARN 事件落入命令输出面板可见。"""
+
+    from core.command_output import CommandOutputJournal
+
+    class FakeProcess:
+        pid = 9753
+
+        @staticmethod
+        def wait(timeout=None):
+            return 0
+
+        @staticmethod
+        def poll():
+            return 0
+
+    journal = CommandOutputJournal(log_root=tmp_path / "viewer-logs")
+    executor = CodeExecutor(command_output_journal=journal)
+    monkeypatch.setattr(
+        "core.code_executor.subprocess.Popen", lambda *a, **k: FakeProcess()
+    )
+
+    executor.start_command("freeview a.nii; itksnap b.nii", shell=False)
+    batch = executor.command_output_since(0)
+
+    kinds = [event.kind for event in batch.events]
+    assert kinds == ["start", "command", "warning", "exit"]
+    warning = batch.events[2]
+    assert "EasyQC 警告" in warning.text
+    assert "「;」" in warning.text
+
+    # Shell 模式语义合法，不产生警告事件
+    executor.start_command("freeview a.nii; itksnap b.nii", shell=True)
+    second = executor.command_output_since(batch.next_sequence)
+    assert not any(event.kind == "warning" for event in second.events)
+
+
+def test_record_execution_warning_rejects_unknown_execution(tmp_path) -> None:
+    from core.command_output import CommandOutputJournal
+
+    journal = CommandOutputJournal(log_root=tmp_path / "viewer-logs")
+    with pytest.raises(ValueError, match="unknown execution"):
+        journal.record_execution_warning("C999", "任意消息")
+
+
+def test_validate_allows_shell_separators_after_user_acknowledgement() -> None:
+    from core.code_executor import (
+        direct_mode_shell_syntax_warning,
+        validate_module_command_template,
+    )
+
+    # 默认（API/程序调用）仍 fail loud
+    with pytest.raises(CodeExecutorError, match="MULTICMD"):
+        validate_module_command_template("freeview a; b", "direct")
+    # GUI 弹框确认后带标志放行；前缀写法同理
+    validate_module_command_template(
+        "freeview a; b", "direct", allow_shell_separators=True
+    )
+    validate_module_command_template(
+        "source env.sh MULTICMD a;|b",
+        "direct",
+        allow_shell_separators=True,
+    )
+
+    # warning 函数与 validate 同源：shell/引号/干净模板返回 None
+    assert direct_mode_shell_syntax_warning("freeview a; b", "shell") is None
+    assert direct_mode_shell_syntax_warning('freeview "a;b"', "direct") is None
+    assert direct_mode_shell_syntax_warning("MULTICMD a;|b", "direct") is None
+    message = direct_mode_shell_syntax_warning("freeview a; b", "direct")
+    assert message is not None and "MULTICMD" in message
+
+
 # ---- SCRIPT template form: script-driven viewers without shell plumbing ----
 
 

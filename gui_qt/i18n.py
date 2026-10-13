@@ -519,11 +519,18 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
         "Groups are numbered over the current row order (sort first); "
         "data values and ratings are preserved.",
     "每张图像随机分配给多位评分者（每图不重复），总量在评分者之间均衡；"
+    "选择分层列后每层内部也均衡（分层列有空值的行会报错）。"
     "结果导出为独立分配表（easyqcid 会按每图人数重复出现），不写回质控前名单。":
         "Each image is randomly assigned to several distinct raters with "
-        "balanced totals. The result is exported to a standalone assignment "
-        "table (easyqcid repeats per rater); it is never written back to the "
-        "pre-QC list.",
+        "balanced totals; with a stratum column selected, every stratum is "
+        "balanced as well (rows with a blank stratum value raise an error). "
+        "The result is exported to a standalone assignment table (easyqcid "
+        "repeats per rater); it is never written back to the pre-QC list.",
+    "分层列（可选）": "Stratum column (optional)",
+    "分层列": "Stratum column",
+    "（不分层）": "(no stratification)",
+    "Shell 语法警告": "Shell syntax warning",
+    "仍要保存该模块吗？": "Save this module anyway?",
     "留空则每次随机": "Leave empty for a fresh random draw",
     "请输入评分者名单": "Please enter the rater list",
     "每图人数不能超过评分者数": "Raters per image cannot exceed the number of raters",
@@ -1547,6 +1554,25 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
 
 
 _SOURCE_PATTERNS = (
+    (
+        re.compile(
+            r"^预览统计（前(?P<preview>[0-9]+)行）: (?P<stats>.*) ｜ "
+            r"全表 (?P<rows>[0-9]+) 行 × 每图 (?P<per>[0-9]+) 人 ≈ "
+            r"每人 (?P<expected>[0-9]+) 张 ｜ 按 (?P<strata>.*) 分层（层内均衡）$"
+        ),
+        "Preview stats (first {preview} rows): {stats} | {rows} rows × "
+        "{per} raters/image ≈ {expected} per rater | stratified by "
+        "{strata}, balanced within each stratum",
+    ),
+    (
+        re.compile(
+            r"^预览统计（前(?P<preview>[0-9]+)行）: (?P<stats>.*) ｜ "
+            r"全表 (?P<rows>[0-9]+) 行 × 每图 (?P<per>[0-9]+) 人 ≈ "
+            r"每人 (?P<expected>[0-9]+) 张$"
+        ),
+        "Preview stats (first {preview} rows): {stats} | {rows} rows × "
+        "{per} raters/image ≈ {expected} per rater",
+    ),
     (
         re.compile(r"^当前表格 (?P<rows>[0-9]+) 行，每组 (?P<size>[0-9]+) 行，将生成 (?P<groups>[0-9]+) 组。$"),
         "Current table has {rows} rows; {size} rows per group "

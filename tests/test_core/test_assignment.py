@@ -164,3 +164,63 @@ def test_group_random_covers_all_groups() -> None:
 def test_group_invalid_order_raises() -> None:
     with pytest.raises(ValueError):
         add_group_column(pd.DataFrame({"x": [1]}), size=1, order="bogus")
+
+
+def _strata_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "easyqcid": [f"s{i:03d}" for i in range(120)],
+            "site": ["A"] * 40 + ["B"] * 40 + ["C"] * 40,
+        }
+    )
+
+
+def test_assign_raters_strata_balances_counts_within_each_stratum() -> None:
+    raters = ["r1", "r2", "r3", "r4"]
+
+    out = assign_raters(
+        _strata_frame(), raters, per_image=2, seed=7, strata="site"
+    )
+
+    assert len(out) == 240
+    assert set(out.columns) == {"easyqcid", "site", "rater"}
+    for site in ("A", "B", "C"):
+        counts = out[out["site"] == site]["rater"].value_counts()
+        assert counts.max() - counts.min() <= 2 * 2  # 2 * per_image bound
+    total = out["rater"].value_counts()
+    assert total.max() - total.min() <= 2
+    per_image_distinct = out.groupby("easyqcid")["rater"].nunique()
+    assert per_image_distinct.eq(2).all()
+
+
+def test_assign_raters_strata_seed_reproducible_and_order_stable() -> None:
+    frame = _strata_frame()
+
+    first = assign_raters(frame, ["a", "b"], per_image=1, seed=11, strata="site")
+    second = assign_raters(frame, ["a", "b"], per_image=1, seed=11, strata="site")
+
+    assert first.equals(second)
+
+
+def test_assign_raters_strata_none_is_legacy_identical() -> None:
+    frame = _strata_frame()
+
+    legacy = assign_raters(frame, ["a", "b", "c"], per_image=2, seed=3)
+    explicit = assign_raters(
+        frame, ["a", "b", "c"], per_image=2, seed=3, strata=None
+    )
+
+    assert legacy.equals(explicit)
+
+
+def test_assign_raters_strata_unknown_column_raises() -> None:
+    with pytest.raises(ValueError, match="分层列不存在"):
+        assign_raters(_strata_frame(), ["a"], per_image=1, strata="missing")
+
+
+def test_assign_raters_strata_blank_values_raise_with_count() -> None:
+    frame = _strata_frame()
+    frame.loc[[0, 5], "site"] = None
+
+    with pytest.raises(ValueError, match="2 个空值"):
+        assign_raters(frame, ["a", "b"], per_image=1, strata="site")

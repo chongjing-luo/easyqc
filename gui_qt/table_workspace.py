@@ -105,7 +105,7 @@ class QtTableWorkspace(QWidget):
         rename_column_callback: Callable[[str, str], int] | None = None,
         rename_source_columns: Callable[[], tuple[str, ...]] | None = None,
         group_column_callback: Callable[[str, int, str, object], str] | None = None,
-        rater_assignment_callback: Callable[[list, int, object], str] | None = None,
+        rater_assignment_callback: Callable[[list, int, object, object], str] | None = None,
         on_data_mutation_committed: Callable[[], None] | None = None,
         protected_delete_columns: tuple[str, ...] = (),
         row_key_columns: tuple[str, ...] = ("easyqcid",),

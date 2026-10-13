@@ -163,6 +163,9 @@ class FormulaEngine:
     """Evaluate whitelisted functions through row-aligned pandas operations."""
 
     _ARITY: Final = FORMULA_FUNCTION_ARITY
+    _AGGREGATIONS: Final = frozenset(
+        {"SUM", "AVERAGE", "MIN", "MAX", "MEDIAN", "STDEV"}
+    )
 
     def __init__(self, parser: FormulaParser | None = None) -> None:
         self.parser = parser or FormulaParser()
@@ -441,6 +444,22 @@ class FormulaEngine:
             return self._text_format(args[0])
         if name in {"ABS", "ROUND"}:
             return self._numeric_function(name, node, args)
+        if name in self._AGGREGATIONS:
+            return self._aggregate(name, args)
+        if name == "COUNT":
+            return self._count_values(args)
+        if name == "CONTAINS":
+            return self._contains(node, args)
+        if name == "SPLITPART":
+            return self._splitpart(node, args)
+        if name == "BETWEEN":
+            return self._between(args)
+        if name == "MOD":
+            return self._modulo(node, args)
+        if name == "INT":
+            return self._truncate(args[0])
+        if name == "IFS":
+            return self._ifs(node, args)
         if name in {"PATHNAME", "PARENTPATH", "EXTENSION", "STEM"}:
             return self._path_function(name, args[0])
         raise FormulaValidationError(f"函数尚未实现: {name}")
@@ -649,6 +668,189 @@ class FormulaEngine:
             errors = _combine_errors(errors, args[1].errors)
             result = values.round(digits)
         return FormulaEvaluation(result.mask(errors.notna(), pd.NA), errors)
+
+    @staticmethod
+    def _aggregate(
+        name: str,
+        args: list[FormulaEvaluation],
+    ) -> FormulaEvaluation:
+        """Reduce nonblank numbers across columns; all-blank rows stay blank."""
+
+        columns: list[pd.Series] = []
+        error_series: list[pd.Series] = []
+        for argument in args:
+            values, errors = _numeric_operand(
+                argument,
+                error_message=f"{name} 需要数值",
+            )
+            columns.append(values)
+            error_series.append(errors)
+        errors = _combine_errors(*error_series)
+        stacked = pd.concat(columns, axis=1)
+        if name == "SUM":
+            result = stacked.sum(axis=1, min_count=1)
+        elif name == "AVERAGE":
+            result = stacked.mean(axis=1)
+        elif name == "MIN":
+            result = stacked.min(axis=1)
+        elif name == "MAX":
+            result = stacked.max(axis=1)
+        elif name == "MEDIAN":
+            result = stacked.median(axis=1)
+        else:
+            result = stacked.std(axis=1, ddof=1)
+        return FormulaEvaluation(result.mask(errors.notna(), pd.NA), errors)
+
+    @staticmethod
+    def _count_values(args: list[FormulaEvaluation]) -> FormulaEvaluation:
+        """Count nonblank values of any type; row errors still block the row."""
+
+        errors = _combine_errors(
+            *(argument.errors.copy() for argument in args)
+        )
+        stacked = pd.concat(
+            [argument.values for argument in args],
+            axis=1,
+        )
+        result = stacked.notna().sum(axis=1).astype("Int64")
+        return FormulaEvaluation(result.mask(errors.notna(), pd.NA), errors)
+
+    @classmethod
+    def _contains(
+        cls,
+        node: FormulaNode,
+        args: list[FormulaEvaluation],
+    ) -> FormulaEvaluation:
+        find_text = cls._scalar_text(
+            node.children[0],
+            "CONTAINS",
+            "find_text",
+            allow_empty=False,
+        )
+        values, text_errors = _string_operand(args[1])
+        errors = _combine_errors(args[0].errors, text_errors)
+        result = values.str.contains(find_text, regex=False).astype("boolean")
+        return FormulaEvaluation(result.mask(errors.notna(), pd.NA), errors)
+
+    @classmethod
+    def _splitpart(
+        cls,
+        node: FormulaNode,
+        args: list[FormulaEvaluation],
+    ) -> FormulaEvaluation:
+        delimiter = cls._scalar_text(
+            node.children[1],
+            "SPLITPART",
+            "delimiter",
+            allow_empty=False,
+        )
+        index = cls._scalar_integer(
+            node.children[2],
+            "SPLITPART",
+            "index",
+        )
+        if index == 0:
+            raise FormulaValidationError("函数 SPLITPART 的参数 index 不能为零")
+        values, text_errors = _string_operand(args[0])
+        errors = _combine_errors(text_errors, args[1].errors, args[2].errors)
+
+        missing = object()
+
+        def _pick(parts: object) -> object:
+            if not isinstance(parts, list):
+                return pd.NA
+            segments = parts
+            position = index - 1 if index > 0 else len(segments) + index
+            if 0 <= position < len(segments):
+                return segments[position]
+            return missing
+
+        selected = values.str.split(delimiter).map(_pick)
+        out_of_range = selected.map(lambda item: item is missing)
+        errors = errors.mask(
+            out_of_range & errors.isna(),
+            "SPLITPART 段序号超出范围",
+        )
+        result = selected.mask(out_of_range, pd.NA).astype("string")
+        return FormulaEvaluation(result.mask(errors.notna(), pd.NA), errors)
+
+    @staticmethod
+    def _between(args: list[FormulaEvaluation]) -> FormulaEvaluation:
+        operands = [
+            _numeric_operand(argument, error_message="BETWEEN 需要数值")
+            for argument in args
+        ]
+        errors = _combine_errors(*(item[1] for item in operands))
+        values, lows, highs = (item[0] for item in operands)
+        result = (values.ge(lows) & values.le(highs)).astype("boolean")
+        return FormulaEvaluation(result.mask(errors.notna(), pd.NA), errors)
+
+    @classmethod
+    def _modulo(
+        cls,
+        node: FormulaNode,
+        args: list[FormulaEvaluation],
+    ) -> FormulaEvaluation:
+        values, errors = _numeric_operand(
+            args[0],
+            error_message="MOD 需要数值",
+        )
+        divisors, divisor_errors = _numeric_operand(
+            args[1],
+            error_message="MOD 需要数值",
+        )
+        errors = _combine_errors(errors, divisor_errors)
+        zero_divisor = divisors.eq(0).fillna(False)
+        errors = errors.mask(
+            zero_divisor & errors.isna(),
+            "除数不能为零",
+        )
+        safe_divisor = divisors.mask(zero_divisor, pd.NA)
+        result = values % safe_divisor
+        return FormulaEvaluation(result.mask(errors.notna(), pd.NA), errors)
+
+    @staticmethod
+    def _truncate(argument: FormulaEvaluation) -> FormulaEvaluation:
+        values, errors = _numeric_operand(
+            argument,
+            error_message="INT 需要数值",
+        )
+        result = pd.Series(np.trunc(values), index=values.index, dtype="Float64")
+        return FormulaEvaluation(result.mask(errors.notna(), pd.NA), errors)
+
+    @staticmethod
+    def _ifs(
+        node: FormulaNode,
+        args: list[FormulaEvaluation],
+    ) -> FormulaEvaluation:
+        """First-true-wins lazy selection; only consulted conditions can error."""
+
+        if len(args) % 2 == 0:
+            raise FormulaValidationError(
+                "函数 IFS 的参数必须是 条件/值 成对再加一个默认值"
+            )
+        index = args[-1].values.index
+        values = args[-1].values.astype("object").copy()
+        errors = args[-1].errors.copy()
+        unresolved = pd.Series(True, index=index, dtype=bool)
+        for position in range(0, len(args) - 1, 2):
+            condition = args[position]
+            choice = args[position + 1]
+            condition_values, condition_errors = _boolean_operand(
+                condition,
+                error_message="IFS 条件需要布尔值",
+            )
+            blocked = unresolved & condition_errors.notna()
+            errors.loc[blocked] = condition_errors.loc[blocked]
+            taken = (
+                unresolved
+                & ~blocked
+                & condition_values.fillna(False).astype(bool)
+            )
+            values.loc[taken] = choice.values.astype("object").loc[taken]
+            errors.loc[taken] = choice.errors.loc[taken]
+            unresolved &= ~taken & ~blocked
+        return FormulaEvaluation(values.mask(errors.notna(), pd.NA), errors)
 
     @staticmethod
     def _path_function(

@@ -283,3 +283,181 @@ def test_text_propagates_row_errors_as_blanks() -> None:
 
     assert result.values.iloc[1] is pd.NA or pd.isna(result.values.iloc[1])
     assert result.errors.iloc[1] == "VALUE 无法转换为数值"
+
+
+def _raters_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "s1": [3.0, 2.0, pd.NA, pd.NA],
+            "s2": [3.0, pd.NA, 4.0, pd.NA],
+            "s3": [3.0, 1.0, pd.NA, pd.NA],
+            "label": ["a", "b", pd.NA, "d"],
+        },
+        index=[3, 5, 8, 13],
+    )
+
+
+@pytest.mark.parametrize(
+    ("formula", "expected"),
+    (
+        ("SUM([s1], [s2], [s3])", [9.0, 3.0, 4.0, pd.NA]),
+        ("AVERAGE([s1], [s2], [s3])", [3.0, 1.5, 4.0, pd.NA]),
+        ("MIN([s1], [s2], [s3])", [3.0, 1.0, 4.0, pd.NA]),
+        ("MAX([s1], [s2], [s3])", [3.0, 2.0, 4.0, pd.NA]),
+        ("MEDIAN([s1], [s2], [s3])", [3.0, 1.5, 4.0, pd.NA]),
+        ("MIN([s1])", [3.0, 2.0, pd.NA, pd.NA]),
+        ("COUNT([s1], [s2], [s3], [label])", [4, 3, 1, 1]),
+        ("COUNT([s1], [s2], [s3])", [3, 2, 1, 0]),
+    ),
+)
+def test_aggregates_skip_blanks_and_stay_blank_when_all_blank(
+    formula: str,
+    expected: list[object],
+) -> None:
+    result = FormulaEngine().evaluate(_raters_frame(), formula)
+
+    assert result.values.tolist() == expected
+    assert result.values.index.tolist() == [3, 5, 8, 13]
+    assert not result.has_errors
+
+
+def test_stdev_is_sample_based_and_blank_below_two_values() -> None:
+    result = FormulaEngine().evaluate(_raters_frame(), "STDEV([s1], [s2], [s3])")
+
+    assert result.values.iloc[0] == 0.0
+    assert result.values.iloc[1] == pytest.approx(0.7071067811865476)
+    assert result.values.iloc[2:] .isna().all()
+    assert not result.has_errors
+
+
+def test_aggregates_mark_non_numeric_rows_without_touching_other_rows() -> None:
+    result = FormulaEngine().evaluate(_raters_frame(), "SUM([s1], [label])")
+
+    assert result.values.isna().all()
+    assert result.errors.notna().tolist() == [True, True, False, True]
+    assert (result.errors.dropna() == "SUM 需要数值").all()
+
+
+def test_contains_reports_false_on_miss_and_keeps_blank_rows_blank() -> None:
+    frame = pd.DataFrame({"id": ["sub_01_rest", "sub_02_anat", pd.NA, ""]})
+
+    hit = FormulaEngine().evaluate(frame, 'CONTAINS("rest", [id])')
+    miss = FormulaEngine().evaluate(frame, 'CONTAINS("zzz", [id])')
+
+    assert hit.values.tolist() == [True, False, pd.NA, False]
+    assert not hit.has_errors
+    assert miss.values.tolist() == [False, False, pd.NA, False]
+    assert not miss.has_errors
+
+
+def test_splitpart_counts_from_both_ends_and_errors_out_of_range() -> None:
+    frame = pd.DataFrame(
+        {"id": ["CCNPCKG0001_01_rest01", "CCNPCKG0002_02_rest02", pd.NA, "short"]}
+    )
+
+    head = FormulaEngine().evaluate(frame, 'SPLITPART([id], "_", 1)')
+    tail = FormulaEngine().evaluate(frame, 'SPLITPART([id], "_", -1)')
+
+    assert head.values.tolist() == [
+        "CCNPCKG0001",
+        "CCNPCKG0002",
+        pd.NA,
+        "short",
+    ]
+    assert not head.has_errors
+    assert tail.values.tolist() == ["rest01", "rest02", pd.NA, "short"]
+    assert not tail.has_errors
+
+    beyond = FormulaEngine().evaluate(frame, 'SPLITPART([id], "_", 5)')
+    assert beyond.values.isna().all()
+    assert "SPLITPART 段序号超出范围" in beyond.errors.iloc[0]
+    assert beyond.errors.isna().iloc[2]
+
+
+@pytest.mark.parametrize(
+    "formula",
+    (
+        'SPLITPART([id], "_", 0)',
+        'SPLITPART([id], "", 1)',
+        'SPLITPART([id], [sep], 1)',
+    ),
+)
+def test_splitpart_rejects_invalid_literal_parameters(formula: str) -> None:
+    frame = pd.DataFrame({"id": ["a_b"], "sep": ["_"]})
+
+    with pytest.raises(FormulaValidationError):
+        FormulaEngine().evaluate(frame, formula)
+
+
+def test_between_uses_closed_interval_and_keeps_blanks_blank() -> None:
+    result = FormulaEngine().evaluate(_raters_frame(), "BETWEEN([s1], 1, 2)")
+
+    assert result.values.tolist() == [False, True, pd.NA, pd.NA]
+    assert not result.has_errors
+
+
+def test_mod_follows_divisor_sign_and_errors_on_zero_divisor() -> None:
+    frame = pd.DataFrame({"n": [7.0, -7.0, pd.NA], "d": [3.0, -3.0, 2.0]})
+
+    result = FormulaEngine().evaluate(frame, "MOD([n], [d])")
+
+    assert result.values.tolist() == [1.0, -1.0, pd.NA]
+    assert not result.has_errors
+
+    zero = FormulaEngine().evaluate(frame, "MOD([n], 0)")
+    assert zero.values.isna().all()
+    assert (zero.errors.dropna() == "除数不能为零").all()
+
+
+def test_int_truncates_toward_zero() -> None:
+    frame = pd.DataFrame({"run": [1.9, -1.9, pd.NA]})
+
+    result = FormulaEngine().evaluate(frame, "INT([run])")
+
+    assert result.values.tolist() == [1.0, -1.0, pd.NA]
+    assert not result.has_errors
+
+
+def test_ifs_returns_first_true_pair_and_falls_back_to_default() -> None:
+    result = FormulaEngine().evaluate(
+        _raters_frame(),
+        'IFS([s1] >= 3, "pass", [s1] >= 1, "review", "fail")',
+    )
+
+    assert result.values.tolist() == ["pass", "review", "fail", "fail"]
+    assert not result.has_errors
+
+
+def test_ifs_condition_errors_only_block_rows_still_undecided() -> None:
+    frame = pd.DataFrame(
+        {
+            "flag": [True, False, False],
+            "mixed": pd.Series(["a", 1, "c"], dtype=object),
+        }
+    )
+    # Row 0 resolves at the first condition, so the later mixed-type numeric
+    # comparison must not touch it; row 1 stays numeric (False, falls to the
+    # default) and row 2 cannot be compared and fails loud.
+    result = FormulaEngine().evaluate(
+        frame,
+        'IFS([flag], "done", [mixed] >= 3, "never", "default")',
+    )
+
+    assert result.values.iloc[0] == "done"
+    assert result.values.iloc[1] == "default"
+    assert pd.isna(result.values.iloc[2])
+    assert result.errors.notna().tolist() == [False, False, True]
+
+
+@pytest.mark.parametrize(
+    "formula",
+    (
+        'IFS([flag], "a", [flag], "b")',
+        'IFS([flag], "a", [flag], "b", [flag], "c")',
+    ),
+)
+def test_ifs_rejects_arguments_without_a_trailing_default(formula: str) -> None:
+    frame = pd.DataFrame({"flag": [True]})
+
+    with pytest.raises(FormulaValidationError, match="成对再加一个默认值"):
+        FormulaEngine().evaluate(frame, formula)

@@ -1220,6 +1220,7 @@ def test_delete_module_requires_confirmation_dialog(
 def test_module_execution_mode_radios_roundtrip_interper(
     qtbot,
     tmp_path,
+    monkeypatch,
 ) -> None:
     workspace, config = _workspace(qtbot, tmp_path)
     workspace.resize(640, 520)
@@ -1243,11 +1244,36 @@ def test_module_execution_mode_radios_roundtrip_interper(
 
     baseline = workspace._module_form_signature()
     workspace.module_direct_radio.click()
+    # 未加引号的 | 在直接模式下会被保存校验拦截，切直接时换成干净命令
+    workspace.module_code.setPlainText("viewer {image}")
     assert workspace._module_form_signature() != baseline
     qtbot.mouseClick(workspace.save_module_button, Qt.LeftButton)
     stored = next(m for m in config.modules() if m.name == "ShellQC")
     assert stored.interper == "direct"
     assert workspace.module_direct_radio.isChecked()
+
+    # 直接模式 + 未加引号的 Shell 分隔符：弹框警告，取消则不保存
+    workspace.module_shell_radio.click()
+    workspace.module_code.setPlainText("viewer {image} | report")
+    workspace.module_direct_radio.click()
+    monkeypatch.setattr(
+        "gui_qt.project_config_workspace.QMessageBox.question",
+        staticmethod(lambda *a, **k: QMessageBox.No),
+    )
+    qtbot.mouseClick(workspace.save_module_button, Qt.LeftButton)
+    stored = next(m for m in config.modules() if m.name == "ShellQC")
+    assert stored.interper == "direct"
+    assert stored.code == "viewer {image}"
+
+    # 弹框确认"仍要保存"后带标志保存成功
+    monkeypatch.setattr(
+        "gui_qt.project_config_workspace.QMessageBox.question",
+        staticmethod(lambda *a, **k: QMessageBox.Yes),
+    )
+    qtbot.mouseClick(workspace.save_module_button, Qt.LeftButton)
+    stored = next(m for m in config.modules() if m.name == "ShellQC")
+    assert stored.interper == "direct"
+    assert stored.code == "viewer {image} | report"
 
 
 def test_key_toolbars_keep_actions_visible_with_wide_native_buttons(

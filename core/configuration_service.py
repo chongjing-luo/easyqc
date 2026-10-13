@@ -652,12 +652,15 @@ class ConfigurationService:
         per_image: int,
         seed: int | None = None,
         column: str = "rater",
+        strata: str | None = None,
     ) -> Path:
         """Randomly assign raters to every subject row, balanced across raters.
 
         The result duplicates easyqcid (per_image rows per subject) BY DESIGN,
         so it is written to the dedicated ``ezqc_rater_assignment`` table —
         never back into TABLE_ALL (validate_subjects enforces unique easyqcid).
+        ``strata`` optionally balances the assignment within each stratum of
+        that subject column (blank stratum values fail loud).
         """
         names = [str(r).strip() for r in raters or [] if str(r).strip()]
         if not names:
@@ -679,6 +682,7 @@ class ConfigurationService:
                 per_image=per_image,
                 seed=seed,
                 column=column,
+                strata=strata,
             )
         except ValueError as exc:
             raise ConfigurationError(str(exc)) from exc
@@ -1129,13 +1133,21 @@ class ConfigurationService:
         )
 
     @staticmethod
-    def _normalized_module_payload(module: QCModule | dict[str, Any]) -> dict[str, Any]:
+    def _normalized_module_payload(
+        module: QCModule | dict[str, Any],
+        *,
+        allow_shell_separators: bool = False,
+    ) -> dict[str, Any]:
         typed = deepcopy(module) if isinstance(module, QCModule) else QCModule.from_legacy_dict(deepcopy(module))
         try:
             validate_module_name(typed.name)
             if typed.rater is not None and typed.rater != "":
                 validate_rater(typed.rater)
-            validate_module_command_template(typed.code or "", typed.interper)
+            validate_module_command_template(
+                typed.code or "",
+                typed.interper,
+                allow_shell_separators=allow_shell_separators,
+            )
         except (RatingIdentityError, CodeExecutorError) as exc:
             raise ConfigurationError(str(exc)) from exc
         typed.easyqcid = None
@@ -1182,10 +1194,18 @@ class ConfigurationService:
         payloads.insert(position, self._normalized_module_payload(module))
         self._commit_module_payloads(payloads)
 
-    def create_module(self, module: QCModule) -> None:
+    def create_module(
+        self,
+        module: QCModule,
+        *,
+        allow_shell_separators: bool = False,
+    ) -> None:
         """Commit a complete new module once; failed validation/writes add nothing."""
 
-        payload = self._normalized_module_payload(module)
+        payload = self._normalized_module_payload(
+            module,
+            allow_shell_separators=allow_shell_separators,
+        )
         payloads = [item.to_legacy_dict() for item in self.modules()]
         self._commit_module_payloads([*payloads, payload])
 
@@ -1194,8 +1214,12 @@ class ConfigurationService:
         module: QCModule | dict[str, Any],
         *,
         original_name: str,
+        allow_shell_separators: bool = False,
     ) -> None:
-        payload = self._normalized_module_payload(module)
+        payload = self._normalized_module_payload(
+            module,
+            allow_shell_separators=allow_shell_separators,
+        )
         payloads = [item.to_legacy_dict() for item in self.modules()]
         index = next(
             (position for position, item in enumerate(payloads) if item.get("name") == original_name),

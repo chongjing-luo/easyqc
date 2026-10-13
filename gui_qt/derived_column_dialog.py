@@ -56,7 +56,7 @@ class DerivedColumnDialog(QDialog):
         row_count: int = 0,
         existing_columns: tuple[str, ...] = (),
         group_handler: Callable[[str, int], str] | None = None,
-        assignment_handler: Callable[[list, int, object], int] | None = None,
+        assignment_handler: Callable[[list, int, object, object], int] | None = None,
     ) -> None:
         super().__init__(parent)
         if not isinstance(preview_source, pd.DataFrame):
@@ -272,6 +272,12 @@ class DerivedColumnDialog(QDialog):
         self.assign_column_edit = QLineEdit("rater", page)
         self.assign_column_edit.setAccessibleName("分配结果列名")
         form.addRow("分配结果列名", self.assign_column_edit)
+        self.assign_strata_combo = QComboBox(page)
+        self.assign_strata_combo.setAccessibleName("分层列")
+        self.assign_strata_combo.addItem("（不分层）", None)
+        for column_name in self._preview_source.columns:
+            self.assign_strata_combo.addItem(str(column_name), str(column_name))
+        form.addRow("分层列（可选）", self.assign_strata_combo)
         layout.addLayout(form)
         self.assign_stats_label = QLabel("", page)
         self.assign_stats_label.setWordWrap(True)
@@ -279,6 +285,7 @@ class DerivedColumnDialog(QDialog):
         layout.addWidget(self.assign_stats_label)
         hint = QLabel(
             "每张图像随机分配给多位评分者（每图不重复），总量在评分者之间均衡；"
+            "选择分层列后每层内部也均衡（分层列有空值的行会报错）。"
             "结果导出为独立分配表（easyqcid 会按每图人数重复出现），不写回质控前名单。",
             page,
         )
@@ -288,7 +295,9 @@ class DerivedColumnDialog(QDialog):
         layout.addStretch(1)
         return page
 
-    def _assignment_inputs(self) -> tuple[list[str], int, int | None, str]:
+    def _assignment_inputs(
+        self,
+    ) -> tuple[list[str], int, int | None, str, str | None]:
         raw = self.assign_raters_edit.text()
         names: list[str] = []
         for part in re.split(r"[,，;；\s]+", raw):
@@ -298,15 +307,26 @@ class DerivedColumnDialog(QDialog):
         seed_text = self.assign_seed_edit.text().strip()
         seed = int(seed_text) if seed_text else None
         column = self.assign_column_edit.text().strip() or "rater"
-        return names, self.assign_per_image_spin.value(), seed, column
+        strata = self.assign_strata_combo.currentData()
+        return (
+            names,
+            self.assign_per_image_spin.value(),
+            seed,
+            column,
+            strata if isinstance(strata, str) and strata else None,
+        )
 
-    def _validate_assignment(self) -> tuple[list[str], int, int | None, str]:
-        raters, per_image, seed, column = self._assignment_inputs()
+    def _validate_assignment(
+        self,
+    ) -> tuple[list[str], int, int | None, str, str | None]:
+        raters, per_image, seed, column, strata = self._assignment_inputs()
         if not raters:
             raise ValueError("请输入评分者名单")
         if per_image > len(raters):
             raise ValueError("每图人数不能超过评分者数")
-        return raters, per_image, seed, column
+        if strata is not None and strata not in self._preview_source.columns:
+            raise ValueError(f"分层列不存在: {strata}")
+        return raters, per_image, seed, column, strata
 
     # ---- mode routing ----
 
@@ -369,10 +389,10 @@ class DerivedColumnDialog(QDialog):
 
     def _preview_assignment(self) -> bool:
         try:
-            raters, per_image, seed, column = self._validate_assignment()
+            raters, per_image, seed, column, strata = self._validate_assignment()
             preview = assign_raters(
                 self._preview_source, raters=raters, per_image=per_image,
-                seed=seed, column=column,
+                seed=seed, column=column, strata=strata,
             )
         except (ArithmeticError, TypeError, ValueError) as exc:
             self._set_error(str(exc))
@@ -380,9 +400,13 @@ class DerivedColumnDialog(QDialog):
         counts = preview[column].value_counts().to_dict()
         stats = ", ".join(f"{name}: {count}" for name, count in counts.items())
         expected = self._row_count * per_image // max(len(raters), 1)
+        strata_note = (
+            f" ｜ 按 {strata} 分层（层内均衡）" if strata is not None else ""
+        )
         self.assign_stats_label.setText(
             f"预览统计（前{len(self._preview_source)}行）: {stats} ｜ "
             f"全表 {self._row_count} 行 × 每图 {per_image} 人 ≈ 每人 {expected} 张"
+            f"{strata_note}"
         )
         self._render_plain_preview(preview)
         self._set_error("")
@@ -519,7 +543,7 @@ class DerivedColumnDialog(QDialog):
             return
         if mode == "assignment":
             try:
-                raters, per_image, seed, column = self._validate_assignment()
+                raters, per_image, seed, column, strata = self._validate_assignment()
             except (ArithmeticError, TypeError, ValueError) as exc:
                 self._set_error(str(exc))
                 return
@@ -532,7 +556,7 @@ class DerivedColumnDialog(QDialog):
             self._set_error("")
             self.task_controller.submit(
                 revision,
-                lambda: self._assignment_handler(raters, per_image, seed),
+                lambda: self._assignment_handler(raters, per_image, seed, strata),
             )
             return
         try:

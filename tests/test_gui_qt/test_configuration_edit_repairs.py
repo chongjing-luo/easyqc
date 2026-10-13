@@ -181,6 +181,8 @@ _COMMAND = 'echo "${site}";\nprintf "%s\\n" "${easyqcid}"'
 
 
 def _fill_module_draft(workspace, *, command_first):
+    # _COMMAND 是 Shell 语法（; 与换行分隔），直接执行模式会被保存校验拦截
+    workspace.module_shell_radio.setChecked(True)
     if command_first:
         workspace.module_code.setPlainText(_COMMAND)
     workspace.module_name.setText("DraftQC")
