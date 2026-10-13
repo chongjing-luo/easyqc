@@ -1,0 +1,19 @@
+# GitHub 与 Zenodo 会自动读取本文件生成引用提示(仓库页 "Cite this repository")。
+# 配套方法学论文发表后,请在此追加 preferred-citation 指向论文,并同步 README 引用节。
+cff-version: 1.2.0
+message: "If you use EasyQC in your work, please cite it as below. Once the accompanying paper is published, please cite the paper as well."
+title: EasyQC
+type: software
+authors:
+  - family-names: Luo
+    given-names: Chongjing
+    email: chongjing.luo@mail.bnu.edu.cn
+repository-code: "https://github.com/chongjing-luo/easyqc"
+license: MIT
+version: 1.2.0
+date-released: "2026-10-13"
+keywords:
+  - quality control
+  - neuroimaging
+  - manual visual inspection
+  - workflow

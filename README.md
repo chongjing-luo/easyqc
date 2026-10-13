@@ -563,9 +563,25 @@ PySide6/Qt、PyInstaller 等第三方组件保留各自许可证；公开发布�
 
 如果在研究中使用了 EasyQC，请引用：
 
-> Luo C. EasyQC: A configurable workstation for manual visual quality control of MRI data. GitHub repository. https://github.com/chongjing-luo/easyqc.
+> Luo C. EasyQC: A configurable workstation for manual visual quality control of MRI data. https://github.com/chongjing-luo/easyqc (version 1.2.0, 2026).
+
+BibTeX：
+
+```bibtex
+@software{luo_easyqc_2026,
+  author  = {Luo, Chongjing},
+  title   = {EasyQC: A Configurable Workstation for Manual Visual Quality Control of MRI Data},
+  year    = {2026},
+  url     = {https://github.com/chongjing-luo/easyqc},
+  version = {1.2.0},
+  license = {MIT}
+}
+```
+
+仓库根目录的 [CITATION.cff](CITATION.cff) 会被 GitHub 与 Zenodo 自动识别（GitHub 仓库页的 "Cite this repository" 按钮即来自它）。配套方法学论文 *EasyQC: a configurable local workbench for manual visual quality control of neuroimaging data and their processing outputs* 发表后，请以论文为主要引用对象，届时本节与 CITATION.cff 将同步更新。
 
 ## 联系方式
 
 - **作者**: chongjing.luo@mail.bnu.edu.cn
 - **机构**: 北京师范大学认知神经科学与学习国家重点实验室
+- **商业合作 / 集成支持**: 欢迎通过上述邮箱联系
