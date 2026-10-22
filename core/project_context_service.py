@@ -6,7 +6,9 @@ from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
+import os
 import re
+import threading
 from types import MappingProxyType
 from typing import Any, Mapping
 
@@ -30,7 +32,7 @@ from core.rating_identity import (
     validate_rating_identity,
 )
 from core.rating_service import RatingService
-from core.project_service import PreparedProjectLoad
+from core.project_service import PreparedProjectLoad, Project
 from core.table_service import TABLE_ALL
 from core.table_view_service import TableViewService
 from models.derived_formula import DerivedColumnFormula
@@ -118,6 +120,8 @@ class ProjectContextService:
         self._command_executor = None
         self.event_bus = event_bus
         self._identity: tuple[str, Path] | None = None
+        self._rating_state_lock = threading.Lock()
+        self._rating_state_cache: tuple[tuple, LoadedRatingsState] | None = None
         self._context_revision = 0
         self._view_revision = 0
 
@@ -251,7 +255,7 @@ class ProjectContextService:
         if subjects is None:
             subjects = pd.DataFrame(columns=["easyqcid"])
         subjects = self._validate_subjects(subjects, constants)
-        loaded_ratings = RatingService(project).load_state(subjects)
+        loaded_ratings = self._load_rating_state(project, subjects)
         ratings = tuple(deepcopy(loaded_ratings.ratings))
         table_source = self._professional_table_source(subjects, loaded_ratings.qctable)
         long_results = RatingService.attach_master_columns_to_long(
@@ -345,6 +349,58 @@ class ProjectContextService:
         ]
         return aggregated.loc[:, subject_columns + rating_columns].copy(deep=True)
 
+    def _load_rating_state(
+        self,
+        project: Project,
+        subjects: pd.DataFrame,
+    ) -> LoadedRatingsState:
+        """load_state guarded by a cheap on-disk fingerprint cache.
+
+        Parsing every rating JSON dominates dialog-open and refresh latency;
+        the fingerprint (project identity + subjects content hash + per-file
+        mtime_ns/size walk of RatingFiles) lets an unchanged state be reused.
+        Rating writes replace files atomically, so any save invalidates it.
+        Callers only consume copies of the cached frames (verified: preview,
+        derive and prepare_initial all pass them through copy-producing
+        projections), so the cached object is never handed out mutated.
+        """
+
+        subjects_hash = int(
+            pd.util.hash_pandas_object(
+                subjects.astype(object), index=True
+            ).sum()
+        )
+        entries: list[tuple] = []
+        rating_dir = project.rating_dir
+        if rating_dir.exists():
+            for root, _dirs, file_names in os.walk(rating_dir):
+                for name in file_names:
+                    file_path = Path(root) / name
+                    try:
+                        stat = file_path.stat()
+                    except OSError:
+                        continue
+                    entries.append(
+                        (
+                            str(file_path.relative_to(rating_dir)),
+                            stat.st_mtime_ns,
+                            stat.st_size,
+                        )
+                    )
+        fingerprint = (
+            str(project.path),
+            subjects_hash,
+            tuple(sorted(entries)),
+        )
+        with self._rating_state_lock:
+            cache = self._rating_state_cache
+            if cache is not None and cache[0] == fingerprint:
+                return cache[1]
+        loaded = RatingService(project).load_state(subjects)
+        with self._rating_state_lock:
+            self._rating_state_cache = (fingerprint, loaded)
+        return loaded
+
     def derive_rating_aware_subject_column(
         self,
         request: DerivedColumnFormula,
@@ -383,7 +439,7 @@ class ProjectContextService:
         if project is None:
             raise ProjectContextError("未打开项目,无法按结果派生名单列")
         subjects = self.configuration_service.subjects()
-        loaded = RatingService(project).load_state(subjects)
+        loaded = self._load_rating_state(project, subjects)
         aggregated = self._professional_table_source(subjects, loaded.qctable)
         return self.configuration_service.derive_subject_column_from_results(
             request,
@@ -403,7 +459,7 @@ class ProjectContextService:
         project = self.configuration_service.current_project
         if project is None:
             return subjects.head(limit).copy(deep=True)
-        loaded = RatingService(project).load_state(subjects)
+        loaded = self._load_rating_state(project, subjects)
         frame = self._professional_table_source(subjects, loaded.qctable)
         return frame.head(limit).copy(deep=True)
 

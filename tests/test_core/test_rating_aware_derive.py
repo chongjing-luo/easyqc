@@ -204,3 +204,46 @@ def test_plain_derive_still_works_without_any_ratings(tmp_path):
             missing,
             expected_context_revision=snapshot.context_revision,
         )
+
+
+def test_rating_state_cache_hits_until_a_rating_changes(tmp_path, monkeypatch):
+    """打开新增列对话框的评分扫描用 mtime 指纹缓存：未变化时零重读，
+    保存评分（原子替换文件 → mtime 变化）后自动失效重读。"""
+    services = build_app_services(tmp_path / "projects.json")
+    configuration = services.configuration_service
+    configuration.create_project("SAMPLE", tmp_path)
+    configuration.replace_subjects(_subjects())
+    configuration.save_module(_module_payload(), original_name="example")
+
+    context = services.project_context_service
+    from core.rating_service import RatingService
+
+    calls = {"count": 0}
+    original = RatingService.load_state
+
+    def counting_load(self, subjects):
+        calls["count"] += 1
+        return original(self, subjects)
+
+    monkeypatch.setattr(RatingService, "load_state", counting_load)
+
+    context.rating_aware_preview_frame()
+    context.rating_aware_preview_frame()
+    context.rating_aware_preview_frame()
+    assert calls["count"] == 1
+
+    workflow = QcWorkflowService(
+        _module_payload(name="AnatQC", rater="rater1"),
+        _subjects(),
+        rating_dir=configuration.current_project.rating_dir / "AnatQC" / "rater1",
+        constants={},
+    )
+    workflow.set_score("1", "Good")
+    workflow.save()
+
+    frame = context.rating_aware_preview_frame()
+    assert calls["count"] == 2
+    assert "AnatQC.rater1.score1" in frame.columns
+
+    context.rating_aware_preview_frame()
+    assert calls["count"] == 2
