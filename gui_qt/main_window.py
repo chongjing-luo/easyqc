@@ -943,11 +943,19 @@ class QtMainWindow(QMainWindow):
         )
 
         if not snapshot.has_project or snapshot.subjects.empty or not snapshot.modules:
-            self._clear_qc_workspace()
+            if not self._clear_qc_workspace():
+                self._set_error(
+                    "有质控窗口未关闭（未保存草稿或筛选正在进行），已保留；"
+                    "请先保存或关闭它再切换项目。"
+                )
         elif not (preserve_qc and same_project and self.qc_controller is not None):
             # Opening a project only prepares configuration. QC starts solely
             # from a module-row action and therefore never appears implicitly.
-            self._clear_qc_workspace()
+            if not self._clear_qc_workspace():
+                self._set_error(
+                    "有质控窗口未关闭（未保存草稿或筛选正在进行），已保留；"
+                    "请先保存或关闭它再切换项目。"
+                )
         self.shell_empty_label.setVisible(not snapshot.has_project)
         self._update_context_controls()
 
@@ -1946,10 +1954,19 @@ class QtMainWindow(QMainWindow):
             )
             if not closed:
                 all_closed = False
-        self.qc_controllers.clear()
-        self.qc_controller = None
-        self.qc_workspace = None
-        self._active_module_name = ""
+        # 成功关闭的窗口经 closed 信号自行移出注册表；拒绝关闭的（脏草稿被
+        # 留下、筛选进行中）必须保持注册，否则脏数据门再也看不到它们，
+        # 它们的保存会落到旧项目目录而界面毫无提示。
+        survivors = list(self.qc_controllers)
+        if self.qc_controller is not None and self.qc_controller not in survivors:
+            fallback = survivors[-1] if survivors else None
+            self.qc_controller = fallback
+            self.qc_workspace = fallback.workspace if fallback else None
+            self._active_module_name = (
+                str(fallback.workflow.current_module.name)
+                if fallback is not None
+                else ""
+            )
         return all_closed
 
     @Slot(bool)

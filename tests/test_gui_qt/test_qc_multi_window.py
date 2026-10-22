@@ -119,3 +119,35 @@ def test_dirty_session_no_longer_blocks_other_module_launch(
     assert second is not first
     assert len(window.qc_controllers) == 2
     assert first.workflow.dirty          # untouched
+
+
+def test_refused_close_keeps_window_registered_and_dirty_gate_alive(
+    qtbot, tmp_path, monkeypatch
+):
+    """切换项目时拒绝关闭（脏草稿点"否"）的窗口必须留在注册表里，
+    否则脏数据门再也看不到它，它的保存会静默写进旧项目目录。"""
+    # 打开窗口时项目切换弹框先出现：第一次问"是否关闭脏草稿"答 否
+    answers = iter([QMessageBox.No, QMessageBox.Yes])
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *a, **k: next(answers)
+    )
+    window, _services = _window(qtbot, tmp_path, second_module=True)
+    controller = _start_module_qc(window, qtbot)
+
+    qtbot.mouseClick(window.qc_workspace.score_buttons["1"]["Good"], Qt.LeftButton)
+    assert controller.workflow.dirty
+
+    # 切换/清空工作区：窗口拒绝关闭 → 仍注册、脏门仍感知
+    refused = not window._clear_qc_workspace()
+    assert refused
+    assert window.qc_controllers == [controller]
+    assert window._any_qc_dirty()
+
+    # 真正关闭后注册表清空、脏门归位
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *a, **k: QMessageBox.Yes
+    )
+    closed = window._clear_qc_workspace()
+    assert closed
+    assert window.qc_controllers == []
+    assert not window._any_qc_dirty()
