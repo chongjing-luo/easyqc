@@ -425,6 +425,16 @@ class ConfigurationService:
             )
 
         result["easyqcid"] = identities
+        dotted = sorted(
+            str(column)
+            for column in result.columns
+            if str(column) != "easyqcid" and "." in str(column)
+        )
+        if dotted:
+            raise ConfigurationError(
+                "质控名单普通列名不能包含点号「.」：评分结果列使用 "
+                f"模块.评分者.字段 命名，同名列会在结果合并时冲突: {dotted}"
+            )
         constant_collisions = sorted(set(map(str, result.columns)) & set(self.constants()))
         if constant_collisions:
             raise ConfigurationError(
@@ -559,6 +569,10 @@ class ConfigurationService:
             raise ConfigurationError("请输入不同的非空新列名")
         if old_name == "easyqcid":
             raise ConfigurationError("质控前名单不能重命名 easyqcid")
+        if "." in new_name:
+            raise ConfigurationError(
+                f"列名不能包含点号「.」（与评分结果列 模块.评分者.字段 命名冲突）: {new_name}"
+            )
         snapshot = self._subjects_snapshot()
         assert snapshot.dataframe is not None
         frame = snapshot.dataframe
@@ -704,6 +718,10 @@ class ConfigurationService:
         """
         if not isinstance(size, int) or isinstance(size, bool) or size < 1:
             raise ConfigurationError(f"每组行数必须为不小于1的整数: {size!r}")
+        if isinstance(column, str) and "." in column:
+            raise ConfigurationError(
+                f"列名不能包含点号「.」（与评分结果列 模块.评分者.字段 命名冲突）: {column}"
+            )
         snapshot = self._subjects_snapshot()
         assert snapshot.dataframe is not None
         frame = snapshot.dataframe

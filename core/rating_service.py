@@ -933,6 +933,17 @@ class RatingService:
         if rating_wide.empty:
             return subjects.copy()
 
+        overlapping = sorted(
+            str(column)
+            for column in rating_wide.columns
+            if str(column) != "easyqcid" and column in set(subjects.columns)
+        )
+        if overlapping:
+            raise ValueError(
+                "质控名单列与评分结果列同名，无法合并（请移除名单中的点号列）: "
+                f"{overlapping}"
+            )
+
         subjects = subjects.copy()
         if "easyqcid" in subjects.columns:
             subjects["easyqcid"] = subjects["easyqcid"].astype(str)

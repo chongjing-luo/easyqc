@@ -1394,6 +1394,68 @@ def test_module_save_allows_shell_separators_after_acknowledgement(tmp_path) -> 
     assert stored.code == "freeview {image}; itksnap {image}"
 
 
+def test_subjects_reject_dotted_column_names(tmp_path) -> None:
+    """评分结果列使用 模块.评分者.字段 命名；普通列带点号会在结果合并时
+    被 pandas 加 _x/_y 后缀，随后按原名取列直接 KeyError，项目无法加载。"""
+    service, _ = _service(tmp_path)
+
+    with pytest.raises(ConfigurationError, match="点号"):
+        service.replace_subjects(
+            pd.DataFrame({"easyqcid": ["S1"], "AnatQC.r1.score1": [1]})
+        )
+
+
+def test_rename_and_group_reject_dotted_column_names(tmp_path) -> None:
+    service, _ = _service(tmp_path)
+    service.replace_subjects(
+        pd.DataFrame({"easyqcid": ["S1", "S2"], "grp": [1, 2]})
+    )
+
+    with pytest.raises(ConfigurationError, match="点号"):
+        service.rename_subject_column("grp", "AnatQC.r1.score1")
+    with pytest.raises(ConfigurationError, match="点号"):
+        service.add_subject_group_column("M.r.score1", size=1)
+    stored = service._subjects_snapshot().dataframe
+    assert "AnatQC.r1.score1" not in stored.columns
+    assert "M.r.score1" not in stored.columns
+
+
+def test_rating_wide_merge_raises_on_column_collision() -> None:
+    from core.rating_service import RatingService
+
+    wide = pd.DataFrame({"easyqcid": ["S1"], "M.r.score1": [3]})
+    colliding = pd.DataFrame({"easyqcid": ["S1"], "M.r.score1": [9]})
+
+    with pytest.raises(ValueError, match="同名"):
+        RatingService.merge_subjects_with_rating_wide(None, wide, colliding)
+
+    clean = pd.DataFrame({"easyqcid": ["S1"], "grp": [1]})
+    merged = RatingService.merge_subjects_with_rating_wide(None, wide, clean)
+    assert set(merged.columns) == {"easyqcid", "grp", "M.r.score1"}
+    assert merged.loc[merged["easyqcid"] == "S1", "M.r.score1"].iloc[0] == 3
+
+
+def test_draft_from_file_reads_xlsx_list(tmp_path) -> None:
+    """xlsx 是文件对话框承诺支持的格式；openpyxl 已登记为正式依赖。"""
+    openpyxl = pytest.importorskip("openpyxl")
+
+    source = tmp_path / "list.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["easyqcid", "site"])
+    sheet.append(["S001", "A"])
+    sheet.append(["S002", "B"])
+    workbook.save(source)
+
+    service, _ = _service(tmp_path)
+    service.create_project("XLSX", tmp_path / "project")
+
+    draft = service.draft_from_file(source)
+
+    assert list(draft.columns) == ["easyqcid", "site"]
+    assert draft["easyqcid"].tolist() == ["S001", "S002"]
+
+
 def test_module_save_rejects_multicmd_prefix_form_in_direct_mode(tmp_path) -> None:
     service, _ = _service(tmp_path)
     service.add_module("AnatQC", "Anatomical QC")
