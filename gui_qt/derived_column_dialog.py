@@ -10,6 +10,7 @@ import pandas as pd
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSpinBox,
     QComboBox,
@@ -50,13 +52,14 @@ class DerivedColumnDialog(QDialog):
     def __init__(
         self,
         preview_source: pd.DataFrame,
-        persist_column: Callable[[DerivedColumnFormula], str],
+        persist_column: Callable[[DerivedColumnFormula, bool], str],
         parent: QWidget | None = None,
         *,
         row_count: int = 0,
         existing_columns: tuple[str, ...] = (),
         group_handler: Callable[[str, int], str] | None = None,
         assignment_handler: Callable[[list, int, object, object], int] | None = None,
+        allow_overwrite: bool = False,
     ) -> None:
         super().__init__(parent)
         if not isinstance(preview_source, pd.DataFrame):
@@ -73,6 +76,7 @@ class DerivedColumnDialog(QDialog):
         )
         self._group_handler = group_handler
         self._assignment_handler = assignment_handler
+        self._allow_overwrite = bool(allow_overwrite)
         self._engine = FormulaEngine()
         self._revision = 0
         self._pending_request: (
@@ -99,6 +103,14 @@ class DerivedColumnDialog(QDialog):
         self.name_edit.setAccessibleName("新列名")
         self.name_edit.setPlaceholderText("例如：scan_key 或 QC 分组")
         form.addRow("新列名", self.name_edit)
+        self.overwrite_check = QCheckBox(
+            "覆盖同名列(以当前数据重新计算并替换现有值)",
+            self,
+        )
+        self.overwrite_check.setObjectName("derivedColumnOverwrite")
+        self.overwrite_check.setAccessibleName("覆盖同名列")
+        self.overwrite_check.setVisible(self._allow_overwrite)
+        form.addRow("", self.overwrite_check)
         layout.addLayout(form)
 
         helper = QLabel(
@@ -341,13 +353,24 @@ class DerivedColumnDialog(QDialog):
     def _clear_error_and_preview(self) -> None:
         self._set_error("")
 
+    def _overwrite_requested(self) -> bool:
+        return self._allow_overwrite and self.overwrite_check.isChecked()
+
     def _request_formula(self) -> DerivedColumnFormula:
         request = DerivedColumnFormula(
             self.name_edit.text(),
             self.editor.formula(),
         )
+        if "." in request.name:
+            raise ValueError("新增列名不能包含点号(.);点号保留给评分结果列")
         if request.name in self._preview_source.columns:
-            raise ValueError(f"列已存在: {request.name}")
+            is_rating_column = request.name not in self._existing_columns
+            if is_rating_column:
+                raise ValueError(f"评分结果列不可覆盖或同名: {request.name}")
+            if not self._overwrite_requested():
+                raise ValueError(
+                    f"列已存在: {request.name}(勾选“覆盖同名列”可重新计算)"
+                )
         return request
 
     def _evaluate_preview(
@@ -565,13 +588,25 @@ class DerivedColumnDialog(QDialog):
         except (ArithmeticError, FormulaError, TypeError, ValueError) as exc:
             self._set_error(str(exc))
             return
+        overwrite = self._overwrite_requested()
+        if overwrite:
+            answer = QMessageBox.question(
+                self,
+                "覆盖确认",
+                f"将用当前数据(含最新已保存评分)重新计算并覆盖列"
+                f"“{request.name}”的现有值;该操作不可撤销。继续?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
         self._revision += 1
         revision = self._revision
         self._pending_request = (revision, ("formula", request))
         self._set_error("")
         self.task_controller.submit(
             revision,
-            lambda: self._persist_column(request),
+            lambda: self._persist_column(request, overwrite),
         )
 
     @Slot(int, object)
@@ -620,6 +655,7 @@ class DerivedColumnDialog(QDialog):
         for control in (
             self.name_edit,
             self.mode_tabs,
+            self.overwrite_check,
             self.preview_button,
             self.generate_button,
             self.cancel_button,

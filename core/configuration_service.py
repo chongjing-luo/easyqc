@@ -605,6 +605,88 @@ class ConfigurationService:
             self.publish_subjects_changed()
         return column_name
 
+    def derive_subject_column_from_results(
+        self,
+        request: DerivedColumnFormula,
+        aggregated: pd.DataFrame,
+        *,
+        overwrite: bool = False,
+        notify: bool = True,
+    ) -> str:
+        """Persist one derived column whose formula may reference result columns.
+
+        Purpose: extend the master list with a rating-derived snapshot column;
+        ``aggregated`` is the wide results frame (one row per subject) rebuilt
+        by Core, and only the new column is written back, keyed by ``easyqcid``.
+        Input contract: DerivedColumnFormula + aggregated DataFrame containing
+        a unique ``easyqcid`` and at least one rating column.
+        Output contract: the persisted column name.
+        Side effects: revision-checked write of ``Table/easyqc_all.csv``.
+        Errors: dotted column names, missing rating columns, an existing
+        column without ``overwrite``, or formula failures raise
+        ConfigurationError without writing.
+        Split trigger: rating aggregation and context-revision guards belong
+        to ProjectContextService.
+        """
+        if not isinstance(request, DerivedColumnFormula):
+            raise ConfigurationError("新增列请求必须是 DerivedColumnFormula")
+        if not isinstance(aggregated, pd.DataFrame):
+            raise ConfigurationError("聚合结果帧必须是表格")
+        if "easyqcid" not in aggregated.columns:
+            raise ConfigurationError("聚合结果帧缺少 easyqcid")
+        column_name = request.name
+        if "." in column_name:
+            raise ConfigurationError(
+                f"结果派生列名不能包含点号(.): {column_name!r};点号保留给评分结果列"
+            )
+        snapshot = self._subjects_snapshot()
+        assert snapshot.dataframe is not None
+        frame = snapshot.dataframe
+        if aggregated["easyqcid"].duplicated().any():
+            raise ConfigurationError("聚合结果帧包含重复 easyqcid")
+        rating_columns = [
+            str(column)
+            for column in aggregated.columns
+            if str(column) not in frame.columns and str(column) != "easyqcid"
+        ]
+        if column_name in frame.columns and not overwrite:
+            raise ConfigurationError(
+                f"列已存在: {column_name}(如需以当前评分重新计算并覆盖,请勾选覆盖同名列)"
+            )
+        merged = frame.merge(
+            aggregated.loc[:, ["easyqcid", *rating_columns]],
+            on="easyqcid",
+            how="left",
+            validate="one_to_one",
+        )
+        if column_name in merged.columns:
+            merged = merged.drop(columns=[column_name])
+        try:
+            derived = TableTransformEngine().derive_column_from_formula(
+                merged,
+                request,
+            )
+        except (ArithmeticError, TypeError, ValueError) as exc:
+            raise ConfigurationError(str(exc)) from exc
+        candidate = frame.copy()
+        if column_name in candidate.columns:
+            candidate = candidate.drop(columns=[column_name])
+        candidate[column_name] = derived[column_name].to_numpy()
+        try:
+            candidate = self.validate_subjects(candidate)
+            self._validate_association_list_candidate(candidate)
+        except (ArithmeticError, TypeError, ValueError) as exc:
+            raise ConfigurationError(str(exc)) from exc
+        self.table_service.save_table(
+            self._require_project(),
+            TABLE_ALL,
+            candidate,
+            expected_revision=snapshot.revision,
+        )
+        if notify:
+            self.publish_subjects_changed()
+        return column_name
+
     def add_subject_group_column(
         self,
         column: str,

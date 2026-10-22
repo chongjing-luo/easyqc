@@ -498,6 +498,10 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "编组任务没有返回正确的列名": "The grouping task did not return the column name",
     "评分者分配任务没有返回成功结果": "The rater assignment task did not succeed",
     "编组": "Grouping",
+    "覆盖同名列": "Overwrite existing column",
+    "覆盖同名列(以当前数据重新计算并替换现有值)": (
+        "Overwrite existing column (recompute and replace values with current data)"
+    ),
     "评分者分配": "Rater assignment",
     "每组行数": "Rows per group",
     "分组方式": "Grouping mode",

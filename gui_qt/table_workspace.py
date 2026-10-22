@@ -1385,6 +1385,7 @@ class QtTableWorkspace(QWidget):
             existing_columns=tuple(profile.name for profile in self.service.profiles),
             group_handler=self.group_column_callback,
             assignment_handler=self.rater_assignment_callback,
+            allow_overwrite=True,
         )
         dialog.busyChanged.connect(self._set_derive_busy)
         dialog.columnCommitted.connect(self._derived_column_committed)

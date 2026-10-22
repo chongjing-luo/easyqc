@@ -799,31 +799,39 @@ def test_pre_qc_derived_column_action_persists_and_refreshes_both_tables(
     assert window.table_workspace.derive_status_label.text() == "已生成列：site_copy"
 
 
-def test_results_page_derived_action_persists_from_subject_columns_only(
+def test_results_page_derive_dialog_offers_rating_columns_and_persists(
     qtbot,
     tmp_path,
 ) -> None:
-    window, services = _window(qtbot, tmp_path)
-    window.navigation.setCurrentRow(window.results_page_index)
-    result_projection = window.current_context.subjects.copy(deep=True)
-    result_projection["AnatQC.rater1.score1"] = ["Good", "Fair", "Good"]
-    window.results_workspace.replace_service(
-        TableViewService(result_projection),
-        preserve_state=False,
+    services = build_app_services(tmp_path / "projects.json")
+    _add_project(services, tmp_path, "SAMPLE")
+    project = services.configuration_service.current_project
+    subjects = services.configuration_service.subjects()
+    anat = QcWorkflowService(
+        _module_payload(),
+        subjects,
+        rating_dir=project.rating_dir / "AnatQC" / "rater1",
+        code_executor=services.code_executor,
     )
+    anat.set_score("1", "Good")
+    anat.save()
+
+    window = build_product_window(services)
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: not window.context_task_controller.busy, timeout=3000)
+    window.navigation.setCurrentRow(window.results_page_index)
 
     assert window.results_workspace.derive_button is not None
     qtbot.mouseClick(window.results_workspace.derive_button, Qt.LeftButton)
     dialog = window.results_workspace.derived_column_dialog
     assert dialog is not None and dialog.isVisible()
-    assert [
+    combo_columns = [
         dialog.editor.column_combo.itemData(index)
         for index in range(dialog.editor.column_combo.count())
-    ] == list(window.current_context.subjects.columns)
-    assert (
-        dialog.editor.column_combo.findData("AnatQC.rater1.score1")
-        == -1
-    )
+    ]
+    assert "site" in combo_columns
+    assert "AnatQC.rater1.score1" in combo_columns
 
     dialog.name_edit.setText("site_from_results")
     dialog.editor.set_formula("[site]")

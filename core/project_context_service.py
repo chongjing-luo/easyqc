@@ -33,6 +33,7 @@ from core.rating_service import RatingService
 from core.project_service import PreparedProjectLoad
 from core.table_service import TABLE_ALL
 from core.table_view_service import TableViewService
+from models.derived_formula import DerivedColumnFormula
 from models.qcmodule import QCModule
 from models.qc_row_context import (
     QcModuleMenuEntry,
@@ -343,6 +344,68 @@ class ProjectContextService:
             if str(column) not in subject_columns and rating_value.search(str(column))
         ]
         return aggregated.loc[:, subject_columns + rating_columns].copy(deep=True)
+
+    def derive_rating_aware_subject_column(
+        self,
+        request: DerivedColumnFormula,
+        *,
+        expected_context_revision: int | None = None,
+        overwrite: bool = False,
+        notify: bool = True,
+    ) -> str:
+        """Persist one master column derived from the current rating results.
+
+        Purpose: extend the master list with a snapshot column whose EasyQC
+        Formula may reference rating result columns (``module.rater.…``).
+        Input: DerivedColumnFormula plus the context revision the caller
+        previewed against; the evaluation frame is rebuilt from current
+        subjects and ratings inside Core, never trusted from the GUI.
+        Output: the persisted column name.
+        Side effects: revision-checked write of the master list via
+        ConfigurationService; optional subjects-changed publication.
+        Errors: a stale expected revision raises ProjectContextError before
+        any write; formula/validation failures raise ConfigurationError.
+        Split trigger: formula evaluation and persistence stay in
+        ConfigurationService; rating aggregation and revision guards stay here.
+        """
+        if expected_context_revision is not None:
+            try:
+                expected = int(expected_context_revision)
+            except (TypeError, ValueError) as exc:
+                raise ProjectContextError(
+                    f"无效的项目数据版本号: {expected_context_revision!r}"
+                ) from exc
+            if expected != self._context_revision:
+                raise ProjectContextError(
+                    "项目数据已刷新(名单或评分已变化),请重开新增列窗口后重试"
+                )
+        project = self.configuration_service.current_project
+        if project is None:
+            raise ProjectContextError("未打开项目,无法按结果派生名单列")
+        subjects = self.configuration_service.subjects()
+        loaded = RatingService(project).load_state(subjects)
+        aggregated = self._professional_table_source(subjects, loaded.qctable)
+        return self.configuration_service.derive_subject_column_from_results(
+            request,
+            aggregated,
+            overwrite=overwrite,
+            notify=notify,
+        )
+
+    def rating_aware_preview_frame(self, limit: int = 10) -> pd.DataFrame:
+        """Return up to ``limit`` rows of master plus rating result columns.
+
+        Dialog preview source only: commits re-validate against the live
+        context revision, so this frame is never an input of record.
+        """
+        limit = max(int(limit), 0)
+        subjects = self.configuration_service.subjects()
+        project = self.configuration_service.current_project
+        if project is None:
+            return subjects.head(limit).copy(deep=True)
+        loaded = RatingService(project).load_state(subjects)
+        frame = self._professional_table_source(subjects, loaded.qctable)
+        return frame.head(limit).copy(deep=True)
 
     @staticmethod
     def _validated_easyqcid(value: Any) -> str:

@@ -1035,12 +1035,18 @@ class QtMainWindow(QMainWindow):
     def _persist_derived_subject_column(
         self,
         request: DerivedColumnFormula,
+        overwrite: bool = False,
     ) -> str:
         """Worker-side Core call; event publication stays on the GUI thread."""
 
-        return self.services.configuration_service.derive_subject_column(
-            request,
-            notify=False,
+        return (
+            self.services.project_context_service
+            .derive_rating_aware_subject_column(
+                request,
+                expected_context_revision=self.current_context.context_revision,
+                overwrite=overwrite,
+                notify=False,
+            )
         )
 
     def _add_subject_group_column(
@@ -1078,9 +1084,9 @@ class QtMainWindow(QMainWindow):
         return 1
 
     def _derived_subject_preview(self) -> pd.DataFrame:
-        """Return ordinary subject columns, excluding rebuildable result fields."""
+        """Return master columns plus rating result columns for the derive dialog."""
 
-        return self.current_context.subjects.head(10).copy(deep=True)
+        return self.services.project_context_service.rating_aware_preview_frame(10)
 
     def _delete_pre_qc_rows(self, identities: tuple[str, ...]) -> int:
         """Worker-side list-only deletion; UI publication follows on success."""

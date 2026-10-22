@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
 )
@@ -54,7 +55,7 @@ def test_dialog_hosts_formula_editor_and_commits_formula_request_once(
 ) -> None:
     commits = []
 
-    def persist(formula_request):
+    def persist(formula_request, overwrite=False):
         commits.append(formula_request)
         return formula_request.name
 
@@ -116,7 +117,7 @@ def test_row_errors_are_visible_in_preview_and_block_commit(qtbot) -> None:
 def test_dialog_previews_and_commits_fixed_formula(qtbot) -> None:
     commits = []
 
-    def persist(formula_request):
+    def persist(formula_request, overwrite=False):
         commits.append(formula_request)
         return formula_request.name
 
@@ -144,7 +145,7 @@ def test_random_quick_template_preview_matches_detached_full_materialization(
     )
     materialized = {}
 
-    def persist(request):
+    def persist(request, overwrite=False):
         materialized["frame"] = TableTransformEngine().derive_column_from_formula(
             source,
             request,
@@ -207,7 +208,7 @@ def test_formula_validation_error_clears_when_draft_becomes_valid(qtbot) -> None
 
 
 def test_full_source_worker_error_keeps_dialog_open(qtbot) -> None:
-    def fail_persist(_request):
+    def fail_persist(_request, _overwrite=False):
         raise ValueError("完整名单第 21 行无法处理")
 
     dialog = DerivedColumnDialog(_source(), fail_persist)
@@ -266,3 +267,85 @@ def test_dialog_remains_reachable_and_accessible_at_640_pixels(qtbot) -> None:
     for control_type in (QComboBox, QLineEdit, QPlainTextEdit, QPushButton):
         for control in dialog.findChildren(control_type):
             assert control.accessibleName().strip(), type(control).__name__
+
+
+def test_overwrite_checkbox_hidden_without_allow_overwrite(qtbot) -> None:
+    dialog = DerivedColumnDialog(
+        _source(),
+        lambda request, overwrite: request.name,
+    )
+    qtbot.addWidget(dialog)
+
+    assert not dialog.overwrite_check.isVisibleTo(dialog)
+    assert not dialog._overwrite_requested()
+
+
+def test_existing_column_rejected_by_default_and_commits_with_overwrite(
+    qtbot,
+    monkeypatch,
+) -> None:
+    commits = []
+
+    def persist(formula_request, overwrite):
+        commits.append((formula_request, overwrite))
+        return formula_request.name
+
+    dialog = DerivedColumnDialog(
+        _source(),
+        persist,
+        existing_columns=("age",),
+        allow_overwrite=True,
+    )
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog.name_edit.setText("age")
+    dialog.editor.set_formula("[score]")
+
+    qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
+    assert commits == []
+    assert "已存在" in dialog.error_label.text()
+
+    dialog.overwrite_check.setChecked(True)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(
+            lambda *args, **kwargs: QMessageBox.StandardButton.Yes
+        ),
+    )
+    qtbot.mouseClick(dialog.generate_button, Qt.LeftButton)
+    qtbot.waitUntil(lambda: dialog.result() == QDialog.Accepted, timeout=3000)
+
+    assert commits == [(DerivedColumnFormula("age", "[score]"), True)]
+    assert dialog.committed_column == "age"
+
+
+def test_rating_column_target_rejected_even_with_overwrite(qtbot) -> None:
+    source = _source()
+    source["AnatQC.rater1.score1"] = ["Good", "Good", "Poor"]
+    dialog = DerivedColumnDialog(
+        source,
+        lambda request, overwrite: request.name,
+        existing_columns=("easyqcid", "age", "score"),
+        allow_overwrite=True,
+    )
+    qtbot.addWidget(dialog)
+    dialog.overwrite_check.setChecked(True)
+    dialog.name_edit.setText("AnatQC.rater1.score1")
+    dialog.editor.set_formula("[age]")
+
+    assert not dialog.preview()
+    assert "点号" in dialog.error_label.text()
+
+
+def test_dotted_new_column_name_rejected_in_dialog(qtbot) -> None:
+    dialog = DerivedColumnDialog(
+        _source(),
+        lambda request, overwrite: request.name,
+    )
+    qtbot.addWidget(dialog)
+    dialog.name_edit.setText("qc.pass")
+    dialog.editor.set_formula("[age]")
+
+    assert not dialog.preview()
+    assert "点号" in dialog.error_label.text()

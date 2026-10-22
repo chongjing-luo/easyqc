@@ -1112,7 +1112,7 @@ class QtQcListImportPage(QWidget):
             preview_source = draft_source.head(20).copy(deep=True)
             dialog = DerivedColumnDialog(
                 preview_source,
-                lambda request: self._derive_import_draft_column(
+                lambda request, overwrite: self._derive_import_draft_column(
                     request,
                     source=draft_source,
                     draft_revision=draft_revision,
