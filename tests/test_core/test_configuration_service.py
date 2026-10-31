@@ -13,6 +13,7 @@ from core.project_service import ProjectService
 from core.table_service import TableService, TableStateConflictError
 from core.table_view_service import TableViewService
 from models.derived_formula import DerivedColumnFormula
+from models.qcmodule import QCModule
 from models.table_view_state import (
     FilterCondition,
     FilterExpression,
@@ -315,6 +316,28 @@ def test_module_add_move_import_collision_and_atomic_export(tmp_path) -> None:
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["rater"] is None
     assert payload["easyqcid"] is None
+
+
+def test_create_module_rejects_duplicate_name_case_insensitively(tmp_path) -> None:
+    service, _ = _service(tmp_path)
+    service.add_module("AnatQC", "Anatomical QC")
+
+    with pytest.raises(ConfigurationError, match="Module already exists: anatqc"):
+        service.create_module(QCModule(name="anatqc", label="Same module"))
+    assert [module.name for module in service.modules()].count("AnatQC") == 1
+
+
+def test_suggest_module_name_finds_free_copy_and_strips_numeric_suffix(
+    tmp_path,
+) -> None:
+    service, _ = _service(tmp_path)
+    service.add_module("AnatQC", "Anatomical QC")
+
+    assert service.suggest_module_name("AnatQC") == "AnatQC_2"
+    service.add_module("AnatQC_2", "Copy")
+    assert service.suggest_module_name("AnatQC") == "AnatQC_3"
+    assert service.suggest_module_name("AnatQC_2") == "AnatQC_3"
+    assert service.suggest_module_name("   ") is None
 
 
 def test_remove_project_only_unregisters_it(tmp_path) -> None:

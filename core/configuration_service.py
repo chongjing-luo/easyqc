@@ -1306,8 +1306,26 @@ class ConfigurationService:
             module,
             allow_shell_separators=allow_shell_separators,
         )
+        if any(
+            item.name.casefold() == str(payload["name"]).casefold()
+            for item in self.modules()
+        ):
+            raise ConfigurationError(f"Module already exists: {payload['name']}")
         payloads = [item.to_legacy_dict() for item in self.modules()]
         self._commit_module_payloads([*payloads, payload])
+
+    def suggest_module_name(self, base: str) -> str | None:
+        """Return the first free ``<base>_N`` copy name for duplication."""
+
+        stem = re.sub(r"_\d+$", "", str(base).strip())
+        if not stem:
+            return None
+        taken = {module.name.casefold() for module in self.modules()}
+        for index in range(2, 1000):
+            suggested = f"{stem}_{index}"
+            if suggested.casefold() not in taken:
+                return suggested
+        return None
 
     def save_module(
         self,

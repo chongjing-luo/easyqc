@@ -839,6 +839,15 @@ class QtProjectConfigWorkspace(QWidget):
             self._save_module_as_template,
         )
         self.save_module_template_action.setEnabled(self.templates is not None)
+        (
+            self.save_module_as_new_action,
+            self.save_module_as_new_button,
+        ) = self._add_toolbar_action(
+            self.module_commit_toolbar,
+            "另存为新模块",
+            QKeySequence(),
+            self._save_module_form_as_new,
+        )
         self.discard_module_action, self.discard_module_button = self._add_toolbar_action(
             self.module_commit_toolbar,
             "放弃更改",
@@ -2194,6 +2203,47 @@ class QtProjectConfigWorkspace(QWidget):
         if answer != QMessageBox.Yes:
             return None
         return True
+
+    def _save_module_form_as_new(self) -> None:
+        """按当前表单内容追加一个新模块；同名时建议副本名，原模块保留。"""
+
+        module = self._collect_module_from_form()
+        if module is None:
+            return
+        if (
+            self._selected_module_name is not None
+            and module.name.casefold() == self._selected_module_name.casefold()
+        ):
+            suggested = self.configuration.suggest_module_name(module.name)
+            if suggested is None:
+                self._set_error(
+                    translate_ui_text(f"没有可用的模块副本名字：{module.name}")
+                )
+                return
+            answer = QMessageBox.question(
+                self,
+                translate_ui_text("另存为新模块"),
+                translate_ui_text(
+                    f"名字与当前模块 {module.name} 相同。以 {suggested} 为名保存一个副本？"
+                ),
+            )
+            if answer != QMessageBox.Yes:
+                return
+            module.name = suggested
+        allow_separators = self._confirm_direct_shell_syntax(module)
+        if allow_separators is None:
+            return
+        try:
+            self.configuration.create_module(
+                module,
+                allow_shell_separators=allow_separators,
+            )
+        except Exception as exc:
+            self._set_error(str(exc))
+            return
+        self._selected_module_name = module.name
+        self._set_error("")
+        self._refresh_modules(module.name)
 
     def _save_module_form(self) -> None:
         module = self._collect_module_from_form()

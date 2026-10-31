@@ -968,6 +968,7 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "导入模块": "Import module",
     "导出模块": "Export module",
     "存为模板": "Save as template",
+    "另存为新模块": "Save as new module",
     "覆盖模块模板": "Overwrite module template",
     "保存模块模板": "Save module template",
     "覆盖常量模板": "Overwrite constant template",
@@ -2024,6 +2025,21 @@ _SOURCE_PATTERNS = (
         re.compile(r"^模板库中已存在同名常量模板 (?P<value>.*)。用当前值覆盖它？$"),
         "A constant template named {value} already exists. "
         "Overwrite it with the current value?",
+    ),
+    (
+        re.compile(r"^名字与当前模块 (?P<name>.*) 相同。以 (?P<suggested>.*) 为名保存一个副本？$"),
+        "The name is the same as the current module {name}. "
+        "Save a copy named {suggested}?",
+    ),
+    (
+        re.compile(r"^名字 (?P<name>.*) 与现有模块重复，已改为 (?P<suggested>.*)；确认或修改后再点保存。$"),
+        "The name {name} already exists in the module list; "
+        "it has been changed to {suggested}. Confirm or adjust it, "
+        "then save again.",
+    ),
+    (
+        re.compile(r"^没有可用的模块副本名字：(?P<name>.*)$"),
+        "No free module copy name is available: {name}",
     ),
     (
         re.compile(r"^项目目录不存在: (?P<value>.*)$"),

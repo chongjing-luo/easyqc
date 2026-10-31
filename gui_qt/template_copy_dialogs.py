@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 from core.configuration_service import ConfigurationService
 from core.project_template_service import ProjectTemplateService
 from core.template_service import TemplateService
-from gui_qt.i18n import LanguageController
+from gui_qt.i18n import LanguageController, translate_ui_text
 from gui_qt.module_template_editor import QtModuleTemplateEditor
 from gui_qt.theme import CONTENT_MARGIN, CONTROL_SPACING, SECTION_SPACING
 
@@ -298,6 +298,31 @@ class ModuleTemplateCopyDialog(QDialog):
             return
         try:
             candidate = self.editor.candidate()
+        except Exception as exc:
+            self._set_error(str(exc))
+            self.editor.set_error(str(exc))
+            return
+        if self._project_module_name_taken(candidate.name):
+            suggested = self.configuration.suggest_module_name(candidate.name)
+            if suggested is None:
+                self._set_error(
+                    translate_ui_text(
+                        f"没有可用的模块副本名字：{candidate.name}"
+                    )
+                )
+                return
+            original = candidate.name
+            self.editor.module_name.setText(suggested)
+            self.editor.module_name.setFocus()
+            self.editor.module_name.selectAll()
+            self._set_error(
+                translate_ui_text(
+                    f"名字 {original} 与现有模块重复，已改为 {suggested}；"
+                    "确认或修改后再点保存。"
+                )
+            )
+            return
+        try:
             self.copied_name = self.copier.copy_module_to_project(
                 template_id,
                 self.configuration,
@@ -308,6 +333,17 @@ class ModuleTemplateCopyDialog(QDialog):
             self.editor.set_error(str(exc))
             return
         self.accept()
+
+    def _project_module_name_taken(self, name: str) -> bool:
+        """Return True when the current project already has this module name."""
+
+        try:
+            modules = self.configuration.modules()
+        except Exception:
+            return False
+        return any(
+            module.name.casefold() == name.casefold() for module in modules
+        )
 
     def _set_error(self, message: str) -> None:
         text = str(message).strip()

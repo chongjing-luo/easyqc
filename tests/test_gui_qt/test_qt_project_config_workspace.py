@@ -1084,7 +1084,7 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
         if action.text()
     ]
     assert list_footer_actions == ["删除模块", "导出模块", "上移", "下移"]
-    assert commit_actions == ["存为模板", "放弃更改", "保存模块"]
+    assert commit_actions == ["存为模板", "另存为新模块", "放弃更改", "保存模块"]
     footer_toolbars = (
         (
             workspace.module_list_footer_toolbar,
@@ -1215,6 +1215,67 @@ def test_delete_module_requires_confirmation_dialog(
     )
     workspace._delete_selected_module()
     assert workspace.module_list.count() == 1
+
+
+def test_module_save_as_new_keeps_original_and_appends_copy(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workspace, config = _workspace(qtbot, tmp_path)
+    workspace.tabs.setCurrentWidget(workspace.modules_tab)
+    assert workspace.add_module("FuncQC", "功能质控")
+    workspace.module_list.setCurrentRow(workspace.module_list.count() - 1)
+    assert workspace._selected_module_name == "FuncQC"
+
+    questions: list[tuple] = []
+
+    def refuse(*args, **kwargs):
+        questions.append(args)
+        return QMessageBox.No
+
+    monkeypatch.setattr(QMessageBox, "question", refuse)
+    workspace._save_module_form_as_new()
+    assert len(questions) == 1
+    assert questions[0][1] == "另存为新模块"
+    assert "FuncQC_2" in questions[0][2]
+    assert [m.name for m in config.modules()] == ["example", "FuncQC"]
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QMessageBox.Yes,
+    )
+    workspace._save_module_form_as_new()
+    assert [m.name for m in config.modules()] == [
+        "example",
+        "FuncQC",
+        "FuncQC_2",
+    ]
+    assert workspace._selected_module_name == "FuncQC_2"
+    assert workspace.error_label.text() == ""
+
+    # 手动改好名字再另存：直接新增，不弹同名确认框
+    questions.clear()
+    workspace.module_name.setText("FuncQC_round2")
+    workspace.module_label.setText("第二轮功能质控")
+    workspace._save_module_form_as_new()
+    assert questions == []
+    assert [m.name for m in config.modules()] == [
+        "example",
+        "FuncQC",
+        "FuncQC_2",
+        "FuncQC_round2",
+    ]
+    stored = next(m for m in config.modules() if m.name == "FuncQC_round2")
+    assert stored.label == "第二轮功能质控"
+    assert next(m for m in config.modules() if m.name == "FuncQC").label == "功能质控"
+
+    # 改成了与其它模块相同的名字：明确报错，模块数量不变
+    workspace.module_name.setText("example")
+    workspace._save_module_form_as_new()
+    assert "Module already exists: example" in workspace.error_label.text()
+    assert len(config.modules()) == 4
 
 
 def test_module_execution_mode_radios_roundtrip_interper(
