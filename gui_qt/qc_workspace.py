@@ -799,6 +799,10 @@ class QtQcWorkspace(QWidget):
             self._set_error("质控名单筛选事务正在完成，请稍候")
             return
         try:
+            # 切换病例（队列双击/上一例下一例）时先自动保存当前草稿：
+            # 保存失败则停在原病例并显示原因，绝不丢草稿。
+            if self.workflow.dirty and not self._effective_read_only():
+                self.workflow.save()
             self.workflow.navigate_to(identity)
             self.workflow.launch_viewer()
         except Exception as exc:

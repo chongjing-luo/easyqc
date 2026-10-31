@@ -391,6 +391,44 @@ def test_queue_double_click_and_previous_stay_inside_prepared_workflow_queue(
     assert executor.started[-1][0] == {0: "freeview b1.nii"}
 
 
+def test_switching_cases_auto_saves_dirty_draft(
+    qtbot,
+    tmp_path,
+) -> None:
+    """队列双击/上一例下一例切换时自动保存当前草稿再跳转，不再被
+    未保存草稿拦住；保存失败则停在原条目。"""
+    executor = _FakeExecutor()
+    rating_dir = _rating_dir(tmp_path)
+    subjects = pd.DataFrame(
+        {
+            "easyqcid": ["B-001", "B-002"],
+            "image": ["b1.nii", "b2.nii"],
+        }
+    )
+    controller = _controller_class()(
+        _workflow(tmp_path, executor=executor, subjects=subjects)
+    )
+    qtbot.addWidget(controller)
+    controller.show()
+    workspace = controller.workspace
+
+    qtbot.mouseClick(workspace.score_buttons["1"]["Good"], Qt.LeftButton)
+    assert workspace.workflow.dirty
+
+    workspace.queue_table.doubleClicked.emit(workspace.queue_model.index(1, 1))
+
+    assert workspace.workflow.current_easyqcid == "B-002"
+    assert not workspace.workflow.dirty
+    saved = sorted(path.name for path in rating_dir.glob("*.json"))
+    assert saved == ["AnatQC-rater1-B-001.json"]
+    assert executor.started[-1][0] == {0: "freeview b2.nii"}
+
+    # 上一例回去：B-002 未改动（干净）直接切换，不产生新评分文件
+    qtbot.mouseClick(workspace.previous_button, Qt.LeftButton)
+    assert workspace.workflow.current_easyqcid == "B-001"
+    assert len(list(rating_dir.glob("*.json"))) == 1
+
+
 def test_filter_action_requests_structured_transaction_and_dirty_draft_blocks_it(
     qtbot,
     tmp_path,
