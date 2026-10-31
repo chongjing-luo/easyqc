@@ -340,6 +340,85 @@ def test_suggest_module_name_finds_free_copy_and_strips_numeric_suffix(
     assert service.suggest_module_name("   ") is None
 
 
+def _external_service(tmp_path) -> ConfigurationService:
+    """Second instance over the same registry: emulates another process."""
+
+    other = ConfigurationService(
+        ProjectService(tmp_path / "projects.json"), TableService()
+    )
+    other.load_project("SAMPLE")
+    return other
+
+
+def test_additive_writes_heal_one_external_disk_write(tmp_path) -> None:
+    service, _ = _service(tmp_path)
+    # 另一进程改写磁盘后，本实例内存过期：旧实现此时任何提交都会
+    # 报 "Project settings changed on disk before commit" 死循环。
+    _external_service(tmp_path).add_module("ExternalQC", "External")
+    assert "ExternalQC" not in [m.name for m in service.modules()]
+
+    service.import_module_payload(
+        {"name": "FromTemplate", "label": "From template"}
+    )
+    service.add_module("QuickAdd", "Quick")
+    service.create_module(QCModule(name="AsNew", label="As new"))
+    service.add_constant("EXT_CONST", "value")
+
+    names = [m.name for m in service.modules()]
+    assert names[-3:] == ["FromTemplate", "QuickAdd", "AsNew"]
+    assert "ExternalQC" in names  # 外部改动原样保留
+    assert service.constants() == {"EXT_CONST": "value"}
+
+
+def test_additive_write_after_heal_still_rejects_external_duplicate(
+    tmp_path,
+) -> None:
+    service, _ = _service(tmp_path)
+    _external_service(tmp_path).add_module("Dup", "Duplicated")
+
+    with pytest.raises(ConfigurationError, match="Module already exists: Dup"):
+        service.add_module("Dup", "Duplicated")
+    assert [m.name for m in service.modules()].count("Dup") == 1
+
+
+def test_add_constant_after_heal_still_rejects_external_duplicate(
+    tmp_path,
+) -> None:
+    service, _ = _service(tmp_path)
+    _external_service(tmp_path).add_constant("TAKEN", "1")
+
+    with pytest.raises(ConfigurationError, match="Constant already exists"):
+        service.add_constant("TAKEN", "2")
+    assert service.constants() == {"TAKEN": "1"}
+
+
+def test_replace_write_keeps_conflict_loud_without_healing(
+    tmp_path,
+) -> None:
+    service, _ = _service(tmp_path)
+    service.add_module("AnatQC", "Anatomical QC")
+    _external_service(tmp_path).add_module("ExternalQC", "External")
+
+    # 替换类写入不做自动重载重试：外部同名模块的修改不允许被静默覆盖。
+    edited = next(m for m in service.modules() if m.name == "AnatQC")
+    edited.label = "Edited"
+    with pytest.raises(
+        ConfigurationError,
+        match="changed on disk before commit",
+    ):
+        service.save_module(edited, original_name="AnatQC")
+
+
+def test_reload_settings_refreshes_memory_from_disk(tmp_path) -> None:
+    service, _ = _service(tmp_path)
+    _external_service(tmp_path).add_module("ExternalQC", "External")
+
+    service.project_service.reload_settings()
+
+    assert "ExternalQC" in [m.name for m in service.modules()]
+    assert service.project_service.current_project.name == "SAMPLE"
+
+
 def test_remove_project_only_unregisters_it(tmp_path) -> None:
     service, projects = _service(tmp_path)
     project_path = projects.current_project.path

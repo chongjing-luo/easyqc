@@ -46,6 +46,10 @@ class ProjectStateConflictError(ValueError):
     """Raised when an optimistic settings write no longer owns current state."""
 
 
+class ProjectDiskStateConflictError(ProjectStateConflictError):
+    """Disk settings diverged from memory; additive flows may reload+retry."""
+
+
 class ProjectService:
     def __init__(self, registry_path: Path, event_bus: EventBus | None = None) -> None:
         self.registry_path = Path(registry_path)
@@ -616,7 +620,7 @@ class ProjectService:
             with repository.project_write_lock():
                 disk_settings = FileUtils.safe_json_load(current.settings_path)
                 if disk_settings != expected.settings:
-                    raise ProjectStateConflictError(
+                    raise ProjectDiskStateConflictError(
                         "Project settings changed on disk before commit"
                     )
                 if repository.root.exists():
@@ -624,7 +628,7 @@ class ProjectService:
                         self._strict_project_module_records(repository)
                     )
                     if disk_modules != expected.settings.get("qcmodule"):
-                        raise ProjectStateConflictError(
+                        raise ProjectDiskStateConflictError(
                             "Project module catalog changed before settings commit"
                         )
 
@@ -639,6 +643,22 @@ class ProjectService:
             self.publish_change("settings_saved")
             if change_event != "settings_saved":
                 self._notify(change_event)
+
+    def reload_settings(self) -> None:
+        """Re-read the current project's settings from disk in place.
+
+        External processes may legitimately rewrite the settings JSON while
+        this service still holds an older in-memory copy. Additive flows call
+        this before one guarded retry instead of dead-ending the action; the
+        current project, registry, and notifications are left untouched.
+        """
+
+        with self._state_lock:
+            self._require_current_project()
+            current = self.current
+            assert current is not None
+            prepared = self._prepare_project(current)
+            self._settings = deepcopy(prepared.settings)
 
     def save(self, *, notify: bool = True) -> None:
         self._save_registry()
@@ -835,6 +855,7 @@ class ProjectService:
 
 __all__ = [
     "PreparedProjectLoad",
+    "ProjectDiskStateConflictError",
     "ProjectService",
     "ProjectSettingsState",
     "ProjectStateConflictError",

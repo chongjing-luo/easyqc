@@ -17,6 +17,7 @@ from core.code_executor import CodeExecutorError, validate_module_command_templa
 from core.event_bus import Event, EventType
 from core.module_filter import resolve_module_filter_identities
 from core.project_service import (
+    ProjectDiskStateConflictError,
     ProjectService,
     ProjectSettingsState,
     ProjectStateConflictError,
@@ -46,6 +47,10 @@ RATER_ASSIGNMENT_TABLE: str = "ezqc_rater_assignment"
 
 class ConfigurationError(ValueError):
     """Raised when a project configuration candidate is unsafe."""
+
+
+class ConfigurationDiskConflictError(ConfigurationError):
+    """Disk settings diverged before commit; additive flows may reload+retry."""
 
 
 _CAPTURE_CURRENT_TABLE_REVISION = object()
@@ -1157,19 +1162,29 @@ class ConfigurationService:
         ``name`` must be a Python identifier not already owned by either the
         project constants or current master-list columns. The only side effect
         is one settings commit; rejected candidates do not mutate the project.
+        External disk writes are healed once via reload+retry, same as modules.
         """
 
         normalized = self._constant_name(name)
-        candidate = self._settings_candidate()
-        constants = candidate.setdefault("constants", {})
-        if normalized in constants:
-            raise ConfigurationError(f"Constant already exists: {normalized}")
-        if normalized in set(map(str, self.subjects().columns)):
-            raise ConfigurationError(
-                f"Constant conflicts with list column: {normalized}"
-            )
-        constants[normalized] = value
-        self.project_service.commit_settings(candidate)
+        for retried in (False, True):
+            candidate = self._settings_candidate()
+            constants = candidate.setdefault("constants", {})
+            if normalized in constants:
+                raise ConfigurationError(
+                    f"Constant already exists: {normalized}"
+                )
+            if normalized in set(map(str, self.subjects().columns)):
+                raise ConfigurationError(
+                    f"Constant conflicts with list column: {normalized}"
+                )
+            constants[normalized] = value
+            try:
+                self.project_service.commit_settings(candidate)
+                return
+            except ProjectDiskStateConflictError as exc:
+                if retried:
+                    raise ConfigurationDiskConflictError(str(exc)) from exc
+                self.project_service.reload_settings()
 
     def update_constant(
         self,
@@ -1278,21 +1293,57 @@ class ConfigurationService:
         }
         try:
             self.project_service.commit_settings(candidate, notify=notify)
+        except ProjectDiskStateConflictError as exc:
+            raise ConfigurationDiskConflictError(str(exc)) from exc
         except ValueError as exc:
             raise ConfigurationError(str(exc)) from exc
 
+    def _append_module_with_disk_reload(
+        self,
+        normalized: dict[str, Any],
+        *,
+        index: int | None,
+        notify: bool,
+    ) -> None:
+        """Append one normalized module; heal one external disk write and retry.
+
+        外部进程改写项目设置后，追加类写入（新建/导入/从模板添加/另存为
+        新模块）先重读磁盘再重试一次：重复名检查与乐观锁都在最新状态上
+        重跑，外部改动原样保留；第二次仍冲突则保持响亮报错。
+        """
+
+        for retried in (False, True):
+            modules = self.modules()
+            name = str(normalized["name"])
+            if any(
+                module.name.casefold() == name.casefold()
+                for module in modules
+            ):
+                raise ConfigurationError(f"Module already exists: {name}")
+            payloads = [module.to_legacy_dict() for module in modules]
+            position = (
+                len(payloads)
+                if index is None
+                else max(0, min(len(payloads), int(index)))
+            )
+            payloads.insert(position, normalized)
+            try:
+                self._commit_module_payloads(payloads, notify=notify)
+                return
+            except ConfigurationDiskConflictError:
+                if retried:
+                    raise
+                self.project_service.reload_settings()
+        raise AssertionError("module append must return or raise within retries")
+
     def add_module(self, name: str, label: str, *, index: int | None = None) -> None:
         name = name.strip()
-        if any(
-            module.name.casefold() == name.casefold()
-            for module in self.modules()
-        ):
-            raise ConfigurationError(f"Module already exists: {name}")
         module = self.project_service.default_module(name, label.strip() or name)
-        payloads = [module.to_legacy_dict() for module in self.modules()]
-        position = len(payloads) if index is None else max(0, min(len(payloads), int(index)))
-        payloads.insert(position, self._normalized_module_payload(module))
-        self._commit_module_payloads(payloads)
+        self._append_module_with_disk_reload(
+            self._normalized_module_payload(module),
+            index=index,
+            notify=True,
+        )
 
     def create_module(
         self,
@@ -1306,13 +1357,7 @@ class ConfigurationService:
             module,
             allow_shell_separators=allow_shell_separators,
         )
-        if any(
-            item.name.casefold() == str(payload["name"]).casefold()
-            for item in self.modules()
-        ):
-            raise ConfigurationError(f"Module already exists: {payload['name']}")
-        payloads = [item.to_legacy_dict() for item in self.modules()]
-        self._commit_module_payloads([*payloads, payload])
+        self._append_module_with_disk_reload(payload, index=None, notify=True)
 
     def suggest_module_name(self, base: str) -> str | None:
         """Return the first free ``<base>_N`` copy name for duplication."""
@@ -1444,16 +1489,11 @@ class ConfigurationService:
         notify: bool = True,
     ) -> None:
         normalized = self._normalized_module_payload(payload)
-        name = normalized["name"]
-        if any(
-            module.name.casefold() == name.casefold()
-            for module in self.modules()
-        ):
-            raise ConfigurationError(f"Module already exists: {name}")
-        payloads = [module.to_legacy_dict() for module in self.modules()]
-        position = len(payloads) if index is None else max(0, min(len(payloads), int(index)))
-        payloads.insert(position, normalized)
-        self._commit_module_payloads(payloads, notify=notify)
+        self._append_module_with_disk_reload(
+            normalized,
+            index=index,
+            notify=notify,
+        )
 
     def import_module_file(
         self,
@@ -1484,6 +1524,7 @@ class ConfigurationService:
 
 
 __all__ = [
+    "ConfigurationDiskConflictError",
     "ConfigurationError",
     "ConfigurationService",
     "ConfigurationSnapshot",
