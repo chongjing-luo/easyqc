@@ -651,14 +651,30 @@ class ProjectService:
         this service still holds an older in-memory copy. Additive flows call
         this before one guarded retry instead of dead-ending the action; the
         current project, registry, and notifications are left untouched.
+
+        The ``qcmodule`` section of the settings JSON is only a mirror of the
+        authoritative ``modules/`` catalog. When an external half-write (or a
+        git checkout that rewrites one side only) leaves the mirror
+        disagreeing with the catalog, every commit would keep failing with
+        "Project settings changed on disk before commit"; the mirror is
+        rewritten from the catalog so the guarded retry can converge.
         """
 
         with self._state_lock:
             self._require_current_project()
             current = self.current
             assert current is not None
-            prepared = self._prepare_project(current)
-            self._settings = deepcopy(prepared.settings)
+            repository = self._module_repository(current)
+            with repository.project_write_lock():
+                raw_settings = FileUtils.safe_json_load(current.settings_path)
+                prepared = self._prepare_project(current)
+                self._settings = deepcopy(prepared.settings)
+                if (
+                    isinstance(raw_settings, dict)
+                    and raw_settings.get("qcmodule")
+                    != self._settings.get("qcmodule")
+                ):
+                    self._save_project_locked(repository)
 
     def save(self, *, notify: bool = True) -> None:
         self._save_registry()

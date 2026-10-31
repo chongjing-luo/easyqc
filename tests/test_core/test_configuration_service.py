@@ -419,6 +419,43 @@ def test_reload_settings_refreshes_memory_from_disk(tmp_path) -> None:
     assert service.project_service.current_project.name == "SAMPLE"
 
 
+def test_settings_mirror_diverged_from_catalog_no_longer_deadlocks(
+    tmp_path,
+) -> None:
+    """设置 JSON 的 qcmodule 镜像与 modules/ 目录不一致（外部半写/pull
+    只重写一侧）时，旧实现即使重启应用、即使 reload 重试也会永久死锁在
+    同一句 "Project settings changed on disk before commit"；现在重读时以
+    模块目录为准修复镜像，追加写入可以收敛。"""
+
+    service, projects = _service(tmp_path)
+    project = projects.current_project
+    settings = json.loads(project.settings_path.read_text(encoding="utf-8"))
+    settings["qcmodule"]["1"]["label"] = "Mirror-only edit"
+    project.settings_path.write_text(
+        json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    # 重启应用等价于新实例重新加载
+    fresh = ConfigurationService(
+        ProjectService(tmp_path / "projects.json"), TableService()
+    )
+    fresh.load_project("SAMPLE")
+    fresh.import_module_payload({"name": "FromTemplate", "label": "T"})
+
+    names = [m.name for m in fresh.modules()]
+    assert "example" in names and "FromTemplate" in names
+    repaired = json.loads(project.settings_path.read_text(encoding="utf-8"))
+    catalog_labels = {
+        json.loads(path.read_text(encoding="utf-8"))["module"]["name"]: (
+            json.loads(path.read_text(encoding="utf-8"))["module"]["label"]
+        )
+        for path in sorted((project.path / "modules").glob("*.json"))
+    }
+    for payload in repaired["qcmodule"].values():
+        assert catalog_labels[payload["name"]] == payload["label"]
+    assert "Mirror-only edit" not in catalog_labels.values()
+
+
 def test_remove_project_only_unregisters_it(tmp_path) -> None:
     service, projects = _service(tmp_path)
     project_path = projects.current_project.path
