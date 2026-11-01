@@ -911,6 +911,7 @@ class ProjectContextService:
         # A failed new launch must not call the QC session's broad cleanup.
         return executor.start_commands(
             plan.commands, control=plan.control, shell=plan.shell,
+            shells=plan.shells,
             output_contexts={
                 key: ViewerExecutionContext(
                     module_name=module_name,

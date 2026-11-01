@@ -1152,14 +1152,17 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
             button.x() for button in toolbar_buttons
         )
 
-    assert isinstance(workspace.module_code, QPlainTextEdit)
-    assert workspace.module_code.lineWrapMode() == QPlainTextEdit.LineWrapMode.NoWrap
-    assert workspace.module_code.horizontalScrollBarPolicy() == Qt.ScrollBarAsNeeded
-    assert workspace.module_code.verticalScrollBarPolicy() == Qt.ScrollBarAsNeeded
-    assert workspace.module_code.font().family() == QFontDatabase.systemFont(
+    # 命令组编辑器：每张卡片保持等宽、不换行、可横向滚动的命令框
+    command_editor = workspace.command_editor
+    assert len(command_editor.cards) == 1
+    card = command_editor.cards[0]
+    assert isinstance(card.code_edit, QPlainTextEdit)
+    assert card.code_edit.lineWrapMode() == QPlainTextEdit.LineWrapMode.NoWrap
+    assert card.code_edit.horizontalScrollBarPolicy() == Qt.ScrollBarAsNeeded
+    assert card.code_edit.font().family() == QFontDatabase.systemFont(
         QFontDatabase.SystemFont.FixedFont
     ).family()
-    assert "easyqcid" in workspace.module_code.placeholderText()
+    assert "easyqcid" in card.code_edit.placeholderText()
     editor_layout = workspace.module_editor_scroll.widget().layout()
     assert editor_layout.indexOf(workspace.module_viewer_section) > editor_layout.indexOf(
         workspace.module_row_actions_toolbar
@@ -1174,11 +1177,11 @@ def test_module_footer_order_and_final_viewer_editor_support_long_commands(
     assert commit_row.layout().contentsMargins().left() == 12
     assert workspace.module_splitter.widget(1) is editor_pane
 
-    workspace.module_code.setPlainText(
+    card.code_edit.setPlainText(
         "viewer --input {image} --title {easyqcid} " + "--very-long-option value " * 30
     )
     qtbot.waitUntil(
-        lambda: workspace.module_code.horizontalScrollBar().maximum() > 0,
+        lambda: card.code_edit.horizontalScrollBar().maximum() > 0,
         timeout=2000,
     )
 
@@ -1289,34 +1292,35 @@ def test_module_execution_mode_radios_roundtrip_interper(
     workspace.tabs.setCurrentWidget(workspace.modules_tab)
 
     workspace._prepare_new_module()
-    assert workspace.module_direct_radio.isChecked()
-    assert not workspace.module_shell_radio.isChecked()
+    editor = workspace.command_editor
+    card = editor.cards[0]
+    assert card.direct_radio.isChecked()
+    assert not card.shell_radio.isChecked()
 
     workspace.module_name.setText("ShellQC")
     workspace.module_label.setText("Shell QC")
-    workspace.module_code.setPlainText("viewer {image} | report")
-    workspace.module_shell_radio.click()
+    card.code_edit.setPlainText("viewer {image} | report")
+    card.shell_radio.click()
     qtbot.mouseClick(workspace.save_module_button, Qt.LeftButton)
 
     stored = next(m for m in config.modules() if m.name == "ShellQC")
     assert stored.interper == "shell"
-    assert workspace.module_shell_radio.isChecked()
-    assert not workspace.module_direct_radio.isChecked()
+    assert stored.code == "viewer {image} | report"
+    assert editor.cards[0].shell_radio.isChecked()
+    assert not editor.cards[0].direct_radio.isChecked()
 
     baseline = workspace._module_form_signature()
-    workspace.module_direct_radio.click()
+    editor.cards[0].direct_radio.click()
     # 未加引号的 | 在直接模式下会被保存校验拦截，切直接时换成干净命令
-    workspace.module_code.setPlainText("viewer {image}")
+    editor.cards[0].code_edit.setPlainText("viewer {image}")
     assert workspace._module_form_signature() != baseline
     qtbot.mouseClick(workspace.save_module_button, Qt.LeftButton)
     stored = next(m for m in config.modules() if m.name == "ShellQC")
     assert stored.interper == "direct"
-    assert workspace.module_direct_radio.isChecked()
+    assert editor.cards[0].direct_radio.isChecked()
 
     # 直接模式 + 未加引号的 Shell 分隔符：弹框警告，取消则不保存
-    workspace.module_shell_radio.click()
-    workspace.module_code.setPlainText("viewer {image} | report")
-    workspace.module_direct_radio.click()
+    editor.cards[0].code_edit.setPlainText("viewer {image} | report")
     monkeypatch.setattr(
         "gui_qt.project_config_workspace.QMessageBox.question",
         staticmethod(lambda *a, **k: QMessageBox.No),
@@ -1335,6 +1339,66 @@ def test_module_execution_mode_radios_roundtrip_interper(
     stored = next(m for m in config.modules() if m.name == "ShellQC")
     assert stored.interper == "direct"
     assert stored.code == "viewer {image} | report"
+
+
+def test_module_command_groups_split_legacy_and_save_mixed_modes(
+    qtbot,
+    tmp_path,
+) -> None:
+    """旧 MULTICMD 打开自动拆组；逐组改模式保存为 commands 新格式。"""
+    workspace, config = _workspace(qtbot, tmp_path)
+    workspace.tabs.setCurrentWidget(workspace.modules_tab)
+    config.create_module(
+        QCModule(
+            name="MixedQC",
+            label="混合模式",
+            code="MULTICMD\nfreeview {image}\n;|\nTMP=$(mktemp /tmp/x.XXXX)",
+            interper="shell",
+        )
+    )
+    workspace._refresh_modules("MixedQC")
+    assert workspace._selected_module_name == "MixedQC"
+    editor = workspace.command_editor
+    assert [card.code_edit.toPlainText() for card in editor.cards] == [
+        "freeview {image}",
+        "TMP=$(mktemp /tmp/x.XXXX)",
+    ]
+    assert all(card.shell_radio.isChecked() for card in editor.cards)
+
+    # 第一组切直接执行，加第三组 Shell 命令
+    editor.cards[0].direct_radio.click()
+    editor.add_group()
+    editor.cards[2].code_edit.setPlainText("open ${report}")
+    editor.cards[2].shell_radio.click()
+    qtbot.mouseClick(workspace.save_module_button, Qt.LeftButton)
+
+    stored = next(m for m in config.modules() if m.name == "MixedQC")
+    assert stored.code is None
+    assert [(g.code, g.interper) for g in stored.commands.values()] == [
+        ("freeview {image}", "direct"),
+        ("TMP=$(mktemp /tmp/x.XXXX)", "shell"),
+        ("open ${report}", "shell"),
+    ]
+    assert stored.interper == "direct"
+    assert workspace.error_label.text() == ""
+
+
+def test_single_command_group_saves_legacy_fields_without_new_key(
+    qtbot,
+    tmp_path,
+) -> None:
+    workspace, config = _workspace(qtbot, tmp_path)
+    workspace.tabs.setCurrentWidget(workspace.modules_tab)
+    workspace._prepare_new_module()
+    workspace.module_name.setText("SingleQC")
+    editor = workspace.command_editor
+    editor.cards[0].code_edit.setPlainText("viewer {image}")
+    qtbot.mouseClick(workspace.save_module_button, Qt.LeftButton)
+
+    stored = next(m for m in config.modules() if m.name == "SingleQC")
+    assert stored.code == "viewer {image}"
+    assert stored.interper == "direct"
+    assert "commands" not in stored.to_legacy_dict()
 
 
 def test_key_toolbars_keep_actions_visible_with_wide_native_buttons(

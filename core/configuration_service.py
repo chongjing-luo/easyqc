@@ -34,7 +34,13 @@ from core.table_view_service import TableViewError
 from models.derived_formula import DerivedColumnFormula
 from models.folder_match import FolderMatchRequest
 from models.project import Project
-from models.qcmodule import QCModule, Score, Tag
+from models.qcmodule import (
+    QCModule,
+    Score,
+    Tag,
+    normalize_module_commands,
+    ordered_command_groups,
+)
 from models.table_view_state import (
     FilterExpression,
     TableViewStateContractError,
@@ -1253,16 +1259,52 @@ class ConfigurationService:
         *,
         allow_shell_separators: bool = False,
     ) -> dict[str, Any]:
-        typed = deepcopy(module) if isinstance(module, QCModule) else QCModule.from_legacy_dict(deepcopy(module))
+        """Validate one module candidate and return its canonical payload.
+
+        多命令组在此归一：空白组丢弃；单组折叠回 code/interper（与旧格式
+        字节级同构，不写新键）；≥2 组保留原键 commands 并以首组模式回填
+        interper。命令校验逐组进行，失败信息带「命令组 N」序号。
+        """
+
         try:
+            typed = (
+                deepcopy(module)
+                if isinstance(module, QCModule)
+                else QCModule.from_legacy_dict(deepcopy(module))
+            )
             validate_module_name(typed.name)
             if typed.rater is not None and typed.rater != "":
                 validate_rater(typed.rater)
-            validate_module_command_template(
-                typed.code or "",
-                typed.interper,
-                allow_shell_separators=allow_shell_separators,
-            )
+        except (RatingIdentityError, ValueError) as exc:
+            raise ConfigurationError(str(exc)) from exc
+        if typed.commands:
+            for group in ordered_command_groups(typed.commands):
+                if not isinstance(group.code, str):
+                    raise ConfigurationError(
+                        "module command group code must be a string"
+                    )
+        normalize_module_commands(typed)
+        try:
+            if typed.commands:
+                for index, group in enumerate(
+                    ordered_command_groups(typed.commands), start=1
+                ):
+                    try:
+                        validate_module_command_template(
+                            group.code,
+                            group.interper,
+                            allow_shell_separators=allow_shell_separators,
+                        )
+                    except CodeExecutorError as exc:
+                        raise ConfigurationError(
+                            f"命令组 {index}: {exc}"
+                        ) from exc
+            else:
+                validate_module_command_template(
+                    typed.code or "",
+                    typed.interper,
+                    allow_shell_separators=allow_shell_separators,
+                )
         except (RatingIdentityError, CodeExecutorError) as exc:
             raise ConfigurationError(str(exc)) from exc
         typed.easyqcid = None

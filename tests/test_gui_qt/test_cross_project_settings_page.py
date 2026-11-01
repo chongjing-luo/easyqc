@@ -186,8 +186,9 @@ def test_cross_project_page_module_editor_preserves_hidden_payload(
     ]
     assert not page.module_editor.move_score_up_button.isEnabled()
     assert page.module_editor.move_score_down_button.isEnabled()
-    assert page.module_editor.shell_radio.isChecked()
-    assert not page.module_editor.direct_radio.isChecked()
+    command_card = page.module_editor.command_editor.cards[0]
+    assert command_card.shell_radio.isChecked()
+    assert not command_card.direct_radio.isChecked()
 
     page.module_editor.score_table.setCurrentCell(1, 1)
     qtbot.mouseClick(page.module_editor.move_score_up_button, Qt.LeftButton)
@@ -212,12 +213,13 @@ def test_cross_project_page_module_editor_preserves_hidden_payload(
     page.module_editor.clear()
     assert page.module_editor.score_table.rowCount() == 1
     assert page.module_editor.score_table.height() < two_rows_height
-    assert page.module_editor.direct_radio.isChecked()
+    assert page.module_editor.command_editor.cards[0].direct_radio.isChecked()
     page.module_editor.load_module(module)
     page.module_editor.module_label.setText("Edited label")
-    page.module_editor.direct_radio.click()
+    page.module_editor.command_editor.cards[0].direct_radio.click()
     assert page.module_editor.candidate().interper == "direct"
-    page.module_editor.shell_radio.click()
+    assert page.module_editor.candidate().code == "freeview {image}"
+    page.module_editor.command_editor.cards[0].shell_radio.click()
     page.module_editor.tag_editor.set_tags(("One", "One", "Two"))
     qtbot.mouseClick(page.module_editor.save_button, Qt.LeftButton)
 

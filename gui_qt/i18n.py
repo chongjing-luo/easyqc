@@ -233,6 +233,33 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
         "en": "Add from template",
     },
     "cross.add_score": {"zh_CN": "添加评分项", "en": "Add score"},
+    "cross.add_command_group": {
+        "zh_CN": "添加命令组",
+        "en": "Add command group",
+    },
+    "cross.command_group": {
+        "zh_CN": "命令组 {index}",
+        "en": "Command group {index}",
+    },
+    "cross.remove_command_group": {
+        "zh_CN": "删除命令组",
+        "en": "Remove command group",
+    },
+    "cross.move_command_group_up": {
+        "zh_CN": "上移命令组",
+        "en": "Move command group up",
+    },
+    "cross.move_command_group_down": {
+        "zh_CN": "下移命令组",
+        "en": "Move command group down",
+    },
+    "cross.no_command_groups": {
+        "zh_CN": "还没有命令组：该模块将只记录评分，不启动查看器",
+        "en": (
+            "No command group yet: this module records ratings "
+            "without launching a viewer"
+        ),
+    },
     "cross.move_score_down": {
         "zh_CN": "下移评分项",
         "en": "Move score down",

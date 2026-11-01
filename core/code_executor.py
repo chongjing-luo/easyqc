@@ -88,6 +88,16 @@ def split_multicmd_template(template: str) -> tuple[str, str] | None:
     return stripped[:index], stripped[index + len(_MULTICMD_KEYWORD):]
 
 
+def split_multicmd_segments(command_text: str) -> list[str]:
+    """Return the raw non-empty ``;|`` segments, before variable substitution."""
+
+    return [
+        segment.strip()
+        for segment in _split_outside_quotes(command_text, _MULTICMD_SEPARATOR)
+        if segment.strip()
+    ]
+
+
 def _split_outside_quotes(text: str, delimiter: str) -> list[str]:
     """Split on one delimiter, keeping quoted regions (single/double) intact."""
 
@@ -370,11 +380,7 @@ class CodeExecutor:
             rendered = self.parse_template(template, variables)
             return rendered, {0: rendered}
         prefix_text, command_text = parts
-        segments = [
-            segment.strip()
-            for segment in _split_outside_quotes(command_text, _MULTICMD_SEPARATOR)
-            if segment.strip()
-        ]
+        segments = split_multicmd_segments(command_text)
         rendered_prefix = self.parse_template(prefix_text, variables).strip()
         prefix = ""
         if rendered_prefix:
@@ -826,6 +832,7 @@ class CodeExecutor:
         cwd: str | os.PathLike[str] | None = None,
         output_contexts: Mapping[Any, ViewerExecutionContext] | None = None,
         shell: bool | None = None,
+        shells: Mapping[Any, bool] | None = None,
     ) -> list[subprocess.Popen]:
         self._require_open()
         if output_contexts is not None:
@@ -850,6 +857,22 @@ class CodeExecutor:
                     "命令输出上下文类型无效，命令键: "
                     f"{invalid_contexts!r}"
                 )
+        if shells is not None:
+            if not isinstance(shells, Mapping):
+                raise TypeError(
+                    "shells must be a mapping of command keys to booleans: "
+                    f"{shells!r}"
+                )
+            invalid_shell_modes = [
+                key
+                for key, mode in shells.items()
+                if type(mode) is not bool
+            ]
+            if invalid_shell_modes:
+                raise TypeError(
+                    "shells values must be booleans, command keys: "
+                    f"{invalid_shell_modes!r}"
+                )
         if control:
             self.close_current_processes()
 
@@ -860,12 +883,13 @@ class CodeExecutor:
                 if output_contexts is not None
                 else None
             )
+            key_shell = shells.get(key, shell) if shells is not None else shell
             processes.append(
                 self.start_command(
                     command,
                     cwd=cwd,
                     output_context=context,
-                    shell=shell,
+                    shell=key_shell,
                 )
             )
         return processes

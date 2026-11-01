@@ -74,6 +74,7 @@ class _FakeExecutor:
     def __init__(self) -> None:
         self.planner = CodeExecutor()
         self.started = []
+        self.shells_log = []
         self.close_calls = 0
         self.output_queries = []
         self.output_batch = CommandOutputBatch(
@@ -97,6 +98,7 @@ class _FakeExecutor:
         cwd=None,
         output_contexts=None,
         shell=None,
+        shells=None,
     ):
         self.started.append(
             (
@@ -107,6 +109,7 @@ class _FakeExecutor:
                 shell,
             )
         )
+        self.shells_log.append(shells)
         return [object() for _ in commands]
 
     def command_output_since(self, after_sequence):

@@ -67,6 +67,7 @@ from gui_qt.i18n import (
     protect_user_text,
     translate_ui_text,
 )
+from gui_qt.module_command_editor import ModuleCommandGroupsEditor
 from gui_qt.module_score_table import (
     move_score_row,
     sync_score_table_height,
@@ -84,7 +85,7 @@ from gui_qt.template_copy_dialogs import (
     ModuleTemplateCopyDialog,
 )
 from gui_qt.theme import CONTROL_SPACING, set_button_role
-from models.qcmodule import QCModule, Score, Tag
+from models.qcmodule import QCModule, Score, Tag, ordered_command_groups
 from models.table_view_state import FilterExpression, TableViewState
 
 
@@ -781,47 +782,16 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_command_hint.setWordWrap(True)
         self.module_command_hint.setProperty("role", "secondary")
         viewer_layout.addWidget(self.module_command_hint)
-        self.module_code = QPlainTextEdit(self.module_viewer_section)
-        self.module_code.setObjectName("moduleViewerCommand")
-        self.module_code.setPlaceholderText(
-            "查看器命令模板，例如：freeview {image} --title {easyqcid}"
+        self.command_editor = ModuleCommandGroupsEditor(
+            self.language,
+            self.module_viewer_section,
         )
-        self.module_code.setAccessibleName("外部图像查看器命令模板")
-        self.module_code.setFont(
-            QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-        )
-        self.module_code.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self.module_code.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.module_code.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.module_code.setMinimumHeight(
-            self.module_code.fontMetrics().lineSpacing() * 6
-        )
-        viewer_layout.addWidget(self.module_code)
+        viewer_layout.addWidget(self.command_editor)
         self.module_control = QCheckBox(
             "重新启动前关闭由 EasyQC 管理的查看器",
             self.module_viewer_section,
         )
         viewer_layout.addWidget(self.module_control)
-        execution_row = QHBoxLayout()
-        self.module_execution_label = QLabel(
-            "命令执行方式",
-            self.module_viewer_section,
-        )
-        self.module_execution_label.setProperty("role", "secondary")
-        execution_row.addWidget(self.module_execution_label)
-        self.module_direct_radio = QRadioButton(
-            "直接执行（shell=False）",
-            self.module_viewer_section,
-        )
-        self.module_shell_radio = QRadioButton(
-            "Shell 执行（shell=True）",
-            self.module_viewer_section,
-        )
-        self.module_direct_radio.setChecked(True)
-        execution_row.addWidget(self.module_direct_radio)
-        execution_row.addWidget(self.module_shell_radio)
-        execution_row.addStretch(1)
-        viewer_layout.addLayout(execution_row)
         editor.addWidget(self.module_viewer_section)
 
         self.module_commit_toolbar = _new_strip_toolbar(
@@ -1025,6 +995,7 @@ class QtProjectConfigWorkspace(QWidget):
             button.setAccessibleName(text)
             button.setToolTip(text)
         self.tag_editor.retranslate_ui()
+        self.command_editor.retranslate_ui()
         self._sync_module_toolbar_minimum()
         sync_score_table_height(self.score_table)
         self._update_score_move_actions()
@@ -1236,9 +1207,8 @@ class QtProjectConfigWorkspace(QWidget):
                 for row in range(self.score_table.rowCount())
             ),
             self.tag_editor.tags(),
-            self.module_code.toPlainText().strip(),
+            self.command_editor.groups(),
             self.module_control.isChecked(),
-            self.module_shell_radio.isChecked(),
         )
 
     def _module_filter_write_allowed(self) -> bool:
@@ -2012,10 +1982,8 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_label.setToolTip(module.label)
         self.module_rater.setText(module.rater or "")
         self.module_rater.setToolTip(module.rater or "")
-        self.module_code.setPlainText(module.code or "")
+        self.command_editor.set_module(module)
         self.module_control.setChecked(module.control)
-        self.module_shell_radio.setChecked(module.interper == "shell")
-        self.module_direct_radio.setChecked(module.interper != "shell")
         self.score_table.setRowCount(len(module.scores))
         for row, score in enumerate(module.scores.values()):
             label_item = QTableWidgetItem(score.label or "")
@@ -2043,9 +2011,8 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_label.setToolTip("")
         self.module_rater.clear()
         self.module_rater.setToolTip("")
-        self.module_code.clear()
+        self.command_editor.set_groups([("", "direct")])
         self.module_control.setChecked(False)
-        self.module_direct_radio.setChecked(True)
         self.score_table.setRowCount(1)
         self.score_table.setItem(0, 0, QTableWidgetItem("质量"))
         self.score_table.setItem(0, 1, QTableWidgetItem("差,一般,好"))
@@ -2175,28 +2142,47 @@ class QtProjectConfigWorkspace(QWidget):
         module.name = name
         module.label = label
         module.rater = self.module_rater.text().strip() or None
-        module.code = self.module_code.toPlainText().strip() or None
+        # 命令组交给 core 归一：空白组丢弃、单组折叠回 code/interper。
+        module.commands = self.command_editor.command_groups_payload() or None
+        module.code = None
         module.control = self.module_control.isChecked()
-        module.interper = (
-            "shell" if self.module_shell_radio.isChecked() else "direct"
-        )
         module.scores = scores
         module.tags = tags
         return module
 
     def _confirm_direct_shell_syntax(self, module: QCModule) -> bool | None:
-        """Warn about direct-mode Shell syntax; None means save cancelled."""
+        """Warn about direct-mode Shell syntax; None means save cancelled.
 
-        warning = direct_mode_shell_syntax_warning(
-            module.code or "",
-            module.interper,
-        )
-        if warning is None:
+        多命令组逐组检查、一次弹框汇总列出（组号即界面上的命令组序号）。
+        """
+
+        warnings: list[str] = []
+        if module.commands:
+            for index, group in enumerate(
+                ordered_command_groups(module.commands), start=1
+            ):
+                warning = direct_mode_shell_syntax_warning(
+                    group.code,
+                    group.interper,
+                )
+                if warning is not None:
+                    warnings.append(
+                        f"{self.language.tr('cross.command_group', index=index)}："
+                        + translate_ui_text(warning)
+                    )
+        else:
+            warning = direct_mode_shell_syntax_warning(
+                module.code or "",
+                module.interper,
+            )
+            if warning is not None:
+                warnings.append(translate_ui_text(warning))
+        if not warnings:
             return False
         answer = QMessageBox.question(
             self,
             translate_ui_text("Shell 语法警告"),
-            translate_ui_text(warning)
+            "\n".join(warnings)
             + "\n\n"
             + translate_ui_text("仍要保存该模块吗？"),
         )

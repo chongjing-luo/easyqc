@@ -42,6 +42,7 @@ class _FakeExecutor:
         cwd=None,
         output_contexts=None,
         shell=None,
+        shells=None,
     ):
         self.started.append((dict(commands), control, output_contexts, shell))
         return [object()]

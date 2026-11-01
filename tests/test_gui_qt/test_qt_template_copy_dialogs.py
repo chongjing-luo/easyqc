@@ -9,7 +9,42 @@ from core.table_service import TableService
 from core.template_service import TemplateService
 from gui_qt.i18n import LanguageController
 from gui_qt.template_copy_dialogs import ModuleTemplateCopyDialog
-from models.qcmodule import QCModule
+from models.qcmodule import CommandGroup, QCModule
+
+
+def test_module_copy_dialog_preserves_multi_group_template(qtbot, tmp_path):
+    templates, copier, configuration, language = _services(tmp_path)
+    templates.add_module(
+        QCModule(
+            name="MixedQC",
+            label="混合模式",
+            code=None,
+            interper="direct",
+            commands={
+                "1": CommandGroup("1", "viewer {image}", "direct"),
+                "2": CommandGroup("2", "echo ok | tee log", "shell"),
+            },
+        ),
+        display_order=10,
+    )
+
+    dialog = ModuleTemplateCopyDialog(
+        templates, copier, configuration, language
+    )
+    qtbot.addWidget(dialog)
+    assert len(dialog.editor.command_editor.cards) == 2
+    assert dialog.editor.command_editor.cards[0].direct_radio.isChecked()
+    assert dialog.editor.command_editor.cards[1].shell_radio.isChecked()
+
+    dialog._copy()
+
+    stored = next(
+        m for m in configuration.modules() if m.name == "MixedQC"
+    )
+    assert [(g.code, g.interper) for g in stored.commands.values()] == [
+        ("viewer {image}", "direct"),
+        ("echo ok | tee log", "shell"),
+    ]
 
 
 def _template_module(name: str, label: str | None = None) -> QCModule:

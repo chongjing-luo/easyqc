@@ -974,7 +974,7 @@ class RatingService:
         flattened: dict[str, Any] = {}
 
         for key, value in data.items():
-            if key not in ["scores", "tags", "code_exe"]:
+            if key not in ["scores", "tags", "code_exe", "commands"]:
                 flattened[key] = value
 
         if isinstance(data.get("code_exe"), dict):

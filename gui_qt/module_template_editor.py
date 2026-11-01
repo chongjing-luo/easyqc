@@ -5,7 +5,6 @@ from __future__ import annotations
 from copy import deepcopy
 
 from PySide6.QtCore import Qt, Signal, Slot
-from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
     QCheckBox,
     QFormLayout,
@@ -13,9 +12,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPlainTextEdit,
     QPushButton,
-    QRadioButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -23,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui_qt.i18n import LanguageController
+from gui_qt.module_command_editor import ModuleCommandGroupsEditor
 from gui_qt.module_score_table import (
     move_score_row,
     sync_score_table_height,
@@ -37,7 +35,7 @@ from gui_qt.theme import (
     SECTION_SPACING,
     set_button_role,
 )
-from models.qcmodule import QCModule, Score, Tag
+from models.qcmodule import QCModule, Score, Tag, normalize_module_commands
 
 
 class QtModuleTemplateEditor(QWidget):
@@ -115,27 +113,13 @@ class QtModuleTemplateEditor(QWidget):
         self.viewer_group = QGroupBox(self)
         viewer_layout = QVBoxLayout(self.viewer_group)
         viewer_layout.setSpacing(CONTROL_SPACING)
-        self.module_code = QPlainTextEdit(self.viewer_group)
-        self.module_code.setFont(
-            QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        self.command_editor = ModuleCommandGroupsEditor(
+            self.language,
+            self.viewer_group,
         )
-        self.module_code.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self.module_code.setMinimumHeight(
-            self.module_code.fontMetrics().lineSpacing() * 6
-        )
+        viewer_layout.addWidget(self.command_editor)
         self.module_control = QCheckBox(self.viewer_group)
-        viewer_layout.addWidget(self.module_code)
         viewer_layout.addWidget(self.module_control)
-        execution_row = QHBoxLayout()
-        self.execution_mode_label = QLabel(self.viewer_group)
-        self.direct_radio = QRadioButton(self.viewer_group)
-        self.shell_radio = QRadioButton(self.viewer_group)
-        self.direct_radio.setChecked(True)
-        execution_row.addWidget(self.execution_mode_label)
-        execution_row.addWidget(self.direct_radio)
-        execution_row.addWidget(self.shell_radio)
-        execution_row.addStretch(1)
-        viewer_layout.addLayout(execution_row)
         layout.addWidget(self.viewer_group)
 
         self.error_label = QLabel(self)
@@ -223,10 +207,8 @@ class QtModuleTemplateEditor(QWidget):
         self.module_name.setText(module.name)
         self.module_label.setText(module.label)
         self.module_rater.setText(module.rater or "")
-        self.module_code.setPlainText(module.code or "")
+        self.command_editor.set_module(module)
         self.module_control.setChecked(bool(module.control))
-        self.shell_radio.setChecked(module.interper == "shell")
-        self.direct_radio.setChecked(module.interper != "shell")
         self.score_table.setRowCount(0)
         for score in module.scores.values():
             self._append_row(
@@ -255,9 +237,11 @@ class QtModuleTemplateEditor(QWidget):
         module.name = name
         module.label = self.module_label.text().strip() or name
         module.rater = self.module_rater.text().strip() or None
-        module.code = self.module_code.toPlainText().strip() or None
+        # 模板库不过 core 保存门，这里就地做同一套 0/1/N 归一。
+        module.commands = self.command_editor.command_groups_payload() or None
+        module.code = None
+        normalize_module_commands(module)
         module.control = self.module_control.isChecked()
-        module.interper = "shell" if self.shell_radio.isChecked() else "direct"
         module.scores = {}
         for row in range(self.score_table.rowCount()):
             label_item = self.score_table.item(row, 0)
@@ -329,11 +313,8 @@ class QtModuleTemplateEditor(QWidget):
         self.tags_group.setTitle(tr("cross.tags"))
         self.tag_editor.retranslate_ui()
         self.viewer_group.setTitle(tr("cross.viewer"))
-        self.module_code.setPlaceholderText(tr("cross.viewer_placeholder"))
+        self.command_editor.retranslate_ui()
         self.module_control.setText(tr("cross.viewer_control"))
-        self.execution_mode_label.setText(tr("cross.execution_mode_label"))
-        self.direct_radio.setText(tr("settings.direct_title"))
-        self.shell_radio.setText(tr("settings.shell_title"))
         self.discard_button.setText(tr("cross.discard"))
         self.save_button.setText(tr("cross.save_module"))
         self.setAccessibleName(tr("cross.module_editor_accessible"))

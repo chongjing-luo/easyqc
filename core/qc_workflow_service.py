@@ -24,7 +24,7 @@ from core.rating_service import (
     RatingRaterDirectoryIndex,
     RatingService,
 )
-from models.qcmodule import QCModule
+from models.qcmodule import QCModule, ordered_command_groups
 from models.rating import Rating
 
 
@@ -46,6 +46,8 @@ class ViewerPlan:
     commands: dict[int, str]
     control: bool
     shell: bool = False
+    # 多命令组模块逐命令的 Shell 标志；None = 全部使用 shell（旧单模板格式）。
+    shells: dict[int, bool] | None = None
 
 
 class QcWorkflowService:
@@ -408,9 +410,19 @@ class QcWorkflowService:
             self._dirty = True
 
     def viewer_plan(self) -> ViewerPlan:
-        template = (self._working_module.code or "").strip()
-        if not template:
-            raise QcSessionError("The QC module has no viewer command template")
+        uses_groups = bool(self._working_module.commands)
+        groups = (
+            ordered_command_groups(self._working_module.commands)
+            if uses_groups
+            else []
+        )
+        if uses_groups:
+            if not any((group.code or "").strip() for group in groups):
+                raise QcSessionError("The QC module has no viewer command template")
+        else:
+            template = (self._working_module.code or "").strip()
+            if not template:
+                raise QcSessionError("The QC module has no viewer command template")
         row = self._source.iloc[self._current_index]
         if row["easyqcid"] != self.current_easyqcid:
             raise QcIdentityError("Current easyqcid no longer resolves to its stable source row")
@@ -423,7 +435,26 @@ class QcWorkflowService:
                 f"list columns: {collisions}"
             )
         variables = {**row.to_dict(), **self._constants}
-        rendered, commands = self._code_executor.render_command_plan(template, variables)
+        shells: dict[int, bool] | None = None
+        if uses_groups:
+            rendered_parts: list[str] = []
+            commands: dict[int, str] = {}
+            shells = {}
+            for group in groups:
+                code = (group.code or "").strip()
+                if not code:
+                    continue
+                part_text, part_commands = self._code_executor.render_command_plan(
+                    code, variables
+                )
+                for key, command in part_commands.items():
+                    index = len(commands)
+                    commands[index] = command
+                    shells[index] = group.interper == "shell"
+                rendered_parts.append(part_text)
+            rendered = ";|".join(rendered_parts)
+        else:
+            rendered, commands = self._code_executor.render_command_plan(template, variables)
         if not commands:
             raise QcSessionError("Viewer template produced no commands")
         invalid_command_indices = [
@@ -446,6 +477,7 @@ class QcWorkflowService:
             commands=dict(commands),
             control=bool(self._module_template.get("control")),
             shell=self._working_module.interper == "shell",
+            shells=shells,
         )
 
     def launch_viewer(self) -> list[Any]:
@@ -471,6 +503,7 @@ class QcWorkflowService:
                     control=plan.control,
                     output_contexts=output_contexts,
                     shell=plan.shell,
+                    shells=plan.shells,
                 )
             )
         except Exception:

@@ -181,10 +181,11 @@ _COMMAND = 'echo "${site}";\nprintf "%s\\n" "${easyqcid}"'
 
 
 def _fill_module_draft(workspace, *, command_first):
-    # _COMMAND 是 Shell 语法（; 与换行分隔），直接执行模式会被保存校验拦截
-    workspace.module_shell_radio.setChecked(True)
+    # _COMMAND 是 Shell 语法（; 与换行分隔），该命令组选 Shell 执行
+    card = workspace.command_editor.cards[0]
+    card.shell_radio.setChecked(True)
     if command_first:
-        workspace.module_code.setPlainText(_COMMAND)
+        card.code_edit.setPlainText(_COMMAND)
     workspace.module_name.setText("DraftQC")
     workspace.module_label.setText("Draft complete module")
     workspace.module_rater.setText("reviewer_2")
@@ -197,11 +198,14 @@ def _fill_module_draft(workspace, *, command_first):
         workspace.score_table.setItem(row, 1, QTableWidgetItem(options))
     workspace.tag_editor.set_tags(("Needs review", "DraftOnlyTag"))
     if not command_first:
-        workspace.module_code.setPlainText(_COMMAND)
+        card.code_edit.setPlainText(_COMMAND)
 
 
 def _assert_module_complete(module):
     assert module.code == _COMMAND
+    # 单组命令折叠回旧格式：code + interper
+    assert module.interper == "shell"
+    assert module.commands is None
     assert module.name == "DraftQC"
     assert module.label == "Draft complete module"
     assert module.rater == "reviewer_2"
