@@ -6,23 +6,56 @@ from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
     QHBoxLayout,
+    QBoxLayout,
+    QGridLayout,
     QLabel,
     QPushButton,
     QPlainTextEdit,
     QRadioButton,
     QFrame,
+    QMessageBox,
+    QSizePolicy,
+    QLayout,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from core.code_executor import (
+    direct_mode_shell_syntax_warning,
     split_multicmd_segments,
     split_multicmd_template,
 )
 from gui_qt.i18n import LanguageController
-from gui_qt.theme import CONTROL_SPACING, set_button_role
+from gui_qt.theme import CONTROL_SPACING, CONTROL_HEIGHT, set_button_role
 from models.qcmodule import CommandGroup, QCModule, ordered_command_groups
+
+
+def confirm_command_group_syntax(
+    parent: QWidget,
+    language: LanguageController,
+    groups: tuple[tuple[str, str], ...],
+) -> bool | None:
+    """Confirm all direct-mode warnings once; None cancels, False needs no consent.
+
+    Input includes blank visible cards so reported numbers match the editor.
+    This function only shows a dialog; it never changes or saves the draft.
+    """
+    warnings = []
+    for index, (code, mode) in enumerate(groups, start=1):
+        warning = direct_mode_shell_syntax_warning(code, mode)
+        if warning:
+            label = language.tr("cross.command_group", index=index)
+            warnings.append(f"{label}: {language.translate_source(warning)}")
+    if not warnings:
+        return False
+    answer = QMessageBox.question(
+        parent,
+        language.translate_source("Shell 语法警告"),
+        "\n\n".join(warnings) + "\n\n"
+        + language.translate_source("仍要保存该模块吗？"),
+    )
+    return True if answer == QMessageBox.Yes else None
 
 
 class _CommandGroupCard(QFrame):
@@ -39,36 +72,46 @@ class _CommandGroupCard(QFrame):
         super().__init__(parent)
         self.language = language
         self.setObjectName("moduleCommandCard")
-        self.setProperty("surface", "true")
+        self.setProperty("surface", "subtle")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 10)
-        layout.setSpacing(6)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(CONTROL_SPACING)
 
-        header = QHBoxLayout()
-        header.setSpacing(CONTROL_SPACING)
+        self.header = QGridLayout()
+        self.header.setSpacing(CONTROL_SPACING)
+        self._header_shape = None
         self.index_label = QLabel(self)
-        self.index_label.setProperty("role", "secondary")
-        header.addWidget(self.index_label)
-        header.addStretch(1)
-        self.direct_radio = QRadioButton(self)
-        self.shell_radio = QRadioButton(self)
+        self.index_label.setProperty("role", "sectionTitle")
+        self.modes = QWidget(self)
+        self.modes.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.mode_layout = QBoxLayout(QBoxLayout.LeftToRight, self.modes)
+        self.mode_layout.setContentsMargins(0, 0, 0, 0)
+        self.mode_layout.setSpacing(CONTROL_SPACING)
+        self.mode_layout.setSizeConstraint(QLayout.SetNoConstraint)
+        self.direct_radio = QRadioButton(self.modes)
+        self.shell_radio = QRadioButton(self.modes)
         self.direct_radio.setChecked(interper != "shell")
         self.shell_radio.setChecked(interper == "shell")
-        header.addWidget(self.direct_radio)
-        header.addWidget(self.shell_radio)
-        self.up_button = QToolButton(self)
-        self.down_button = QToolButton(self)
-        self.remove_button = QToolButton(self)
+        self.mode_layout.addWidget(self.direct_radio)
+        self.mode_layout.addWidget(self.shell_radio)
+        self.mode_layout.addStretch(1)
+        self.actions = QWidget(self)
+        actions = QHBoxLayout(self.actions)
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(4)
+        self.up_button = QToolButton(self.actions)
+        self.down_button = QToolButton(self.actions)
+        self.remove_button = QToolButton(self.actions)
         for button in (
             self.up_button,
             self.down_button,
             self.remove_button,
         ):
             set_button_role(button, "quiet")
-        header.addWidget(self.up_button)
-        header.addWidget(self.down_button)
-        header.addWidget(self.remove_button)
-        layout.addLayout(header)
+            button.setFixedSize(CONTROL_HEIGHT, CONTROL_HEIGHT)
+            actions.addWidget(button)
+        layout.addLayout(self.header)
 
         self.code_edit = QPlainTextEdit(self)
         self.code_edit.setFont(
@@ -80,12 +123,50 @@ class _CommandGroupCard(QFrame):
         self.code_edit.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
-        self.code_edit.setMinimumHeight(
-            self.code_edit.fontMetrics().lineSpacing() * 3 + 8
-        )
         self.code_edit.setPlainText(code)
+        self.code_edit.textChanged.connect(self._sync_code_height)
         layout.addWidget(self.code_edit)
         self.retranslate(index)
+
+    def _sync_code_height(self) -> None:
+        """Show 4–10 script lines; keep long scripts scrollable, not page-filling."""
+        lines = max(4, min(10, self.code_edit.document().blockCount()))
+        padding = 2 * self.code_edit.frameWidth() + 2 * int(self.code_edit.document().documentMargin())
+        scrollbar = self.code_edit.horizontalScrollBar().sizeHint().height()
+        self.code_edit.setFixedHeight(
+            lines * self.code_edit.fontMetrics().lineSpacing() + padding + scrollbar + 12
+        )
+
+    def _reflow_header(self) -> None:
+        available = max(0, self.width() - 24)
+        mode_width = sum(radio.sizeHint().width() for radio in (self.direct_radio, self.shell_radio)) + CONTROL_SPACING
+        stacked = mode_width > available
+        wide = (self.index_label.sizeHint().width() + mode_width
+                + self.actions.sizeHint().width() + 2 * CONTROL_SPACING <= available)
+        shape = (wide, stacked)
+        if shape == self._header_shape:
+            return
+        self._header_shape = shape
+        for widget in (self.index_label, self.modes, self.actions):
+            self.header.removeWidget(widget)
+        self.mode_layout.setDirection(QBoxLayout.TopToBottom if stacked else QBoxLayout.LeftToRight)
+        self.header.setColumnStretch(0, 0 if wide else 1)
+        self.header.setColumnStretch(1, 1 if wide else 0)
+        self.header.addWidget(self.index_label, 0, 0)
+        if wide:
+            self.header.addWidget(self.modes, 0, 1)
+            self.header.addWidget(self.actions, 0, 2)
+        else:
+            self.header.addWidget(self.actions, 0, 1, 1, 2, Qt.AlignRight)
+            self.header.addWidget(self.modes, 1, 0, 1, 3)
+        self.modes.setMinimumHeight(
+            sum(radio.sizeHint().height() for radio in (self.direct_radio, self.shell_radio)) + CONTROL_SPACING
+            if stacked else max(self.direct_radio.sizeHint().height(), self.shell_radio.sizeHint().height())
+        )
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._reflow_header()
 
     def values(self) -> tuple[str, str]:
         """Return this card's stripped command and chosen mode."""
@@ -107,9 +188,16 @@ class _CommandGroupCard(QFrame):
         ):
             text = tr(key)
             button.setText(glyph)
+            button.setFixedSize(max(CONTROL_HEIGHT, button.minimumSizeHint().width()), CONTROL_HEIGHT)
             button.setAccessibleName(f"{text} {index}")
             button.setToolTip(text)
         self.code_edit.setPlaceholderText(tr("cross.viewer_placeholder"))
+        self.code_edit.setAccessibleName(tr("cross.command_group_editor", index=index))
+        self.direct_radio.setToolTip(tr("cross.command_direct_hint"))
+        self.shell_radio.setToolTip(tr("cross.command_shell_hint"))
+        self._header_shape = None
+        self._reflow_header()
+        self._sync_code_height()
 
 
 class ModuleCommandGroupsEditor(QWidget):
@@ -133,12 +221,12 @@ class ModuleCommandGroupsEditor(QWidget):
             )
         self.language = language
         self.setObjectName("moduleCommandGroupsEditor")
-        self._drafts: list[list] = []
         self.cards: list[_CommandGroupCard] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(CONTROL_SPACING)
+        layout.setAlignment(Qt.AlignTop)
         self.cards_layout = QVBoxLayout()
         self.cards_layout.setSpacing(CONTROL_SPACING)
         layout.addLayout(self.cards_layout)
@@ -167,7 +255,7 @@ class ModuleCommandGroupsEditor(QWidget):
     def set_groups(self, groups) -> None:
         """Install ``[(code, interper), …]`` drafts and rebuild cards."""
 
-        drafts: list[list] = []
+        drafts: list[tuple[str, str]] = []
         for code, interper in groups:
             if not isinstance(code, str):
                 raise TypeError("command group code must be str")
@@ -175,15 +263,21 @@ class ModuleCommandGroupsEditor(QWidget):
                 raise ValueError(
                     f"invalid command group interper: {interper!r}"
                 )
-            drafts.append([code, interper])
-        self._drafts = drafts
-        self._rebuild()
+            drafts.append((code, interper))
+        # Validate the entire candidate before replacing any existing draft.
+        for card in self.cards:
+            self.cards_layout.removeWidget(card)
+            card.hide()
+            card.deleteLater()
+        self.cards = []
+        for code, mode in drafts:
+            self._append_card(code, mode)
+        self._update_card_actions()
 
     def groups(self) -> tuple[tuple[str, str], ...]:
         """Return the current groups in order, blank commands included."""
 
-        self._sync_drafts()
-        return tuple((code, mode) for code, mode in self._drafts)
+        return tuple(card.values() for card in self.cards)
 
     def command_groups_payload(self) -> dict[str, CommandGroup]:
         """Return sequentially keyed groups with blank commands dropped."""
@@ -196,51 +290,19 @@ class ModuleCommandGroupsEditor(QWidget):
 
     @Slot()
     def add_group(self) -> None:
-        self._sync_drafts()
-        self._drafts.append(["", "direct"])
-        self._rebuild()
-        if self.cards:
-            self.cards[-1].code_edit.setFocus()
+        self._append_card("", "direct")
+        self._update_card_actions()
+        self.cards[-1].code_edit.setFocus()
 
     # ---- internals --------------------------------------------------
 
-    def _sync_drafts(self) -> None:
-        for draft, card in zip(self._drafts, self.cards):
-            draft[0], draft[1] = card.values()
-
-    def _rebuild(self) -> None:
-        for card in self.cards:
-            card.setParent(None)
-            card.deleteLater()
-        self.cards = []
-        while self.cards_layout.count():
-            item = self.cards_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-        for index, (code, interper) in enumerate(self._drafts, start=1):
-            card = _CommandGroupCard(
-                self.language, index, code, interper, self
-            )
-            card.up_button.clicked.connect(
-                lambda _checked=False, card_ref=card: self._move_card(
-                    card_ref, -1
-                )
-            )
-            card.down_button.clicked.connect(
-                lambda _checked=False, card_ref=card: self._move_card(
-                    card_ref, 1
-                )
-            )
-            card.remove_button.clicked.connect(
-                lambda _checked=False, card_ref=card: self._remove_card(
-                    card_ref
-                )
-            )
-            self.cards_layout.addWidget(card)
-            self.cards.append(card)
-        self.empty_label.setVisible(not self.cards)
-        self._update_card_actions()
+    def _append_card(self, code: str, interper: str) -> None:
+        card = _CommandGroupCard(self.language, len(self.cards) + 1, code, interper, self)
+        card.up_button.clicked.connect(lambda: self._move_card(card, -1))
+        card.down_button.clicked.connect(lambda: self._move_card(card, 1))
+        card.remove_button.clicked.connect(lambda: self._remove_card(card))
+        self.cards_layout.addWidget(card)
+        self.cards.append(card)
 
     def _card_index(self, card: _CommandGroupCard) -> int | None:
         for position, item in enumerate(self.cards):
@@ -249,28 +311,36 @@ class ModuleCommandGroupsEditor(QWidget):
         return None
 
     def _move_card(self, card: _CommandGroupCard, delta: int) -> None:
-        self._sync_drafts()
         index = self._card_index(card)
         if index is None:
             return
         target = index + delta
-        if target < 0 or target >= len(self._drafts):
+        if target < 0 or target >= len(self.cards):
             return
-        self._drafts.insert(target, self._drafts.pop(index))
-        self._rebuild()
-        if self.cards:
-            self.cards[target].code_edit.setFocus()
+        self.cards.insert(target, self.cards.pop(index))
+        self.cards_layout.removeWidget(card)
+        self.cards_layout.insertWidget(target, card)
+        self._update_card_actions()
+        card.code_edit.setFocus()
 
     def _remove_card(self, card: _CommandGroupCard) -> None:
-        self._sync_drafts()
         index = self._card_index(card)
         if index is None:
             return
-        del self._drafts[index]
-        self._rebuild()
+        self.cards.pop(index)
+        self.cards_layout.removeWidget(card)
+        card.hide()
+        card.deleteLater()
+        self._update_card_actions()
+        if self.cards:
+            self.cards[min(index, len(self.cards) - 1)].code_edit.setFocus()
+        else:
+            self.add_button.setFocus()
 
     def _update_card_actions(self) -> None:
+        self.empty_label.setVisible(not self.cards)
         for position, card in enumerate(self.cards):
+            card.retranslate(position + 1)
             card.up_button.setEnabled(position > 0)
             card.down_button.setEnabled(position < len(self.cards) - 1)
 
@@ -299,9 +369,11 @@ def _legacy_module_groups(module: QCModule) -> list[tuple[str, str]]:
         # 普通文本、SCRIPT 或带前缀的 MULTICMD（前缀必须 Shell，不拆）
         return [(code, module.interper)]
     segments = split_multicmd_segments(parts[1])
-    if not segments:
+    if not segments or any(split_multicmd_template(segment) is not None for segment in segments):
+        # Re-rendering a split segment must not reinterpret a literal MULTICMD
+        # inside a path/argument as a new template. Keep this legacy form whole.
         return [(code, module.interper)]
     return [(segment, module.interper) for segment in segments]
 
 
-__all__ = ["ModuleCommandGroupsEditor"]
+__all__ = ["ModuleCommandGroupsEditor", "confirm_command_group_syntax"]

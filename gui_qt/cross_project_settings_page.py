@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from core.module_repository import ModuleRecord
 from core.template_service import TemplateService
 from gui_qt.i18n import LanguageController, protect_user_text
+from gui_qt.module_command_editor import confirm_command_group_syntax
 from gui_qt.module_template_editor import QtModuleTemplateEditor
 from gui_qt.theme import (
     CONTENT_MARGIN,
@@ -435,6 +436,10 @@ class QtCrossProjectSettingsPage(QWidget):
     def _save_module_template(self, module: object) -> None:
         if not isinstance(module, QCModule):
             self._set_module_error("Invalid QC module candidate")
+            return
+        if confirm_command_group_syntax(
+            self, self.language, self.module_editor.command_editor.groups()
+        ) is None:
             return
         try:
             if self._editing_module_id is None:

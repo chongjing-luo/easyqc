@@ -11,6 +11,7 @@ import pandas as pd
 from PySide6.QtCore import QSettings, QSize, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QCloseEvent, QFont, QKeySequence
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QComboBox,
     QDialog,
     QFrame,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -45,6 +47,7 @@ from core.table_view_service import TableViewService
 from gui_qt.cross_project_settings_page import QtCrossProjectSettingsPage
 from gui_qt.command_output_panel import QtCommandOutputPanel
 from gui_qt.filter_dialog import FilterDialog
+from gui_qt.icons import brand_pixmap, glyph_icon, glyph_pixmap
 from gui_qt.i18n import (
     LanguageController,
     get_or_create_language_controller,
@@ -60,6 +63,7 @@ from gui_qt.theme import (
     CONTENT_MARGIN,
     CONTROL_SPACING,
     NAVIGATION_ROW_HEIGHT,
+    PALETTE,
     SECTION_SPACING,
 )
 from models.derived_formula import DerivedColumnFormula
@@ -111,6 +115,16 @@ class QtMainWindow(QMainWindow):
         "质控模块",
         "质控结果",
     )
+    NAVIGATION_ICONS = (
+        "folder",
+        "import",
+        "table",
+        "braces",
+        "layers",
+        "clipboard-check",
+    )
+    NAVIGATION_ICON_SIZE = 18
+    NAVIGATION_ICON_GAP = 6
     EXPANDED_NAVIGATION_MIN_WIDTH = 202
     EXPANDED_NAVIGATION_MAX_WIDTH = 248
     COLLAPSED_NAVIGATION_WIDTH = 48
@@ -247,13 +261,19 @@ class QtMainWindow(QMainWindow):
         self.navigation_header.setObjectName("navigationHeader")
         navigation_header_layout = QHBoxLayout(self.navigation_header)
         navigation_header_layout.setContentsMargins(0, 0, 0, 0)
-        navigation_header_layout.setSpacing(8)
+        navigation_header_layout.setSpacing(10)
+        self.brand_mark_label = QLabel(self.navigation_header)
+        self.brand_mark_label.setObjectName("brandMark")
+        self.brand_mark_label.setFixedSize(28, 28)
+        self.brand_mark_label.setPixmap(brand_pixmap(28))
+        navigation_header_layout.addWidget(self.brand_mark_label)
         self.product_name_label = QLabel("EasyQC", self.navigation_header)
         self.product_name_label.setObjectName("productName")
         self.product_name_label.setAccessibleName("EasyQC")
         navigation_header_layout.addWidget(self.product_name_label, 1)
-        self.navigation_toggle_button = QPushButton("‹", self.navigation_header)
+        self.navigation_toggle_button = QPushButton("", self.navigation_header)
         self.navigation_toggle_button.setObjectName("navigationToggle")
+        self.navigation_toggle_button.setIconSize(QSize(18, 18))
         self.navigation_toggle_button.setMinimumSize(
             CONTROL_SPACING * 4,
             CONTROL_SPACING * 4,
@@ -284,7 +304,22 @@ class QtMainWindow(QMainWindow):
             navigation_font.setPixelSize(navigation_font.pixelSize() + 1)
         self.navigation.setFont(navigation_font)
         self.navigation.setSpacing(4)
+        self.navigation.setIconSize(
+            QSize(
+                self.NAVIGATION_ICON_SIZE + self.NAVIGATION_ICON_GAP,
+                self.NAVIGATION_ICON_SIZE,
+            )
+        )
         self.navigation.addItems(self._navigation_labels())
+        for row, icon_name in enumerate(self.NAVIGATION_ICONS):
+            item = self.navigation.item(row)
+            if item is not None and row != self.NAVIGATION_KEYS.index("nav.projects"):
+                item.setIcon(
+                    self._navigation_icon(
+                        icon_name,
+                        pad_right=self.NAVIGATION_ICON_GAP,
+                    )
+                )
         project_item = self.navigation.item(self.NAVIGATION_KEYS.index("nav.projects"))
         self.project_navigation_content = QWidget(self.navigation)
         self.project_navigation_content.setObjectName("projectNavigationContent")
@@ -292,9 +327,24 @@ class QtMainWindow(QMainWindow):
             Qt.WidgetAttribute.WA_TransparentForMouseEvents,
             True,
         )
-        project_navigation_layout = QVBoxLayout(self.project_navigation_content)
-        project_navigation_layout.setContentsMargins(3, 4, 8, 4)
+        project_navigation_row = QHBoxLayout(self.project_navigation_content)
+        project_navigation_row.setContentsMargins(6, 4, 8, 4)
+        project_navigation_row.setSpacing(11)
+        self.project_navigation_icon = QLabel(self.project_navigation_content)
+        self.project_navigation_icon.setObjectName("navigationIcon")
+        self.project_navigation_icon.setFixedSize(
+            self.NAVIGATION_ICON_SIZE,
+            self.NAVIGATION_ICON_SIZE,
+        )
+        project_navigation_row.addWidget(
+            self.project_navigation_icon,
+            0,
+            Qt.AlignVCenter,
+        )
+        project_navigation_layout = QVBoxLayout()
+        project_navigation_layout.setContentsMargins(0, 0, 0, 0)
         project_navigation_layout.setSpacing(1)
+        project_navigation_row.addLayout(project_navigation_layout, 1)
         self.project_navigation_label = QLabel("", self.project_navigation_content)
         self.project_navigation_label.setObjectName("projectNavigationLabel")
         self.project_navigation_context = QLabel("", self.project_navigation_content)
@@ -310,6 +360,7 @@ class QtMainWindow(QMainWindow):
         for row in range(self.navigation.count()):
             self._set_navigation_item_height(row, line_count=1)
         self.navigation_layout.addWidget(self.navigation, 1)
+        self._build_navigation_rail()
         self.settings_bar = QWidget(self.navigation_panel)
         self.settings_bar.setObjectName("settingsBar")
         settings_layout = QVBoxLayout(self.settings_bar)
@@ -317,6 +368,11 @@ class QtMainWindow(QMainWindow):
         settings_layout.setSpacing(CONTROL_SPACING)
         self.settings_button = QPushButton("设置", self.settings_bar)
         self.settings_button.setObjectName("settingsButton")
+        self.settings_button.setCheckable(True)
+        self.settings_button.setIcon(self._navigation_icon("sliders"))
+        self.settings_button.setIconSize(
+            QSize(self.NAVIGATION_ICON_SIZE, self.NAVIGATION_ICON_SIZE)
+        )
         self.settings_button.clicked.connect(self._open_cross_project_settings)
         settings_layout.addWidget(self.settings_button)
         self.navigation_layout.addWidget(self.settings_bar)
@@ -589,10 +645,87 @@ class QtMainWindow(QMainWindow):
         self.module_combo.currentIndexChanged.connect(self._module_selected)
         self.module_combo.currentTextChanged.connect(self.module_combo.setToolTip)
         self.navigation.currentRowChanged.connect(self.workspace_stack.setCurrentIndex)
+        self.navigation.currentRowChanged.connect(self._sync_navigation_selection)
         self.navigation.setCurrentRow(
             self.pre_qc_list_page_index if self._injected_preview else self.project_page_index
         )
+        self._sync_navigation_selection(self.navigation.currentRow())
         self._sync_preview_aliases()
+
+    @staticmethod
+    def _navigation_icon(name: str, *, pad_right: int = 0):
+        return glyph_icon(
+            name,
+            PALETTE["nav_text_muted"],
+            active_color="#FFFFFF",
+            selected_color="#FFFFFF",
+            size=18,
+            pad_right=pad_right,
+        )
+
+    def _build_navigation_rail(self) -> None:
+        """Icon-only destinations shown while the navigation is collapsed."""
+
+        self.navigation_rail = QWidget(self.navigation_panel)
+        self.navigation_rail.setObjectName("navigationRail")
+        rail_layout = QVBoxLayout(self.navigation_rail)
+        rail_layout.setContentsMargins(0, 8, 0, 0)
+        rail_layout.setSpacing(6)
+        self.navigation_rail_group = QButtonGroup(self)
+        self.navigation_rail_group.setExclusive(True)
+        self.navigation_rail_buttons: list[QToolButton] = []
+        for row, icon_name in enumerate(self.NAVIGATION_ICONS):
+            button = self._navigation_rail_button(icon_name)
+            button.clicked.connect(
+                lambda _checked=False, target=row: self.navigation.setCurrentRow(target)
+            )
+            self.navigation_rail_buttons.append(button)
+            rail_layout.addWidget(button, 0, Qt.AlignHCenter)
+        rail_layout.addStretch(1)
+        self.navigation_rail_settings_button = self._navigation_rail_button("sliders")
+        self.navigation_rail_settings_button.clicked.connect(
+            self._open_cross_project_settings
+        )
+        rail_layout.addWidget(
+            self.navigation_rail_settings_button,
+            0,
+            Qt.AlignHCenter,
+        )
+        self.navigation_layout.addWidget(self.navigation_rail, 1)
+        self.navigation_rail.hide()
+
+    def _navigation_rail_button(self, icon_name: str) -> QToolButton:
+        button = QToolButton(self.navigation_rail)
+        button.setObjectName("navigationRailButton")
+        button.setCheckable(True)
+        button.setIcon(self._navigation_icon(icon_name))
+        button.setIconSize(QSize(self.NAVIGATION_ICON_SIZE, self.NAVIGATION_ICON_SIZE))
+        button.setFixedSize(CONTROL_SPACING * 4, CONTROL_SPACING * 4)
+        button.setFocusPolicy(Qt.TabFocus)
+        self.navigation_rail_group.addButton(button)
+        return button
+
+    @Slot(int)
+    def _sync_navigation_selection(self, row: int) -> None:
+        """Keep icons, rail and the settings entry in step with the page."""
+
+        settings_active = row < 0 and (
+            self.workspace_stack.currentWidget() is self.cross_project_settings_page
+        )
+        self.settings_button.setChecked(settings_active)
+        if settings_active:
+            self.navigation_rail_settings_button.setChecked(True)
+        elif 0 <= row < len(self.navigation_rail_buttons):
+            self.navigation_rail_buttons[row].setChecked(True)
+        selected = row == self.project_page_index
+        self.project_navigation_icon.setPixmap(
+            glyph_pixmap(
+                self.NAVIGATION_ICONS[self.project_page_index],
+                "#FFFFFF" if selected else PALETTE["nav_text_muted"],
+                self.NAVIGATION_ICON_SIZE,
+                dpr=self.devicePixelRatioF(),
+            )
+        )
 
     def _navigation_labels(self) -> tuple[str, ...]:
         return tuple(self.language.tr(key) for key in self.NAVIGATION_KEYS)
@@ -604,6 +737,7 @@ class QtMainWindow(QMainWindow):
         self.navigation.blockSignals(False)
         self.cross_project_settings_page.refresh()
         self.workspace_stack.setCurrentIndex(self.cross_project_settings_page_index)
+        self._sync_navigation_selection(-1)
 
     @Slot()
     def _toggle_navigation(self) -> None:
@@ -615,12 +749,14 @@ class QtMainWindow(QMainWindow):
         self.navigation_collapsed = bool(collapsed)
         visible = not self.navigation_collapsed
         for widget in (
+            self.brand_mark_label,
             self.product_name_label,
             self.product_tagline_label,
             self.navigation,
             self.settings_bar,
         ):
             widget.setVisible(visible)
+        self.navigation_rail.setVisible(self.navigation_collapsed)
         if self.navigation_collapsed:
             self.navigation_layout.setContentsMargins(8, 16, 8, 16)
             self.navigation_panel.setMinimumWidth(0)
@@ -641,8 +777,14 @@ class QtMainWindow(QMainWindow):
         self._update_navigation_toggle_presentation()
 
     def _update_navigation_toggle_presentation(self) -> None:
-        self.navigation_toggle_button.setText(
-            "›" if self.navigation_collapsed else "‹"
+        self.navigation_toggle_button.setText("")
+        self.navigation_toggle_button.setIcon(
+            glyph_icon(
+                "panel-open" if self.navigation_collapsed else "panel-close",
+                PALETTE["nav_text"],
+                active_color="#FFFFFF",
+                size=18,
+            )
         )
         key = (
             "navigation.expand"
@@ -660,7 +802,7 @@ class QtMainWindow(QMainWindow):
         self.product_tagline_label.setText(
             "质控工作台"
             if self.language.language == "zh_CN"
-            else "Quality control workspace"
+            else "QC WORKSPACE"
         )
         self.setAccessibleName(
             "EasyQC 表格预览"
@@ -688,6 +830,11 @@ class QtMainWindow(QMainWindow):
         settings_description = self.language.tr("settings.open_action")
         self.settings_button.setAccessibleName(settings_description)
         self.settings_button.setToolTip(settings_description)
+        for button, label in zip(self.navigation_rail_buttons, labels, strict=True):
+            button.setToolTip(label)
+            button.setAccessibleName(label)
+        self.navigation_rail_settings_button.setToolTip(settings_description)
+        self.navigation_rail_settings_button.setAccessibleName(settings_description)
         self._update_navigation_toggle_presentation()
         self.table_workspace.retranslate_ui()
         self.results_workspace.retranslate_ui()

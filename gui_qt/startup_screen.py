@@ -6,13 +6,16 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QCursor, QGuiApplication, QScreen
 from PySide6.QtWidgets import (
     QFrame,
+    QHBoxLayout,
     QLabel,
     QProgressBar,
     QVBoxLayout,
     QWidget,
 )
 
-from gui_qt.i18n import LanguageController
+from gui_qt.i18n import LanguageController, protect_user_text
+from gui_qt.icons import brand_pixmap
+from utils import __version__ as EASYQC_VERSION
 
 
 class QtStartupScreen(QWidget):
@@ -32,27 +35,53 @@ class QtStartupScreen(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         self.card = QFrame(self)
         self.card.setObjectName("startupCard")
-        card_layout = QVBoxLayout(self.card)
-        card_layout.setContentsMargins(40, 34, 40, 32)
+        card_outer = QVBoxLayout(self.card)
+        card_outer.setContentsMargins(1, 1, 1, 1)
+        card_outer.setSpacing(0)
+        self.accent = QWidget(self.card)
+        self.accent.setObjectName("startupAccent")
+        card_outer.addWidget(self.accent)
+        content = QWidget(self.card)
+        card_layout = QVBoxLayout(content)
+        card_layout.setContentsMargins(39, 28, 39, 26)
         card_layout.setSpacing(12)
+        card_outer.addWidget(content, 1)
 
-        self.product_label = QLabel("EasyQC", self.card)
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(16)
+        self.brand_mark = QLabel(content)
+        self.brand_mark.setObjectName("brandMark")
+        self.brand_mark.setFixedSize(56, 56)
+        self.brand_mark.setPixmap(brand_pixmap(56))
+        brand_row.addWidget(self.brand_mark, 0, Qt.AlignTop)
+        title_column = QVBoxLayout()
+        title_column.setSpacing(2)
+        self.product_label = QLabel("EasyQC", content)
         self.product_label.setObjectName("startupProductName")
-        self.subtitle_label = QLabel("", self.card)
+        self.subtitle_label = QLabel("", content)
         self.subtitle_label.setObjectName("startupSubtitle")
         self.subtitle_label.setWordWrap(True)
-        self.progress = QProgressBar(self.card)
+        title_column.addWidget(self.product_label)
+        title_column.addWidget(self.subtitle_label)
+        brand_row.addLayout(title_column, 1)
+
+        self.progress = QProgressBar(content)
         self.progress.setObjectName("startupProgress")
         self.progress.setRange(0, 0)
         self.progress.setTextVisible(False)
-        self.status_label = QLabel("", self.card)
+        status_row = QHBoxLayout()
+        self.status_label = QLabel("", content)
         self.status_label.setObjectName("startupStatus")
+        self.version_label = QLabel("", content)
+        self.version_label.setObjectName("startupMeta")
+        protect_user_text(self.version_label, "text")
+        status_row.addWidget(self.status_label, 1)
+        status_row.addWidget(self.version_label)
 
-        card_layout.addWidget(self.product_label)
-        card_layout.addWidget(self.subtitle_label)
+        card_layout.addLayout(brand_row)
         card_layout.addStretch(1)
         card_layout.addWidget(self.progress)
-        card_layout.addWidget(self.status_label)
+        card_layout.addLayout(status_row)
         outer.addWidget(self.card)
 
         self.language.languageChanged.connect(self.retranslate_ui)
@@ -69,6 +98,9 @@ class QtStartupScreen(QWidget):
         self.setAccessibleName(self.language.tr("startup.accessible"))
         self.subtitle_label.setText(self.language.tr("startup.subtitle"))
         self.status_label.setText(self.language.tr(self._status_key))
+        self.version_label.setText(
+            self.language.tr("startup.version", version=EASYQC_VERSION)
+        )
 
     def center_on_screen(self, screen: QScreen | None = None) -> None:
         """Center the splash inside one screen's usable desktop rectangle."""

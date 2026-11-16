@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 
 from PySide6.QtCore import (
@@ -13,7 +14,7 @@ from PySide6.QtCore import (
     Qt,
     Signal,
 )
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
+from PySide6.QtGui import QAction, QCloseEvent, QColor, QFont, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QMenu,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -49,7 +51,7 @@ from gui_qt.table_clipboard import (
     copy_selected_cells, create_copy_menu, install_table_copy_shortcut,
     prepare_cell_context_selection, selected_cell_count,
 )
-from gui_qt.theme import CONTROL_HEIGHT, set_button_role
+from gui_qt.theme import CONTROL_HEIGHT, PALETTE, set_button_role, set_label_tone
 from models.qc_row_context import QcModuleMenuEntry, QcRecordMenuEntry, QcRowContext
 
 
@@ -61,6 +63,97 @@ DEFAULT_COMMAND_OUTPUT_HEIGHT = 184
 MIN_COMMAND_OUTPUT_HEIGHT = 96
 COMMAND_OUTPUT_EXPANDED_KEY = "qc/command_output_expanded"
 COMMAND_OUTPUT_HEIGHT_KEY = "qc/command_output_height"
+
+
+MAX_POSITIONAL_SCORE_KEYS = 9
+GROUP_CONTENT_MARGINS = (8, 6, 8, 6)
+_SHORTCUT_KEY_NAMES = (("Return", "Enter"), ("Left", "←"), ("Right", "→"))
+
+
+class _AdaptiveLabel(QLabel):
+    """One-line label that shows the longest variant fitting its width.
+
+    Variants are ordered from most to least informative.  When even the last
+    variant does not fit it is middle-elided (``elide=True``) or hidden.
+    The full first variant is always available as the tooltip.
+    """
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        elide: bool = True,
+        minimum_chars: int = 6,
+    ) -> None:
+        super().__init__(parent)
+        self._variants: tuple[str, ...] = ("",)
+        self._elide = elide
+        self._minimum_chars = minimum_chars
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self.setTextFormat(Qt.TextFormat.PlainText)
+
+    def full_text(self) -> str:
+        return self._variants[0]
+
+    def set_full_text(self, text: str) -> None:
+        self.set_variants(str(text))
+
+    def set_variants(self, *variants: str) -> None:
+        cleaned = tuple(str(variant) for variant in variants) or ("",)
+        changed = cleaned != self._variants
+        self._variants = cleaned
+        self.setToolTip(cleaned[0])
+        if changed:
+            self.updateGeometry()
+        self._apply_fit()
+
+    def _text_width(self, text: str) -> int:
+        margins = self.contentsMargins()
+        return (
+            self.fontMetrics().horizontalAdvance(text)
+            + margins.left()
+            + margins.right()
+            + 2
+        )
+
+    def sizeHint(self):  # noqa: N802
+        hint = super().sizeHint()
+        hint.setWidth(self._text_width(self._variants[0]))
+        return hint
+
+    def minimumSizeHint(self):  # noqa: N802
+        hint = super().minimumSizeHint()
+        floor = self.fontMetrics().averageCharWidth() * self._minimum_chars
+        hint.setWidth(min(self._text_width(self._variants[-1]), floor))
+        return hint
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._apply_fit()
+
+    def _apply_fit(self) -> None:
+        available = max(0, self.contentsRect().width())
+        metrics = self.fontMetrics()
+        chosen = next(
+            (
+                variant
+                for variant in self._variants
+                if metrics.horizontalAdvance(variant) <= available
+            ),
+            None,
+        )
+        if chosen is None:
+            chosen = (
+                metrics.elidedText(
+                    self._variants[-1],
+                    Qt.TextElideMode.ElideMiddle,
+                    available,
+                )
+                if self._elide
+                else ""
+            )
+        if chosen != self.text():
+            self.setText(chosen)
 
 
 class _QcEditorScrollArea(QScrollArea):
@@ -110,6 +203,12 @@ class QtQcQueueModel(QAbstractTableModel):
         if role == Qt.TextAlignmentRole:
             horizontal = Qt.AlignLeft if index.column() == 1 else Qt.AlignCenter
             return horizontal | Qt.AlignVCenter
+        if role == Qt.ForegroundRole and index.column() in (2, 3) and values[index.column()]:
+            return QColor(PALETTE["success"] if index.column() == 2 else PALETTE["text_secondary"])
+        if role == Qt.FontRole and index.column() == 2 and score:
+            font = QFont()
+            font.setBold(True)
+            return font
         return None
 
     def headerData(  # noqa: N802
@@ -211,6 +310,7 @@ class QtQcWorkspace(QWidget):
         self.score_buttons: dict[str, dict[str | None, QPushButton]] = {}
         self._legacy_score_buttons: dict[str, QPushButton] = {}
         self.tag_boxes: dict[str, QCheckBox] = {}
+        self.score_key_hint_label: QLabel | None = None
         self.row_context_provider: Callable[[str], QcRowContext] | None = None
         self.on_open_qc_module: (
             Callable[[str, QcModuleMenuEntry], None] | None
@@ -229,8 +329,11 @@ class QtQcWorkspace(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(10)
+
+        self._build_session_header()
+        layout.addWidget(self.session_header)
 
         top = QWidget(self)
         top.setObjectName("qcQueueAndActions")
@@ -354,8 +457,8 @@ class QtQcWorkspace(QWidget):
         editor = QWidget(self.editor_scroll)
         editor.setObjectName("qcEditor")
         editor_layout = QVBoxLayout(editor)
-        editor_layout.setContentsMargins(0, 4, 0, 4)
-        editor_layout.setSpacing(8)
+        editor_layout.setContentsMargins(0, 2, 0, 2)
+        editor_layout.setSpacing(6)
 
         module = self.workflow.current_module
         for key, score in module.scores.items():
@@ -364,6 +467,8 @@ class QtQcWorkspace(QWidget):
             group_box.setToolTip(score.label)
             protect_user_text(group_box, "title", "toolTip")
             group_layout = QHBoxLayout(group_box)
+            group_layout.setContentsMargins(*GROUP_CONTENT_MARGINS)
+            group_layout.setSpacing(6)
             button_group = QButtonGroup(group_box)
             button_group.setExclusive(True)
             self._score_groups[key] = button_group
@@ -371,7 +476,9 @@ class QtQcWorkspace(QWidget):
             choices = [(None, "未评"), *((value, value) for value in score.allowed_values)]
             for value, label in choices:
                 button = QPushButton(label, group_box)
-                if value is not None:
+                if value is None:
+                    button.setProperty("scoreChoice", "unrated")
+                else:
                     protect_user_text(
                         button,
                         "accessibleName",
@@ -401,12 +508,29 @@ class QtQcWorkspace(QWidget):
             self._legacy_score_buttons[key] = legacy_button
             group_layout.addWidget(legacy_button)
             group_layout.addStretch(1)
+            if len(module.scores) == 1:
+                self.score_key_hint_label = _AdaptiveLabel(
+                    group_box,
+                    elide=False,
+                    minimum_chars=0,
+                )
+                self.score_key_hint_label.setObjectName("qcShortcutHint")
+                self.score_key_hint_label.setSizePolicy(
+                    QSizePolicy.Ignored,
+                    QSizePolicy.Preferred,
+                )
+                self.score_key_hint_label.setAlignment(
+                    Qt.AlignRight | Qt.AlignVCenter
+                )
+                protect_user_text(self.score_key_hint_label, "text", "toolTip")
+                group_layout.addWidget(self.score_key_hint_label, 1)
             editor_layout.addWidget(group_box)
 
         if module.tags:
             tags_box = QGroupBox("标签", editor)
             tags_box.setObjectName("tagGroup")
             tags_box_layout = QVBoxLayout(tags_box)
+            tags_box_layout.setContentsMargins(*GROUP_CONTENT_MARGINS)
             self.tags_scroll = QScrollArea(tags_box)
             self.tags_scroll.setObjectName("qcTagsScroll")
             self.tags_scroll.setAccessibleName("质控标签")
@@ -445,9 +569,12 @@ class QtQcWorkspace(QWidget):
             tags_box_layout.addWidget(self.tags_scroll)
             editor_layout.addWidget(tags_box)
 
+        self._install_score_shortcuts(module)
+
         notes_box = QGroupBox("备注", editor)
         notes_box.setObjectName("notesGroup")
         notes_layout = QVBoxLayout(notes_box)
+        notes_layout.setContentsMargins(*GROUP_CONTENT_MARGINS)
         self.notes_edit = QTextEdit(notes_box)
         self.notes_edit.setObjectName("qcNotes")
         self.notes_edit.setAccessibleName("质控备注")
@@ -474,6 +601,200 @@ class QtQcWorkspace(QWidget):
         self.read_only_box.toggled.connect(self._read_only_changed)
         self.notes_edit.textChanged.connect(self._notes_changed)
 
+    def _build_session_header(self) -> None:
+        """One compact row: current item, module/rater, progress and state."""
+
+        self.session_header = QWidget(self)
+        self.session_header.setObjectName("qcSessionHeader")
+        header_layout = QHBoxLayout(self.session_header)
+        header_layout.setContentsMargins(2, 0, 2, 0)
+        header_layout.setSpacing(10)
+        self.current_item_label = _AdaptiveLabel(
+            self.session_header,
+            minimum_chars=16,
+        )
+        self.current_item_label.setObjectName("qcCurrentItem")
+        protect_user_text(self.current_item_label, "text", "toolTip")
+        header_layout.addWidget(self.current_item_label, 0)
+        self.session_meta_label = _AdaptiveLabel(
+            self.session_header,
+            minimum_chars=3,
+        )
+        self.session_meta_label.setObjectName("qcSessionMeta")
+        protect_user_text(self.session_meta_label, "text", "toolTip")
+        header_layout.addWidget(self.session_meta_label, 1)
+        self.progress_label = _AdaptiveLabel(
+            self.session_header,
+            elide=False,
+            minimum_chars=0,
+        )
+        self.progress_label.setObjectName("qcProgressText")
+        protect_user_text(self.progress_label, "text")
+        header_layout.addWidget(self.progress_label, 0, Qt.AlignVCenter)
+        self.progress_bar = QProgressBar(self.session_header)
+        self.progress_bar.setObjectName("qcProgress")
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedWidth(64)
+        header_layout.addWidget(self.progress_bar, 0, Qt.AlignVCenter)
+        self.session_state_label = QLabel("", self.session_header)
+        self.session_state_label.setObjectName("qcSessionState")
+        self.session_state_label.setProperty("role", "pill")
+        header_layout.addWidget(self.session_state_label, 0, Qt.AlignVCenter)
+
+    def _install_score_shortcuts(self, module) -> None:
+        """Bind number keys to the options of a single-score module.
+
+        Single-character numeric options use their own digit (``0``–``4``);
+        other option sets use positional digits ``1``–``9``.  Text editors keep
+        typed digits because they accept the shortcut override for printable
+        characters.
+        """
+
+        self.score_shortcut_actions: list[QAction] = []
+        self.score_shortcut_keys: tuple[str, ...] = ()
+        if len(module.scores) != 1:
+            return
+        score_key, score = next(iter(module.scores.items()))
+        values = tuple(str(value) for value in score.allowed_values)
+        if not values:
+            return
+        if all(len(value) == 1 and value.isdigit() for value in values) and len(
+            set(values)
+        ) == len(values):
+            mapping = tuple((value, value) for value in values)
+        else:
+            mapping = tuple(
+                (str(position + 1), value)
+                for position, value in enumerate(values[:MAX_POSITIONAL_SCORE_KEYS])
+            )
+        for key_text, value in mapping:
+            action = QAction(self)
+            action.setShortcut(QKeySequence(key_text))
+            action.setShortcutContext(Qt.WindowShortcut)
+            action.triggered.connect(
+                lambda _checked=False, target_key=score_key, target_value=value: (
+                    self._choose_score_from_key(target_key, target_value)
+                )
+            )
+            self.addAction(action)
+            self.score_shortcut_actions.append(action)
+        self.score_shortcut_keys = tuple(key_text for key_text, _value in mapping)
+
+    def _choose_score_from_key(self, score_key: str, value: str) -> None:
+        button = self.score_buttons.get(score_key, {}).get(value)
+        if button is None or not button.isEnabled() or button.isChecked():
+            return
+        button.click()
+
+    @staticmethod
+    def _shortcut_text(action: QAction) -> str:
+        """Render a shortcut compactly and identically in every UI language."""
+
+        sequence = action.shortcut()
+        if sys.platform == "darwin":
+            return sequence.toString(QKeySequence.SequenceFormat.NativeText)
+        text = sequence.toString(QKeySequence.SequenceFormat.PortableText)
+        for portable, compact in _SHORTCUT_KEY_NAMES:
+            text = text.replace(portable, compact)
+        return text
+
+    def _score_key_summary(self) -> str:
+        keys = self.score_shortcut_keys
+        if not keys:
+            return ""
+        numbers = [int(key) for key in keys]
+        if numbers == list(range(numbers[0], numbers[0] + len(numbers))) and len(keys) > 2:
+            return f"{keys[0]}–{keys[-1]}"
+        return "/".join(keys)
+
+    def _rated_count(self) -> int:
+        return sum(
+            1
+            for identity in self.workflow.subject_ids
+            if any(self.workflow.queue_summary(identity))
+        )
+
+    def _update_session_header(self, *, recount: bool = True) -> None:
+        workflow = self.workflow
+        module = workflow.current_module
+        total = len(workflow.subject_ids)
+        position = (workflow.current_index or 0) + 1 if total else 0
+        rater = str(module.rater).strip() if module.rater is not None else ""
+        module_text = str(module.label or module.name)
+        self.current_item_label.set_full_text(workflow.current_easyqcid)
+        self.session_meta_label.set_variants(
+            self.language.tr(
+                "qc.header.position",
+                module=module_text,
+                rater=rater or "—",
+                index=position,
+                total=total,
+            ),
+            self.language.tr(
+                "qc.header.module",
+                module=module_text,
+                rater=rater or "—",
+            ),
+        )
+        if recount:
+            rated = self._rated_count()
+            long_progress = self.language.tr(
+                "qc.header.progress",
+                rated=rated,
+                total=total,
+            )
+            self.progress_label.set_variants(long_progress, f"{rated} / {total}")
+            self.progress_bar.setRange(0, max(1, total))
+            self.progress_bar.setValue(rated)
+            self.progress_bar.setToolTip(long_progress)
+            self.progress_bar.setAccessibleName(long_progress)
+        if self._effective_read_only():
+            state, tone = "qc.state.read_only", None
+        elif workflow.dirty:
+            state, tone = "qc.state.unsaved", "warning"
+        elif any(workflow.queue_summary(workflow.current_easyqcid)):
+            state, tone = "qc.state.rated", "success"
+        else:
+            state, tone = "qc.state.unrated", None
+        self.session_state_label.setText(self.language.tr(state))
+        set_label_tone(self.session_state_label, "pill", tone)
+
+    def _update_shortcut_presentation(self) -> None:
+        navigation_keys = {
+            "save_next": self._shortcut_text(self.save_next_action),
+            "previous": self._shortcut_text(self.previous_action),
+            "next": self._shortcut_text(self.next_action),
+        }
+        if self.score_shortcut_keys:
+            summary = self.language.tr(
+                "qc.header.shortcuts_scores",
+                keys=self._score_key_summary(),
+                **navigation_keys,
+            )
+        else:
+            summary = self.language.tr("qc.header.shortcuts", **navigation_keys)
+        self.session_header.setToolTip(summary)
+        if self.score_key_hint_label is not None:
+            if self.score_shortcut_keys:
+                self.score_key_hint_label.set_variants(
+                    self.language.tr(
+                        "qc.score.key_hint",
+                        keys=self._score_key_summary(),
+                    ),
+                    self._score_key_summary(),
+                )
+                self.score_key_hint_label.setToolTip(summary)
+            self.score_key_hint_label.setVisible(bool(self.score_shortcut_keys))
+        for action, button, source in (
+            (self.previous_action, self.previous_button, "上一个"),
+            (self.next_action, self.next_button, "下一个"),
+            (self.save_action, self.save_button, "保存"),
+            (self.save_next_action, self.save_next_button, "保存并下一个"),
+        ):
+            button.setToolTip(
+                f"{self.language.translate_source(source)} · {self._shortcut_text(action)}"
+            )
+
     def recommended_initial_height(self) -> int:
         """Return content-led height before the controller applies screen bounds."""
 
@@ -488,6 +809,8 @@ class QtQcWorkspace(QWidget):
         )
         return (
             margins.top()
+            + self.session_header.sizeHint().height()
+            + own_layout.spacing()
             + self.queue_table.minimumHeight()
             + own_layout.spacing()
             + editor.sizeHint().height()
@@ -513,6 +836,8 @@ class QtQcWorkspace(QWidget):
         return action, button
 
     def retranslate_ui(self, _language: str | None = None) -> None:
+        self._update_session_header()
+        self._update_shortcut_presentation()
         self.language.localize_widget_tree(self)
         self.queue_model._retranslate_headers(self.language.language)
 
@@ -621,6 +946,7 @@ class QtQcWorkspace(QWidget):
                 self.queue_table.scrollTo(current)
         finally:
             self._loading = False
+        self._update_session_header()
         self.draftStateChanged.emit(self.workflow.dirty)
 
     def _read_only_changed(self, checked: bool) -> None:
@@ -651,6 +977,7 @@ class QtQcWorkspace(QWidget):
             return
         self._set_error("")
         self.queue_model.refresh_identity(self.workflow.current_easyqcid)
+        self._update_session_header()
         self.draftStateChanged.emit(True)
 
     def _tag_changed(self, key: str, checked: bool) -> None:
@@ -667,6 +994,7 @@ class QtQcWorkspace(QWidget):
             return
         self._set_error("")
         self.queue_model.refresh_identity(self.workflow.current_easyqcid)
+        self._update_session_header()
         self.draftStateChanged.emit(True)
 
     def _notes_changed(self) -> None:
@@ -682,6 +1010,7 @@ class QtQcWorkspace(QWidget):
             self._refresh()
             return
         self._set_error("")
+        self._update_session_header(recount=False)
         self.draftStateChanged.emit(True)
 
     def _save(self) -> None:

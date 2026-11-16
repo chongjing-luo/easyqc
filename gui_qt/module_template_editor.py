@@ -113,6 +113,10 @@ class QtModuleTemplateEditor(QWidget):
         self.viewer_group = QGroupBox(self)
         viewer_layout = QVBoxLayout(self.viewer_group)
         viewer_layout.setSpacing(CONTROL_SPACING)
+        self.module_command_hint = QLabel(self.viewer_group)
+        self.module_command_hint.setWordWrap(True)
+        self.module_command_hint.setProperty("role", "secondary")
+        viewer_layout.addWidget(self.module_command_hint)
         self.command_editor = ModuleCommandGroupsEditor(
             self.language,
             self.viewer_group,
@@ -313,6 +317,7 @@ class QtModuleTemplateEditor(QWidget):
         self.tags_group.setTitle(tr("cross.tags"))
         self.tag_editor.retranslate_ui()
         self.viewer_group.setTitle(tr("cross.viewer"))
+        self.module_command_hint.setText(tr("cross.command_groups_hint"))
         self.command_editor.retranslate_ui()
         self.module_control.setText(tr("cross.viewer_control"))
         self.discard_button.setText(tr("cross.discard"))

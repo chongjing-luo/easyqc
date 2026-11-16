@@ -51,7 +51,6 @@ from core.configuration_service import (
     ConfigurationSnapshot,
     ProjectListEntry,
 )
-from core.code_executor import direct_mode_shell_syntax_warning
 from core.module_filter import (
     ModuleFilterCompatibilityError,
     normalize_module_filter,
@@ -60,6 +59,7 @@ from core.module_repository import ModuleRecord
 from core.table_view_service import TableViewService
 from core.project_template_service import ProjectTemplateService
 from core.template_service import TemplateService
+from gui_qt.empty_state import EmptyStateOverlay
 from gui_qt.filter_dialog import FilterDialog
 from gui_qt.i18n import (
     LanguageController,
@@ -67,7 +67,10 @@ from gui_qt.i18n import (
     protect_user_text,
     translate_ui_text,
 )
-from gui_qt.module_command_editor import ModuleCommandGroupsEditor
+from gui_qt.module_command_editor import (
+    ModuleCommandGroupsEditor,
+    confirm_command_group_syntax,
+)
 from gui_qt.module_score_table import (
     move_score_row,
     sync_score_table_height,
@@ -85,7 +88,7 @@ from gui_qt.template_copy_dialogs import (
     ModuleTemplateCopyDialog,
 )
 from gui_qt.theme import CONTROL_SPACING, set_button_role
-from models.qcmodule import QCModule, Score, Tag, ordered_command_groups
+from models.qcmodule import QCModule, Score, Tag, normalize_module_commands
 from models.table_view_state import FilterExpression, TableViewState
 
 
@@ -289,6 +292,13 @@ class QtProjectConfigWorkspace(QWidget):
         protect_user_text(self.project_list, "items")
         self.project_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         project_list_layout.addWidget(self.project_list, 1)
+        self.project_list_empty_state = EmptyStateOverlay(
+            self.project_list,
+            glyph="folder",
+            title_key="empty.projects.title",
+            hint_key="empty.projects.hint",
+            language=self.language,
+        )
 
         project_info_panel = QWidget(self.project_splitter)
         project_info_panel.setObjectName("projectInfoPanel")
@@ -517,6 +527,13 @@ class QtProjectConfigWorkspace(QWidget):
         self.constants_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.constants_table.setEditTriggers(QTableWidget.NoEditTriggers)
         layout.addWidget(self.constants_table, 1)
+        self.constants_empty_state = EmptyStateOverlay(
+            self.constants_table,
+            glyph="braces",
+            title_key="empty.constants.title",
+            hint_key="empty.constants.hint",
+            language=self.language,
+        )
         self.constant_error_label = QLabel("", self.constants_tab)
         self.constant_error_label.setObjectName("constantError")
         self.constant_error_label.setProperty("role", "error")
@@ -590,6 +607,13 @@ class QtProjectConfigWorkspace(QWidget):
         protect_user_text(self.module_list, "items")
         self.module_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         left.addWidget(self.module_list, 1)
+        self.module_list_empty_state = EmptyStateOverlay(
+            self.module_list,
+            glyph="layers",
+            title_key="empty.modules.title",
+            hint_key="empty.modules.hint",
+            language=self.language,
+        )
         self.module_list_footer_toolbar = _new_strip_toolbar(
             "模块列表操作",
             "configModuleListFooterActions",
@@ -776,7 +800,7 @@ class QtProjectConfigWorkspace(QWidget):
         self.module_viewer_title.setProperty("role", "sectionTitle")
         viewer_layout.addWidget(self.module_viewer_title)
         self.module_command_hint = QLabel(
-            "未知占位符保持原样；多行脚本、分号和重定向需将本模块设为 Shell 执行。",
+            self.language.tr("cross.command_groups_hint"),
             self.module_viewer_section,
         )
         self.module_command_hint.setWordWrap(True)
@@ -996,6 +1020,9 @@ class QtProjectConfigWorkspace(QWidget):
             button.setToolTip(text)
         self.tag_editor.retranslate_ui()
         self.command_editor.retranslate_ui()
+        self.module_command_hint.setText(
+            self.language.tr("cross.command_groups_hint")
+        )
         self._sync_module_toolbar_minimum()
         sync_score_table_height(self.score_table)
         self._update_score_move_actions()
@@ -2142,53 +2169,24 @@ class QtProjectConfigWorkspace(QWidget):
         module.name = name
         module.label = label
         module.rater = self.module_rater.text().strip() or None
-        # 命令组交给 core 归一：空白组丢弃、单组折叠回 code/interper。
+        # 项目保存和存为模板共用同一份 0/1/N 归一结果。
         module.commands = self.command_editor.command_groups_payload() or None
         module.code = None
+        normalize_module_commands(module)
         module.control = self.module_control.isChecked()
         module.scores = scores
         module.tags = tags
         return module
 
-    def _confirm_direct_shell_syntax(self, module: QCModule) -> bool | None:
+    def _confirm_direct_shell_syntax(self) -> bool | None:
         """Warn about direct-mode Shell syntax; None means save cancelled.
 
         多命令组逐组检查、一次弹框汇总列出（组号即界面上的命令组序号）。
         """
 
-        warnings: list[str] = []
-        if module.commands:
-            for index, group in enumerate(
-                ordered_command_groups(module.commands), start=1
-            ):
-                warning = direct_mode_shell_syntax_warning(
-                    group.code,
-                    group.interper,
-                )
-                if warning is not None:
-                    warnings.append(
-                        f"{self.language.tr('cross.command_group', index=index)}："
-                        + translate_ui_text(warning)
-                    )
-        else:
-            warning = direct_mode_shell_syntax_warning(
-                module.code or "",
-                module.interper,
-            )
-            if warning is not None:
-                warnings.append(translate_ui_text(warning))
-        if not warnings:
-            return False
-        answer = QMessageBox.question(
-            self,
-            translate_ui_text("Shell 语法警告"),
-            "\n".join(warnings)
-            + "\n\n"
-            + translate_ui_text("仍要保存该模块吗？"),
+        return confirm_command_group_syntax(
+            self, self.language, self.command_editor.groups()
         )
-        if answer != QMessageBox.Yes:
-            return None
-        return True
 
     def _save_module_form_as_new(self) -> None:
         """按当前表单内容追加一个新模块；同名时建议副本名，原模块保留。"""
@@ -2216,7 +2214,7 @@ class QtProjectConfigWorkspace(QWidget):
             if answer != QMessageBox.Yes:
                 return
             module.name = suggested
-        allow_separators = self._confirm_direct_shell_syntax(module)
+        allow_separators = self._confirm_direct_shell_syntax()
         if allow_separators is None:
             return
         try:
@@ -2235,7 +2233,7 @@ class QtProjectConfigWorkspace(QWidget):
         module = self._collect_module_from_form()
         if module is None:
             return
-        allow_separators = self._confirm_direct_shell_syntax(module)
+        allow_separators = self._confirm_direct_shell_syntax()
         if allow_separators is None:
             return
         try:
@@ -2337,6 +2335,8 @@ class QtProjectConfigWorkspace(QWidget):
             return
         module = self._collect_module_from_form()
         if module is None:
+            return
+        if self._confirm_direct_shell_syntax() is None:
             return
         existing = next(
             (

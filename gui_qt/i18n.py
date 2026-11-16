@@ -241,6 +241,22 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
         "zh_CN": "命令组 {index}",
         "en": "Command group {index}",
     },
+    "cross.command_group_editor": {
+        "zh_CN": "命令组 {index} 的命令模板",
+        "en": "Command template for group {index}",
+    },
+    "cross.command_direct_hint": {
+        "zh_CN": "直接启动程序；不会解释管道、重定向或 Shell 变量。",
+        "en": "Start the program directly; pipes, redirection and Shell variables are not interpreted.",
+    },
+    "cross.command_shell_hint": {
+        "zh_CN": "使用系统 Shell 执行脚本；仅运行你理解并信任的命令。",
+        "en": "Run the script with the system Shell; only run commands you understand and trust.",
+    },
+    "cross.command_groups_hint": {
+        "zh_CN": "每组独立选择执行方式，未知占位符保持原样。各组独立启动；有先后依赖或共享临时变量的命令请放在同一个 Shell 组。",
+        "en": "Choose an execution mode for each group. Unknown placeholders are preserved. Groups launch independently; keep dependent commands or shared Shell variables in the same Shell group.",
+    },
     "cross.remove_command_group": {
         "zh_CN": "删除命令组",
         "en": "Remove command group",
@@ -467,6 +483,30 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
             "freeview {{image}} --title {{easyqcid}}"
         ),
     },
+    "empty.constants.hint": {
+        "zh_CN": "在上方填写常量名和值；启动命令中可用 ${{name}} 引用。",
+        "en": "Enter a name and value above, then use ${{name}} in launch commands.",
+    },
+    "empty.constants.title": {
+        "zh_CN": "还没有项目常量",
+        "en": "No project constants yet",
+    },
+    "empty.modules.hint": {
+        "zh_CN": "使用“新建模块”“导入模块”或“从模板添加”创建质控任务。",
+        "en": "Create a QC task with New module, Import module or Add from template.",
+    },
+    "empty.modules.title": {
+        "zh_CN": "还没有质控模块",
+        "en": "No QC modules yet",
+    },
+    "empty.projects.hint": {
+        "zh_CN": "使用“新建项目”创建，或用“导入项目”登记已有的 EasyQC 项目目录。",
+        "en": "Use New project to create one, or Import project to register an existing EasyQC project folder.",
+    },
+    "empty.projects.title": {
+        "zh_CN": "还没有登记项目",
+        "en": "No projects yet",
+    },
     "nav.constants": {"zh_CN": "常量设置", "en": "Constants"},
     "nav.cross_project": {
         "zh_CN": "跨项目设置",
@@ -477,6 +517,38 @@ MESSAGES: Mapping[str, Mapping[str, str]] = {
     "nav.pre_qc": {"zh_CN": "质控总名单", "en": "Master QC list"},
     "nav.projects": {"zh_CN": "项目管理", "en": "Project management"},
     "nav.results": {"zh_CN": "质控结果", "en": "QC results"},
+    "qc.header.module": {
+        "zh_CN": "{module} · {rater}",
+        "en": "{module} · {rater}",
+    },
+    "qc.header.position": {
+        "zh_CN": "{module} · {rater} · 第 {index} / {total} 项",
+        "en": "{module} · {rater} · item {index} of {total}",
+    },
+    "qc.header.progress": {
+        "zh_CN": "已评 {rated} / {total}",
+        "en": "Rated {rated} / {total}",
+    },
+    "qc.header.shortcuts": {
+        "zh_CN": "{save_next} 保存并下一个 · {previous} / {next} 切换条目",
+        "en": "{save_next} save and next · {previous} / {next} switch item",
+    },
+    "qc.header.shortcuts_scores": {
+        "zh_CN": (
+            "数字键 {keys} 快速评分 · {save_next} 保存并下一个 · "
+            "{previous} / {next} 切换条目"
+        ),
+        "en": (
+            "Press {keys} to rate · {save_next} save and next · "
+            "{previous} / {next} switch item"
+        ),
+    },
+    "qc.score.key_hint": {"zh_CN": "键盘 {keys}", "en": "Keys {keys}"},
+    "qc.state.rated": {"zh_CN": "已评", "en": "Rated"},
+    "qc.state.read_only": {"zh_CN": "只读", "en": "Read-only"},
+    "qc.state.unrated": {"zh_CN": "未评", "en": "Not rated"},
+    "qc.state.unsaved": {"zh_CN": "未保存", "en": "Unsaved"},
+    "startup.version": {"zh_CN": "版本 {version}", "en": "Version {version}"},
     "startup.accessible": {"zh_CN": "EasyQC 启动", "en": "EasyQC startup"},
     "startup.loading_project": {
         "zh_CN": "正在加载项目数据…",
@@ -562,6 +634,10 @@ SOURCE_TRANSLATIONS: Mapping[str, str] = {
     "（不分层）": "(no stratification)",
     "Shell 语法警告": "Shell syntax warning",
     "仍要保存该模块吗？": "Save this module anyway?",
+    "MULTICMD 前缀写法需要 Shell 解释器：请将模块切换为 shell 模式，或移除 MULTICMD 之前的命令": (
+        "MULTICMD prefixes require Shell execution. Switch this group to Shell "
+        "or remove the commands before MULTICMD."
+    ),
     "留空则每次随机": "Leave empty for a fresh random draw",
     "请输入评分者名单": "Please enter the rater list",
     "每图人数不能超过评分者数": "Raters per image cannot exceed the number of raters",
@@ -2135,6 +2211,12 @@ _SOURCE_PATTERNS = (
 )
 
 _HAN_RE = re.compile(r"[\u3400-\u9fff]")
+_DIRECT_SHELL_WARNING_RE = re.compile(
+    r"直接执行不支持 Shell 分隔符 "
+    r"(?P<separators>(?:「[;&|]」|「换行」)(?:、(?:「[;&|]」|「换行」))*)"
+    r"：多命令请改用 MULTICMD 与 ;\| 分隔，或切换为 Shell 解释器"
+    r"（该字符放入引号内可作普通字符）"
+)
 _FORMULA_VALID_RE = re.compile(
     r"^公式有效 · 引用 (?P<count>\d+) 列$"
 )
@@ -2310,6 +2392,14 @@ class LanguageController(QObject):
             return (
                 f"Formula cannot process {count} {noun} "
                 f"({'; '.join(translated_examples)})"
+            )
+        shell_warning = _DIRECT_SHELL_WARNING_RE.fullmatch(source)
+        if shell_warning:
+            separators = shell_warning.group("separators").replace("换行", "newline").replace("、", ", ")
+            return (
+                f"Direct execution does not interpret Shell separators {separators}. "
+                "Use separate command groups, MULTICMD with ;|, or Shell execution. "
+                "Quoted characters are treated as literal arguments."
             )
         exact = SOURCE_TRANSLATIONS.get(source)
         if exact is not None:
