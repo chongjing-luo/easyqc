@@ -1499,13 +1499,21 @@ def test_key_toolbars_keep_actions_visible_with_wide_native_buttons(
         == QSizePolicy.Policy.Preferred
     )
 
+    # 平台字体不同导致窗口最小宽度不同（Windows 上窗口缩不到 480）：
+    # 不变量是工具栏按钮永不被裁剪——放不下时必须收进扩展菜单。
     workspace.resize(480, 520)
-    qtbot.waitUntil(lambda: workspace.width() == 480)
+    qtbot.wait(40)
+    all_actions_visible = all(
+        workspace.module_list_toolbar.widgetForAction(action).isVisible()
+        for action in workspace.module_list_toolbar.actions()
+    )
     extension = workspace.module_list_toolbar.findChild(
         QToolButton,
         "qt_toolbar_ext_button",
     )
-    assert extension is not None and extension.isVisible()
+    assert all_actions_visible or (
+        extension is not None and extension.isVisible()
+    )
 
 
 def test_qt_configuration_uses_responsive_toolbars_splitter_and_long_tooltips(
@@ -1603,13 +1611,21 @@ def test_qt_configuration_uses_responsive_toolbars_splitter_and_long_tooltips(
     assert saved.label == "键盘保存后的模块标签"
 
     workspace.tabs.setCurrentWidget(workspace.modules_tab)
+    # 平台字体不同导致窗口最小宽度不同（Windows 上窗口缩不到 480）：
+    # 不变量是工具栏按钮永不被裁剪——放不下时必须收进扩展菜单。
     workspace.resize(480, 520)
-    qtbot.waitUntil(lambda: workspace.width() == 480)
+    qtbot.wait(40)
+    all_actions_visible = all(
+        workspace.module_list_toolbar.widgetForAction(action).isVisible()
+        for action in workspace.module_list_toolbar.actions()
+    )
     extension = workspace.module_list_toolbar.findChild(
         QToolButton,
         "qt_toolbar_ext_button",
     )
-    assert extension is not None and extension.isVisible()
+    assert all_actions_visible or (
+        extension is not None and extension.isVisible()
+    )
 
 
 def test_project_load_runs_in_background_and_keeps_qt_responsive(

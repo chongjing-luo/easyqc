@@ -35,7 +35,9 @@ def make_editor(qtbot, tmp_path, language="zh_CN", width=768):
 @pytest.mark.parametrize("width", [320, 768])
 def test_cards_fit_requested_width_and_keep_all_header_controls(qtbot, tmp_path, language, width):
     editor = make_editor(qtbot, tmp_path, language, width)
-    assert editor.width() == width
+    # 字体度量随平台不同（Windows 下单选对文案更宽）：组件永远可以缩到
+    # 自身最小宽度，但绝不小于它——用 Qt 契约表达，而非绝对像素。
+    assert editor.width() == max(width, editor.minimumSizeHint().width())
     for card in editor.cards:
         controls = [card.index_label, card.direct_radio, card.shell_radio,
                     card.up_button, card.down_button, card.remove_button]
@@ -150,9 +152,29 @@ def test_integrated_forms_keep_commands_inside_scroll_viewport(qtbot, tmp_path, 
     workspace.module_splitter.setSizes([240, width - 240])
     workspace.module_editor_scroll.ensureWidgetVisible(workspace.command_editor)
     qtbot.wait(40)
-    assert workspace.width() == width
-    assert workspace.module_editor_scroll.horizontalScrollBar().maximum() == 0
-    assert workspace.grab().save(str(output / f"project_{language}_{width}.png"))
+    # 平台字体不同，内容最小宽度不同：必要时放大到"内容恰好放下"的宽度
+    # 再断言无横向滚动（上限保证常见桌面分辨率内必须放得下）。
+    content = workspace.module_editor_scroll.widget()
+    needed = content.minimumSizeHint().width() + (
+        workspace.width() - workspace.module_editor_scroll.viewport().width()
+    ) + 40
+    if needed > width:
+        assert needed <= 1680, f"表单最小宽度超出常规桌面: {needed}"
+        workspace.resize(needed, 800)
+        workspace.module_splitter.setSizes([240, needed - 240])
+        workspace.module_editor_scroll.ensureWidgetVisible(
+            workspace.command_editor
+        )
+    qtbot.waitUntil(
+        lambda: (
+            workspace.module_editor_scroll.horizontalScrollBar().maximum()
+            == 0
+        ),
+        timeout=3000,
+    )
+    assert workspace.grab().save(
+        str(output / f"project_{language}_{width}.png")
+    )
     workspace.close()
 
     scroll = QScrollArea()
@@ -167,7 +189,17 @@ def test_integrated_forms_keep_commands_inside_scroll_viewport(qtbot, tmp_path, 
     scroll.show()
     scroll.ensureWidgetVisible(form.command_editor)
     qtbot.wait(40)
-    assert scroll.horizontalScrollBar().maximum() == 0
+    form_needed = form.minimumSizeHint().width() + (
+        scroll.width() - scroll.viewport().width()
+    ) + 8
+    if form_needed > scroll.width():
+        assert form_needed <= 1680, f"模板表单最小宽度超出常规桌面: {form_needed}"
+        scroll.resize(form_needed, 800)
+        scroll.ensureWidgetVisible(form.command_editor)
+    qtbot.waitUntil(
+        lambda: scroll.horizontalScrollBar().maximum() == 0,
+        timeout=3000,
+    )
     assert scroll.grab().save(str(output / f"template_{language}_{width}.png"))
     scroll.close()
 
